@@ -504,18 +504,23 @@ app.post("/api/templates/send-generic", async (req, res) => {
       });
     }
 
+    const templatePayload = {
+      name: templateName,
+      language: {
+        code: languageCode
+      }
+    };
+
+    if (components.length > 0) {
+      templatePayload.components = components;
+    }
+
     const payload = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
       to,
       type: "template",
-      template: {
-        name: templateName,
-        language: {
-          code: languageCode
-        },
-        components
-      }
+      template: templatePayload
     };
 
     const response = await fetch(endpoint, {

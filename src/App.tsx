@@ -97,9 +97,7 @@ function App() {
     const text = await response.text();
     return { raw: text || "Empty response" };
   }
-  const [toNumber, setToNumber] = useState(
-    import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229"
-  );
+  const [toNumber, setToNumber] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
   const [messageText, setMessageText] = useState("Hello from Linke Cloud API frontend.");
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("Idle");
@@ -108,7 +106,7 @@ function App() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaStatusText, setMediaStatusText] = useState("Idle");
   const [mediaResponseText, setMediaResponseText] = useState("No upload sent yet.");
-  const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229");
+  const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
   const [genericTemplateName, setGenericTemplateName] = useState(
     import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
   );
@@ -330,8 +328,11 @@ function App() {
         setActiveConversationId(nextActiveConversationId);
       }
 
-      setStatusText(response.ok ? "Message accepted" : `Failed (${response.status})`);
+      setStatusText(response.ok ? "Accepted by API (delivery pending)" : `Failed (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
+      if (response.ok) {
+        setMessageText("");
+      }
     } catch (error) {
       setStatusText("Backend unreachable");
       setResponseText(
@@ -530,7 +531,7 @@ function App() {
                   <time>{message.time}</time>
                 </article>
               ))}
-              {messageText ? (
+              {loading && messageText ? (
                 <article className="wa-msg out composing">
                   <p>{messageText}</p>
                   <time>{loading ? "sending" : "draft"}</time>
