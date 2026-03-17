@@ -259,6 +259,12 @@ p {
   overflow: auto;
 }
 
+.wa-empty-contacts {
+  color: rgba(232, 244, 239, 0.72);
+  font-size: 0.82rem;
+  padding: 0.85rem;
+}
+
 .wa-contact {
   width: 100%;
   border: 0;
@@ -469,6 +475,61 @@ p {
 
 .wa-compose textarea {
   resize: vertical;
+}
+
+.wa-message-bar {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem;
+  align-items: start;
+}
+
+.wa-emoji-wrap {
+  position: relative;
+}
+
+.wa-emoji {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4fff9;
+  font-size: 1rem;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+}
+
+.wa-emoji:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.wa-emoji-picker {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.45rem);
+  width: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: #0b171c;
+  padding: 0.4rem;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+  z-index: 4;
+}
+
+.wa-emoji-item {
+  border: 0;
+  background: transparent;
+  color: #f4fff9;
+  font-size: 1.05rem;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0.2rem;
+}
+
+.wa-emoji-item:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .wa-send {

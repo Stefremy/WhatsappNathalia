@@ -23,53 +23,16 @@ type ConversationContact = {
   messages: ConversationMessage[];
 };
 
-const initialConversations: ConversationContact[] = [
-  {
-    id: "c-1",
-    name: "Nathalia Linke",
-    phone: "351916723469",
-    lastAt: "15:03",
-    unread: 1,
-    messages: [
-      {
-        id: "m-1",
-        direction: "in",
-        text: "ok depois me diz como faco",
-        time: "15:03"
-      }
-    ]
-  },
-  {
-    id: "c-2",
-    name: "LINKE WA BIZNESS",
-    phone: "351912858229",
-    lastAt: "14:57",
-    unread: 0,
-    messages: [
-      {
-        id: "m-2",
-        direction: "in",
-        text: "Hello from Linke Cloud API frontend. tudo bem?",
-        time: "14:57"
-      }
-    ]
-  },
-  {
-    id: "c-3",
-    name: "Perplexity Ai",
-    phone: "351934567890",
-    lastAt: "14:21",
-    unread: 0,
-    messages: [
-      {
-        id: "m-3",
-        direction: "in",
-        text: "Video",
-        time: "14:21"
-      }
-    ]
-  }
-];
+const initialConversations: ConversationContact[] = [];
+
+function digitsOnly(value: string) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function contactDisplayName(phone: string) {
+  const normalized = digitsOnly(phone);
+  return normalized ? `Contact ${normalized}` : "Unknown contact";
+}
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -136,11 +99,17 @@ function App() {
   const [feedbackResponse, setFeedbackResponse] = useState("No feedback template request sent yet.");
   const [conversations, setConversations] = useState<ConversationContact[]>(initialConversations);
   const [activeConversationId, setActiveConversationId] = useState(initialConversations[0]?.id || "");
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId) || null,
     [activeConversationId, conversations]
   );
+
+  function addEmoji(emoji: string) {
+    setMessageText((current) => `${current}${emoji}`);
+    setEmojiOpen(false);
+  }
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -187,10 +156,15 @@ function App() {
 
       const data = await parseResponse(response);
       const sentTime = nowLabel();
+      const resolvedWaId = String(data?.contacts?.[0]?.wa_id || "").trim();
+      const targetPhone = digitsOnly(resolvedWaId || toNumber.trim());
+      const targetName = contactDisplayName(targetPhone);
+      let nextActiveConversationId = activeConversationId;
 
       setConversations((current) => {
         const matchingById = current.find((item) => item.id === activeConversationId);
-        const matching = matchingById || current.find((item) => item.phone === toNumber.trim());
+        const matching =
+          matchingById || current.find((item) => digitsOnly(item.phone) === digitsOnly(targetPhone));
 
         const nextMessage: ConversationMessage = {
           id: `m-${Date.now()}`,
@@ -208,6 +182,8 @@ function App() {
 
               return {
                 ...item,
+                name: targetName,
+                phone: targetPhone,
                 lastAt: sentTime,
                 messages: [...item.messages, nextMessage]
               };
@@ -217,16 +193,20 @@ function App() {
 
         const created: ConversationContact = {
           id: `c-${Date.now()}`,
-          name: "New Contact",
-          phone: toNumber.trim(),
+          name: targetName,
+          phone: targetPhone,
           unread: 0,
           lastAt: sentTime,
           messages: [nextMessage]
         };
 
-        setActiveConversationId(created.id);
+        nextActiveConversationId = created.id;
         return [created, ...current];
       });
+
+      if (nextActiveConversationId) {
+        setActiveConversationId(nextActiveConversationId);
+      }
 
       setStatusText(response.ok ? "Message accepted" : `Failed (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
@@ -440,6 +420,12 @@ function App() {
             </div>
 
             <div className="wa-contact-list">
+              {conversations.length === 0 ? (
+                <div className="wa-empty-contacts">
+                  No conversations yet. Send a message to create contact history.
+                </div>
+              ) : null}
+
               {conversations.map((contact) => {
                 const last = contact.messages[contact.messages.length - 1];
                 const isActive = contact.id === activeConversationId;
@@ -505,12 +491,39 @@ function App() {
               </label>
               <label>
                 Message
-                <textarea
-                  value={messageText}
-                  onChange={(event) => setMessageText(event.target.value)}
-                  rows={2}
-                  placeholder="Write your response..."
-                />
+                <div className="wa-message-bar">
+                  <div className="wa-emoji-wrap">
+                    <button
+                      type="button"
+                      className="wa-emoji"
+                      onClick={() => setEmojiOpen((open) => !open)}
+                      aria-label="Open emoji picker"
+                      title="Open emoji picker"
+                    >
+                      🙂
+                    </button>
+                    {emojiOpen ? (
+                      <div className="wa-emoji-picker" role="menu" aria-label="Emoji picker">
+                        {"😀 😅 😂 😊 😉 😍 😎 🙌 👍 👌 ✅ 🎉 ❤️".split(" ").map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            className="wa-emoji-item"
+                            onClick={() => addEmoji(emoji)}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <textarea
+                    value={messageText}
+                    onChange={(event) => setMessageText(event.target.value)}
+                    rows={2}
+                    placeholder="Write your response..."
+                  />
+                </div>
               </label>
               <button className="wa-send" type="submit" disabled={loading}>
                 {loading ? "Sending..." : "Send Text Message"}
