@@ -1,0 +1,249 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap");
+
+:root {
+  --bg-1: #f4efe5;
+  --bg-2: #d5e4dc;
+  --ink: #0f1720;
+  --muted: #394450;
+  --accent: #1b8f63;
+  --accent-dark: #0f5e42;
+  --card: rgba(255, 255, 255, 0.72);
+  --border: rgba(15, 23, 32, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Manrope", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 85% 15%, rgba(27, 143, 99, 0.35), transparent 40%),
+    radial-gradient(circle at 20% 20%, rgba(255, 178, 72, 0.25), transparent 35%),
+    linear-gradient(135deg, var(--bg-1), var(--bg-2));
+  min-height: 100vh;
+}
+
+.page {
+  width: min(1080px, 92vw);
+  margin: 0 auto;
+  padding: 3rem 0 4rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.hero,
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 1.6rem;
+  backdrop-filter: blur(8px);
+  animation: rise 650ms ease both;
+}
+
+.badge {
+  display: inline-block;
+  background: rgba(15, 23, 32, 0.08);
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 0.8rem;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Space Grotesk", sans-serif;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1.06;
+  max-width: 18ch;
+}
+
+h2 {
+  font-size: clamp(1.3rem, 2.6vw, 2rem);
+}
+
+h3 {
+  font-size: 1.15rem;
+}
+
+p {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.hero {
+  display: grid;
+  gap: 1rem;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.btn {
+  text-decoration: none;
+  border-radius: 10px;
+  padding: 0.72rem 1rem;
+  font-weight: 700;
+  transition: transform 220ms ease, box-shadow 220ms ease, background 220ms ease;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+}
+
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(120deg, var(--accent), var(--accent-dark));
+  box-shadow: 0 10px 26px rgba(27, 143, 99, 0.3);
+}
+
+.btn-secondary {
+  color: var(--ink);
+  background: rgba(15, 23, 32, 0.08);
+}
+
+.panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.5rem;
+  animation: rise 900ms ease both;
+}
+
+.price {
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.cta {
+  justify-items: start;
+}
+
+.facts {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fact {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: rgba(255, 255, 255, 0.85);
+  display: grid;
+  gap: 0.2rem;
+}
+
+.fact span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.api-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.api-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+  font-size: 0.93rem;
+}
+
+.api-form input,
+.api-form textarea {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.68rem 0.8rem;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.api-form textarea {
+  resize: vertical;
+}
+
+.api-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.status {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.code-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.code-block pre {
+  margin: 0;
+  overflow: auto;
+  background: rgba(15, 23, 32, 0.88);
+  color: #e7eff5;
+  border-radius: 10px;
+  padding: 0.8rem;
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 900px) {
+  .grid.three {
+    grid-template-columns: 1fr;
+  }
+
+  .facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .code-grid {
+    grid-template-columns: 1fr;
+  }
+}
