@@ -31,6 +31,15 @@ type MetaTemplate = {
   components?: Array<{ type?: string; text?: string }>;
 };
 
+type TemplateHistoryItem = {
+  id: string;
+  to: string;
+  templateName: string;
+  previewText: string;
+  time: string;
+  status: string;
+};
+
 const initialConversations: ConversationContact[] = [];
 
 function digitsOnly(value: string) {
@@ -111,11 +120,12 @@ function App() {
     import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
   );
   const [genericLanguage, setGenericLanguage] = useState("pt_PT");
-  const [genericVars, setGenericVars] = useState("");
+  const [genericBodyVars, setGenericBodyVars] = useState<Record<number, string>>({});
   const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
   const [genericLoading, setGenericLoading] = useState(false);
   const [genericStatus, setGenericStatus] = useState("Idle");
   const [genericResponse, setGenericResponse] = useState("No generic template request sent yet.");
+  const [templateHistory, setTemplateHistory] = useState<TemplateHistoryItem[]>([]);
   const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
   const [metaTemplatesLoading, setMetaTemplatesLoading] = useState(false);
   const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Not loaded");
@@ -133,23 +143,9 @@ function App() {
     [genericTemplateName, metaTemplates]
   );
 
-  const genericVarsList = useMemo(
-    () =>
-      genericVars
-        .split("|")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    [genericVars]
-  );
-
   const selectedTemplateBody = useMemo(
     () => extractBodyTemplateText(selectedMetaTemplate),
     [selectedMetaTemplate]
-  );
-
-  const selectedTemplatePreview = useMemo(
-    () => fillTemplateBody(selectedTemplateBody, genericVarsList),
-    [selectedTemplateBody, genericVarsList]
   );
 
   const requiredBodyIndexes = useMemo(
@@ -162,6 +158,30 @@ function App() {
     () => templateNeedsUrlButtonVariable(selectedMetaTemplate),
     [selectedMetaTemplate]
   );
+
+  const previewBodyVars = useMemo(() => {
+    const maxIndex = requiredBodyIndexes.length > 0 ? Math.max(...requiredBodyIndexes) : 0;
+    const values = Array.from({ length: maxIndex }, () => "");
+    requiredBodyIndexes.forEach((index) => {
+      values[index - 1] = String(genericBodyVars[index] || "").trim();
+    });
+    return values;
+  }, [genericBodyVars, requiredBodyIndexes]);
+
+  const selectedTemplatePreview = useMemo(
+    () => fillTemplateBody(selectedTemplateBody, previewBodyVars),
+    [selectedTemplateBody, previewBodyVars]
+  );
+
+  useEffect(() => {
+    setGenericBodyVars((current) => {
+      const next: Record<number, string> = {};
+      requiredBodyIndexes.forEach((index) => {
+        next[index] = current[index] || "";
+      });
+      return next;
+    });
+  }, [requiredBodyIndexes]);
 
   function addEmoji(emoji: string) {
     setMessageText((current) => `${current}${emoji}`);
@@ -394,7 +414,11 @@ function App() {
   async function sendGenericTemplate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const variables = genericVarsList;
+    const missingIndexes = requiredBodyIndexes.filter(
+      (index) => !String(genericBodyVars[index] || "").trim()
+    );
+
+    const variables = previewBodyVars;
 
     if (!genericTo.trim() || !genericTemplateName.trim()) {
       setGenericStatus("Missing required fields");
@@ -402,10 +426,10 @@ function App() {
       return;
     }
 
-    if (requiredBodyVarCount > variables.length) {
+    if (missingIndexes.length > 0) {
       setGenericStatus("Missing template variables");
       setGenericResponse(
-        `Template requires ${requiredBodyVarCount} body variable(s) but only ${variables.length} provided.`
+        `Fill required variables for indexes: ${missingIndexes.join(", ")}.`
       );
       return;
     }
@@ -418,6 +442,8 @@ function App() {
 
     setGenericLoading(true);
     setGenericStatus("Sending...");
+
+    const historyPreview = selectedTemplatePreview || selectedTemplateBody || `Template ${genericTemplateName}`;
 
     try {
       const response = await fetch(apiUrl("/api/templates/send-generic"), {
@@ -437,9 +463,33 @@ function App() {
       const data = await response.json();
       setGenericStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
       setGenericResponse(JSON.stringify(data, null, 2));
+
+      setTemplateHistory((current) => [
+        {
+          id: `h-${Date.now()}`,
+          to: genericTo,
+          templateName: genericTemplateName,
+          previewText: historyPreview,
+          time: nowLabel(),
+          status: response.ok ? "accepted" : `failed_${response.status}`
+        },
+        ...current
+      ]);
     } catch (error) {
       setGenericStatus("Network error");
       setGenericResponse(error instanceof Error ? error.message : "Unknown error");
+
+      setTemplateHistory((current) => [
+        {
+          id: `h-${Date.now()}`,
+          to: genericTo,
+          templateName: genericTemplateName,
+          previewText: historyPreview,
+          time: nowLabel(),
+          status: "network_error"
+        },
+        ...current
+      ]);
     } finally {
       setGenericLoading(false);
     }
@@ -763,19 +813,40 @@ function App() {
           </span>
 
           {requiredBodyVarCount > 0 ? (
-            <label>
-              Variables (| separated) - required for this template
-              <input
-                value={genericVars}
-                onChange={(event) => setGenericVars(event.target.value)}
-                placeholder="value1|value2|value3"
-              />
-            </label>
+            <div className="template-var-grid">
+              {requiredBodyIndexes.map((index) => (
+                <label key={index}>
+                  Variable {`{{${index}}}`}
+                  <input
+                    value={genericBodyVars[index] || ""}
+                    onChange={(event) =>
+                      setGenericBodyVars((current) => ({
+                        ...current,
+                        [index]: event.target.value
+                      }))
+                    }
+                    placeholder={`Value for {{${index}}}`}
+                  />
+                </label>
+              ))}
+            </div>
           ) : null}
 
-          <article className="card template-preview">
-            <h3>Template Preview</h3>
-            <pre>{selectedTemplatePreview || selectedTemplateBody || "No body text in selected template"}</pre>
+          <article className="template-chat-box">
+            <header>
+              <strong>Template Text Box</strong>
+              <span>{genericTemplateName || "No template selected"}</span>
+            </header>
+            <div className="template-thread">
+              <article className="wa-msg in">
+                <p>Template selected: {genericTemplateName || "-"}</p>
+                <time>{genericLanguage || "pt_PT"}</time>
+              </article>
+              <article className="wa-msg out">
+                <p>{selectedTemplatePreview || selectedTemplateBody || "No body text in selected template"}</p>
+                <time>preview</time>
+              </article>
+            </div>
           </article>
 
           {needsUrlButtonVariable ? (
@@ -807,6 +878,27 @@ function App() {
             <pre>{genericResponse}</pre>
           </article>
         </div>
+
+        <section className="template-history">
+          <h3>Sent Template History</h3>
+          {templateHistory.length === 0 ? (
+            <p>No template notifications sent yet.</p>
+          ) : (
+            <div className="template-history-list">
+              {templateHistory.map((item) => (
+                <article key={item.id} className="template-history-item">
+                  <header>
+                    <strong>{item.templateName}</strong>
+                    <span>{item.time}</span>
+                  </header>
+                  <p>To: {item.to}</p>
+                  <p>{item.previewText}</p>
+                  <span className="status">Status: {item.status}</span>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </section>
 
       <section className="panel cta" id="contact">

@@ -228,6 +228,79 @@ p {
   font-size: 0.84rem;
 }
 
+.template-chat-box {
+  border: 1px solid rgba(15, 23, 32, 0.14);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #101c22;
+}
+
+.template-chat-box header {
+  background: linear-gradient(110deg, #1f9c70, #17785a);
+  color: #f4fff9;
+  padding: 0.62rem 0.74rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.template-chat-box header strong {
+  font-size: 0.9rem;
+}
+
+.template-chat-box header span {
+  font-size: 0.75rem;
+  opacity: 0.9;
+}
+
+.template-thread {
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.5rem;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.07), transparent 28%),
+    radial-gradient(circle at 80% 80%, rgba(255, 255, 255, 0.05), transparent 30%),
+    #102228;
+}
+
+.template-history {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.template-history-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.template-history-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.template-history-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.template-history-item header span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.template-var-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .status {
   font-weight: 700;
   font-size: 0.92rem;
@@ -639,5 +712,9 @@ p {
 
   .wa-sidebar {
     max-height: 320px;
+  }
+
+  .template-var-grid {
+    grid-template-columns: 1fr;
   }
 }
