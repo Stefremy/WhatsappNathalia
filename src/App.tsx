@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 const docsFacts = [
   { label: "Version", value: "v23.0" },
@@ -23,6 +23,14 @@ type ConversationContact = {
   messages: ConversationMessage[];
 };
 
+type MetaTemplate = {
+  id?: string;
+  name: string;
+  language?: string;
+  status?: string;
+  components?: Array<{ type?: string; text?: string }>;
+};
+
 const initialConversations: ConversationContact[] = [];
 
 function digitsOnly(value: string) {
@@ -38,6 +46,37 @@ function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function extractBodyTemplateText(template: MetaTemplate | null) {
+  if (!template?.components) {
+    return "";
+  }
+
+  const body = template.components.find((component) => String(component?.type || "").toLowerCase() === "body");
+  return String(body?.text || "");
+}
+
+function fillTemplateBody(templateText: string, values: string[]) {
+  return templateText.replace(/\{\{(\d+)\}\}/g, (_match, index) => {
+    const idx = Number(index) - 1;
+    return values[idx] || `{{${index}}}`;
+  });
+}
+
+function extractPlaceholderIndexes(input: string) {
+  const matches = [...String(input || "").matchAll(/\{\{(\d+)\}\}/g)];
+  return [...new Set(matches.map((match) => Number(match[1])).filter(Number.isFinite))].sort(
+    (a, b) => a - b
+  );
+}
+
+function templateNeedsUrlButtonVariable(template: MetaTemplate | null) {
+  const components = Array.isArray(template?.components) ? template.components : [];
+  const serialized = JSON.stringify(components);
+  const hasUrlButton = /"type"\s*:\s*"?url"?/i.test(serialized) || /"sub_type"\s*:\s*"?url"?/i.test(serialized);
+  const hasUrlPlaceholder = /url[^\n]*\{\{\d+\}\}/i.test(serialized);
+  return hasUrlButton && hasUrlPlaceholder;
+}
+
 function App() {
   const [apiVersion, setApiVersion] = useState(
     import.meta.env.VITE_WHATSAPP_API_VERSION ?? "v23.0"
@@ -45,6 +84,7 @@ function App() {
   const [phoneNumberId, setPhoneNumberId] = useState(
     import.meta.env.VITE_WHATSAPP_PHONE_NUMBER_ID ?? "configured in backend"
   );
+  const [wabaId, setWabaId] = useState(import.meta.env.VITE_WHATSAPP_BUSINESS_ACCOUNT_ID ?? "");
   const backendBaseUrl = (import.meta.env.VITE_BACKEND_BASE_URL?.trim() || "").replace(/\/$/, "");
   const apiUrl = (path: string) => (backendBaseUrl ? `${backendBaseUrl}${path}` : path);
 
@@ -68,35 +108,19 @@ function App() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaStatusText, setMediaStatusText] = useState("Idle");
   const [mediaResponseText, setMediaResponseText] = useState("No upload sent yet.");
-  const [templateTo, setTemplateTo] = useState(
-    import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229"
-  );
-  const [customerName, setCustomerName] = useState("Cliente");
-  const [shipmentCode, setShipmentCode] = useState("1215");
-  const [pickupDate, setPickupDate] = useState("12/02/2026");
-  const [templateLoading, setTemplateLoading] = useState(false);
-  const [templateStatus, setTemplateStatus] = useState("Idle");
-  const [templateResponse, setTemplateResponse] = useState("No template request sent yet.");
   const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229");
   const [genericTemplateName, setGenericTemplateName] = useState(
     import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
   );
   const [genericLanguage, setGenericLanguage] = useState("pt_PT");
-  const [genericVars, setGenericVars] = useState("John|12345|Jasper's Market, 1234 Baker street. Palo Alto, CA 94301|Referencia - valor");
+  const [genericVars, setGenericVars] = useState("");
   const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
   const [genericLoading, setGenericLoading] = useState(false);
   const [genericStatus, setGenericStatus] = useState("Idle");
   const [genericResponse, setGenericResponse] = useState("No generic template request sent yet.");
-  const [feedbackTo, setFeedbackTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229");
-  const [feedbackTemplateName, setFeedbackTemplateName] = useState(
-    import.meta.env.VITE_FEEDBACK_TEMPLATE_NAME ?? "feedback_request_template"
-  );
-  const [feedbackLanguageCode, setFeedbackLanguageCode] = useState("pt_PT");
-  const [feedbackCustomerName, setFeedbackCustomerName] = useState("JOANA");
-  const [feedbackStoreName, setFeedbackStoreName] = useState("Patricia fashion star");
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackStatus, setFeedbackStatus] = useState("Idle");
-  const [feedbackResponse, setFeedbackResponse] = useState("No feedback template request sent yet.");
+  const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
+  const [metaTemplatesLoading, setMetaTemplatesLoading] = useState(false);
+  const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Not loaded");
   const [conversations, setConversations] = useState<ConversationContact[]>(initialConversations);
   const [activeConversationId, setActiveConversationId] = useState(initialConversations[0]?.id || "");
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -106,10 +130,108 @@ function App() {
     [activeConversationId, conversations]
   );
 
+  const selectedMetaTemplate = useMemo(
+    () => metaTemplates.find((template) => template.name === genericTemplateName) || null,
+    [genericTemplateName, metaTemplates]
+  );
+
+  const genericVarsList = useMemo(
+    () =>
+      genericVars
+        .split("|")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    [genericVars]
+  );
+
+  const selectedTemplateBody = useMemo(
+    () => extractBodyTemplateText(selectedMetaTemplate),
+    [selectedMetaTemplate]
+  );
+
+  const selectedTemplatePreview = useMemo(
+    () => fillTemplateBody(selectedTemplateBody, genericVarsList),
+    [selectedTemplateBody, genericVarsList]
+  );
+
+  const requiredBodyIndexes = useMemo(
+    () => extractPlaceholderIndexes(selectedTemplateBody),
+    [selectedTemplateBody]
+  );
+
+  const requiredBodyVarCount = requiredBodyIndexes.length;
+  const needsUrlButtonVariable = useMemo(
+    () => templateNeedsUrlButtonVariable(selectedMetaTemplate),
+    [selectedMetaTemplate]
+  );
+
   function addEmoji(emoji: string) {
     setMessageText((current) => `${current}${emoji}`);
     setEmojiOpen(false);
   }
+
+  async function fetchMetaTemplates() {
+    if (!phoneNumberId.trim()) {
+      setMetaTemplatesStatus("Phone number ID is required to fetch templates");
+      return;
+    }
+
+    setMetaTemplatesLoading(true);
+    setMetaTemplatesStatus("Loading templates...");
+
+    try {
+      const query = new URLSearchParams({
+        fetchAll: "true",
+        limit: "100"
+      });
+
+      if (phoneNumberId.trim()) {
+        query.set("phoneNumberId", phoneNumberId.trim());
+      }
+
+      if (wabaId.trim()) {
+        query.set("wabaId", wabaId.trim());
+      }
+
+      const response = await fetch(apiUrl(`/api/templates?${query.toString()}`));
+      const data = await parseResponse(response);
+
+      if (!response.ok) {
+        setMetaTemplatesStatus(`Failed to load templates (${response.status})`);
+        return;
+      }
+
+      const rows = Array.isArray(data?.data) ? data.data : [];
+      const approved = rows
+        .filter((item) => String(item?.status || "").toUpperCase() === "APPROVED")
+        .map((item) => ({
+          id: String(item?.id || ""),
+          name: String(item?.name || ""),
+          language: String(item?.language || "pt_PT"),
+          status: String(item?.status || ""),
+          components: Array.isArray(item?.components) ? item.components : []
+        }))
+        .filter((item) => item.name);
+
+      setMetaTemplates(approved);
+      setMetaTemplatesStatus(
+        approved.length > 0 ? `Loaded ${approved.length} approved templates` : "No approved templates found"
+      );
+
+      if (approved.length > 0 && !approved.some((item) => item.name === genericTemplateName)) {
+        setGenericTemplateName(approved[0].name);
+        setGenericLanguage(approved[0].language || "pt_PT");
+      }
+    } catch (error) {
+      setMetaTemplatesStatus(error instanceof Error ? error.message : "Failed to load templates");
+    } finally {
+      setMetaTemplatesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchMetaTemplates();
+  }, [phoneNumberId, wabaId]);
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -268,54 +390,28 @@ function App() {
     '  -F "messaging_product=whatsapp"'
   ].join("\n");
 
-  async function sendReturnToSenderTemplate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!templateTo.trim() || !customerName.trim() || !shipmentCode.trim() || !pickupDate.trim()) {
-      setTemplateStatus("Missing required fields");
-      setTemplateResponse("Recipient, customer name, shipment code and pickup date are required.");
-      return;
-    }
-
-    setTemplateLoading(true);
-    setTemplateStatus("Sending...");
-
-    try {
-      const response = await fetch(apiUrl("/api/templates/send-return-to-sender"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          to: templateTo,
-          customerName,
-          shipmentCode,
-          pickupDate
-        })
-      });
-
-      const data = await response.json();
-      setTemplateStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
-      setTemplateResponse(JSON.stringify(data, null, 2));
-    } catch (error) {
-      setTemplateStatus("Network error");
-      setTemplateResponse(error instanceof Error ? error.message : "Unknown error");
-    } finally {
-      setTemplateLoading(false);
-    }
-  }
-
   async function sendGenericTemplate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const variables = genericVars
-      .split("|")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const variables = genericVarsList;
 
     if (!genericTo.trim() || !genericTemplateName.trim()) {
       setGenericStatus("Missing required fields");
       setGenericResponse("Recipient and template name are required.");
+      return;
+    }
+
+    if (requiredBodyVarCount > variables.length) {
+      setGenericStatus("Missing template variables");
+      setGenericResponse(
+        `Template requires ${requiredBodyVarCount} body variable(s) but only ${variables.length} provided.`
+      );
+      return;
+    }
+
+    if (needsUrlButtonVariable && !genericButtonUrlVariable.trim()) {
+      setGenericStatus("Missing URL button variable");
+      setGenericResponse("This template includes a dynamic URL button and requires button URL variable.");
       return;
     }
 
@@ -333,7 +429,7 @@ function App() {
           templateName: genericTemplateName,
           languageCode: genericLanguage,
           bodyVariables: variables,
-          buttonUrlVariable: genericButtonUrlVariable
+          buttonUrlVariable: needsUrlButtonVariable ? genericButtonUrlVariable.trim() : ""
         })
       });
 
@@ -345,44 +441,6 @@ function App() {
       setGenericResponse(error instanceof Error ? error.message : "Unknown error");
     } finally {
       setGenericLoading(false);
-    }
-  }
-
-  async function sendFeedbackTemplate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!feedbackTo.trim() || !feedbackCustomerName.trim() || !feedbackStoreName.trim()) {
-      setFeedbackStatus("Missing required fields");
-      setFeedbackResponse("Recipient, customer name and store name are required.");
-      return;
-    }
-
-    setFeedbackLoading(true);
-    setFeedbackStatus("Sending...");
-
-    try {
-      const response = await fetch(apiUrl("/api/templates/send-feedback-request"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          to: feedbackTo,
-          customerName: feedbackCustomerName,
-          storeName: feedbackStoreName,
-          templateName: feedbackTemplateName,
-          languageCode: feedbackLanguageCode
-        })
-      });
-
-      const data = await response.json();
-      setFeedbackStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
-      setFeedbackResponse(JSON.stringify(data, null, 2));
-    } catch (error) {
-      setFeedbackStatus("Network error");
-      setFeedbackResponse(error instanceof Error ? error.message : "Unknown error");
-    } finally {
-      setFeedbackLoading(false);
     }
   }
 
@@ -635,76 +693,29 @@ function App() {
         </div>
       </section>
 
-      <section className="panel" id="pickup-template-console">
-        <h2>Pickup Template Console</h2>
-        <p>
-          Sends template <strong>entrega_de_volta_ao_remetente</strong> with variables:
-          customer name, shipment code, and pickup date.
-        </p>
-
-        <form className="api-form" onSubmit={sendReturnToSenderTemplate}>
-          <label>
-            Recipient Number (E.164)
-            <input
-              value={templateTo}
-              onChange={(event) => setTemplateTo(event.target.value)}
-              placeholder="+351912858229"
-            />
-          </label>
-
-          <label>
-            Variable {"{{1}}"} Customer Name
-            <input
-              value={customerName}
-              onChange={(event) => setCustomerName(event.target.value)}
-              placeholder="Nathalia"
-            />
-          </label>
-
-          <label>
-            Variable {"{{2}}"} Shipment Code
-            <input
-              value={shipmentCode}
-              onChange={(event) => setShipmentCode(event.target.value)}
-              placeholder="1215"
-            />
-          </label>
-
-          <label>
-            Variable {"{{3}}"} Pickup Date
-            <input
-              value={pickupDate}
-              onChange={(event) => setPickupDate(event.target.value)}
-              placeholder="12/2/12"
-            />
-          </label>
-
-          <div className="api-actions">
-            <button className="btn btn-primary" type="submit" disabled={templateLoading}>
-              {templateLoading ? "Sending..." : "Send Pickup Template"}
-            </button>
-            <span className="status">Status: {templateStatus}</span>
-          </div>
-        </form>
-
-        <div className="code-grid">
-          <article className="card code-block">
-            <h3>Backend Relay</h3>
-            <pre>{apiUrl("/api/templates/send-return-to-sender")}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Template Response</h3>
-            <pre>{templateResponse}</pre>
-          </article>
-        </div>
-      </section>
-
       <section className="panel" id="generic-template-console">
-        <h2>Generic Template Console</h2>
+        <h2>Template Notifications</h2>
         <p>
-          For new templates like this one, paste template name/language and variable values in order.
-          Use <strong>|</strong> to separate variables.
+          Pick an approved template from your Meta account, fill variables, preview the message,
+          and send the notification.
         </p>
+
+        <div className="template-toolbar">
+          <input
+            value={wabaId}
+            onChange={(event) => setWabaId(event.target.value)}
+            placeholder="Optional: paste WABA ID"
+          />
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={fetchMetaTemplates}
+            disabled={metaTemplatesLoading}
+          >
+            {metaTemplatesLoading ? "Loading..." : "Refresh Templates"}
+          </button>
+          <span className="status">{metaTemplatesStatus}</span>
+        </div>
 
         <form className="api-form" onSubmit={sendGenericTemplate}>
           <label>
@@ -717,12 +728,24 @@ function App() {
           </label>
 
           <label>
-            Template Name
-            <input
+            Template (Approved)
+            <select
               value={genericTemplateName}
-              onChange={(event) => setGenericTemplateName(event.target.value)}
-              placeholder="your_template_name"
-            />
+              onChange={(event) => {
+                const chosen = metaTemplates.find((item) => item.name === event.target.value) || null;
+                setGenericTemplateName(event.target.value);
+                if (chosen?.language) {
+                  setGenericLanguage(chosen.language);
+                }
+              }}
+            >
+              {metaTemplates.length === 0 ? <option value="">No templates loaded</option> : null}
+              {metaTemplates.map((template) => (
+                <option key={template.id || template.name} value={template.name}>
+                  {template.name} ({template.language || "pt_PT"})
+                </option>
+              ))}
+            </select>
           </label>
 
           <label>
@@ -734,27 +757,40 @@ function App() {
             />
           </label>
 
-          <label>
-            Body Variables (ordered, separated by |)
-            <textarea
-              value={genericVars}
-              onChange={(event) => setGenericVars(event.target.value)}
-              rows={3}
-            />
-          </label>
+          <span className="status">
+            Required body vars: {requiredBodyVarCount} {requiredBodyVarCount > 0 ? `(indexes: ${requiredBodyIndexes.join(", ")})` : ""}
+          </span>
 
-          <label>
-            URL Button Variable (optional)
-            <input
-              value={genericButtonUrlVariable}
-              onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
-              placeholder="optional dynamic suffix/parameter for first URL button"
-            />
-          </label>
+          {requiredBodyVarCount > 0 ? (
+            <label>
+              Variables (| separated) - required for this template
+              <input
+                value={genericVars}
+                onChange={(event) => setGenericVars(event.target.value)}
+                placeholder="value1|value2|value3"
+              />
+            </label>
+          ) : null}
+
+          <article className="card template-preview">
+            <h3>Template Preview</h3>
+            <pre>{selectedTemplatePreview || selectedTemplateBody || "No body text in selected template"}</pre>
+          </article>
+
+          {needsUrlButtonVariable ? (
+            <label>
+              URL Button Variable (required)
+              <input
+                value={genericButtonUrlVariable}
+                onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
+                placeholder="dynamic URL variable"
+              />
+            </label>
+          ) : null}
 
           <div className="api-actions">
             <button className="btn btn-primary" type="submit" disabled={genericLoading}>
-              {genericLoading ? "Sending..." : "Send Generic Template"}
+              {genericLoading ? "Sending..." : "Send Template Notification"}
             </button>
             <span className="status">Status: {genericStatus}</span>
           </div>
@@ -768,79 +804,6 @@ function App() {
           <article className="card code-block">
             <h3>Template Response</h3>
             <pre>{genericResponse}</pre>
-          </article>
-        </div>
-      </section>
-
-      <section className="panel" id="feedback-template-console">
-        <h2>Feedback Request Template Console</h2>
-        <p>
-          Sends your customer feedback message template (example: "Deixe 5 estrelas") with
-          customer and store variables.
-        </p>
-
-        <form className="api-form" onSubmit={sendFeedbackTemplate}>
-          <label>
-            Recipient Number (E.164)
-            <input
-              value={feedbackTo}
-              onChange={(event) => setFeedbackTo(event.target.value)}
-              placeholder="+351912858229"
-            />
-          </label>
-
-          <label>
-            Template Name
-            <input
-              value={feedbackTemplateName}
-              onChange={(event) => setFeedbackTemplateName(event.target.value)}
-              placeholder="feedback_request_template"
-            />
-          </label>
-
-          <label>
-            Language Code
-            <input
-              value={feedbackLanguageCode}
-              onChange={(event) => setFeedbackLanguageCode(event.target.value)}
-              placeholder="pt_PT"
-            />
-          </label>
-
-          <label>
-            Variable {"{{1}}"} Customer Name
-            <input
-              value={feedbackCustomerName}
-              onChange={(event) => setFeedbackCustomerName(event.target.value)}
-              placeholder="JOANA"
-            />
-          </label>
-
-          <label>
-            Variable {"{{2}}"} Store Name
-            <input
-              value={feedbackStoreName}
-              onChange={(event) => setFeedbackStoreName(event.target.value)}
-              placeholder="Patricia fashion star"
-            />
-          </label>
-
-          <div className="api-actions">
-            <button className="btn btn-primary" type="submit" disabled={feedbackLoading}>
-              {feedbackLoading ? "Sending..." : "Send Feedback Template"}
-            </button>
-            <span className="status">Status: {feedbackStatus}</span>
-          </div>
-        </form>
-
-        <div className="code-grid">
-          <article className="card code-block">
-            <h3>Backend Relay</h3>
-            <pre>{apiUrl("/api/templates/send-feedback-request")}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Template Response</h3>
-            <pre>{feedbackResponse}</pre>
           </article>
         </div>
       </section>

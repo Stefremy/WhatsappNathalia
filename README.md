@@ -60,7 +60,7 @@ npm --prefix backend run dev
 - `POST /api/templates/send-return-to-sender` -> sends template `entrega_de_volta_ao_remetente`
 - `POST /api/templates/send-generic` -> sends any approved template using dynamic variables
 - `POST /api/templates/send-feedback-request` -> sends feedback request template with 2 variables
-- `GET /api/templates` -> fetches templates associated with a phone number ID (via WABA lookup), returning all pages by default (`fetchAll=true`)
+- `GET /api/templates` -> fetches templates; supports `phoneNumberId` (lookup WABA) or direct `wabaId`, returning all pages by default (`fetchAll=true`)
 - `GET /webhook` and `POST /webhook` -> WhatsApp webhook verify + status updates + inbound message logging
 
 ### Conversation history tracking (Notion)

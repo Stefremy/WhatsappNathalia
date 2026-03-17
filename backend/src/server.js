@@ -640,34 +640,43 @@ app.get("/api/templates", async (req, res) => {
     const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
     const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
     const phoneNumberId = String(req.query.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    const providedWabaId = String(
+      req.query.wabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || ""
+    ).trim();
     const limit = String(req.query.limit || "50").trim();
     const fetchAll = String(req.query.fetchAll || "true").toLowerCase() !== "false";
 
-    if (!phoneNumberId) {
+    if (!phoneNumberId && !providedWabaId) {
       return res.status(400).json({
-        error: "Query param 'phoneNumberId' (or env WHATSAPP_PHONE_NUMBER_ID) is required."
+        error:
+          "Provide 'phoneNumberId' or 'wabaId' query param (or env WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_BUSINESS_ACCOUNT_ID)."
       });
     }
 
-    const phoneLookupUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=whatsapp_business_account`;
-    const phoneLookupResponse = await fetch(phoneLookupUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`
+    let wabaId = providedWabaId;
+    let phoneLookupBody = null;
+
+    if (!wabaId && phoneNumberId) {
+      const phoneLookupUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=whatsapp_business_account`;
+      const phoneLookupResponse = await fetch(phoneLookupUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      phoneLookupBody = await phoneLookupResponse.json();
+
+      if (phoneLookupResponse.ok) {
+        wabaId = String(phoneLookupBody?.whatsapp_business_account?.id || "").trim();
       }
-    });
-
-    const phoneLookupBody = await phoneLookupResponse.json();
-
-    if (!phoneLookupResponse.ok) {
-      return res.status(phoneLookupResponse.status).json(phoneLookupBody);
     }
 
-    const wabaId = phoneLookupBody?.whatsapp_business_account?.id;
-
     if (!wabaId) {
-      return res.status(404).json({
-        error: "Could not resolve WhatsApp Business Account for this phone number ID.",
+      return res.status(400).json({
+        error:
+          "Could not resolve WABA ID from phoneNumberId. Provide 'wabaId' query param or set WHATSAPP_BUSINESS_ACCOUNT_ID.",
+        phoneNumberId,
         phoneLookup: phoneLookupBody
       });
     }
