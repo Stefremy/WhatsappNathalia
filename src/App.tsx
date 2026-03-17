@@ -1,44 +1,79 @@
 import { FormEvent, useMemo, useState } from "react";
 
-const capabilities = [
-  {
-    title: "Unified Cloud API",
-    text: "Expose your services in one stable endpoint with clean auth, monitoring, and usage controls."
-  },
-  {
-    title: "No-Code + Pro-Code",
-    text: "Use Linke modules as a reliable fallback when Make scenarios break under scale."
-  },
-  {
-    title: "WhatsApp Business Flows",
-    text: "Launch templates, automations, and customer events connected to your own API backbone."
-  }
-];
-
-const plans = [
-  {
-    name: "Starter",
-    price: "EUR49/mo",
-    note: "Best for pilots and single-product teams"
-  },
-  {
-    name: "Growth",
-    price: "EUR199/mo",
-    note: "Best for active cloud operations and multi-client usage"
-  },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    note: "Dedicated infrastructure, SLA, private integration track"
-  }
-];
-
 const docsFacts = [
   { label: "Version", value: "v23.0" },
   { label: "Method", value: "POST" },
   { label: "Endpoint", value: "/{Version}/{Phone-Number-ID}/messages" },
   { label: "Auth", value: "Bearer token" }
 ];
+
+type ConversationMessage = {
+  id: string;
+  direction: "in" | "out";
+  text: string;
+  time: string;
+};
+
+type ConversationContact = {
+  id: string;
+  name: string;
+  phone: string;
+  lastAt: string;
+  unread: number;
+  messages: ConversationMessage[];
+};
+
+const initialConversations: ConversationContact[] = [
+  {
+    id: "c-1",
+    name: "Nathalia Linke",
+    phone: "351916723469",
+    lastAt: "15:03",
+    unread: 1,
+    messages: [
+      {
+        id: "m-1",
+        direction: "in",
+        text: "ok depois me diz como faco",
+        time: "15:03"
+      }
+    ]
+  },
+  {
+    id: "c-2",
+    name: "LINKE WA BIZNESS",
+    phone: "351912858229",
+    lastAt: "14:57",
+    unread: 0,
+    messages: [
+      {
+        id: "m-2",
+        direction: "in",
+        text: "Hello from Linke Cloud API frontend. tudo bem?",
+        time: "14:57"
+      }
+    ]
+  },
+  {
+    id: "c-3",
+    name: "Perplexity Ai",
+    phone: "351934567890",
+    lastAt: "14:21",
+    unread: 0,
+    messages: [
+      {
+        id: "m-3",
+        direction: "in",
+        text: "Video",
+        time: "14:21"
+      }
+    ]
+  }
+];
+
+function nowLabel() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 function App() {
   const [apiVersion, setApiVersion] = useState(
@@ -47,7 +82,18 @@ function App() {
   const [phoneNumberId, setPhoneNumberId] = useState(
     import.meta.env.VITE_WHATSAPP_PHONE_NUMBER_ID ?? "configured in backend"
   );
-  const backendBaseUrl = import.meta.env.VITE_BACKEND_BASE_URL ?? "http://localhost:3001";
+  const backendBaseUrl = (import.meta.env.VITE_BACKEND_BASE_URL?.trim() || "").replace(/\/$/, "");
+  const apiUrl = (path: string) => (backendBaseUrl ? `${backendBaseUrl}${path}` : path);
+
+  async function parseResponse(response: Response) {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      return response.json();
+    }
+
+    const text = await response.text();
+    return { raw: text || "Empty response" };
+  }
   const [toNumber, setToNumber] = useState(
     import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229"
   );
@@ -88,6 +134,13 @@ function App() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackStatus, setFeedbackStatus] = useState("Idle");
   const [feedbackResponse, setFeedbackResponse] = useState("No feedback template request sent yet.");
+  const [conversations, setConversations] = useState<ConversationContact[]>(initialConversations);
+  const [activeConversationId, setActiveConversationId] = useState(initialConversations[0]?.id || "");
+
+  const activeConversation = useMemo(
+    () => conversations.find((item) => item.id === activeConversationId) || null,
+    [activeConversationId, conversations]
+  );
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -121,7 +174,7 @@ function App() {
     setStatusText("Sending...");
 
     try {
-      const response = await fetch(`${backendBaseUrl}/api/messages/send`, {
+      const response = await fetch(apiUrl("/api/messages/send"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -132,19 +185,65 @@ function App() {
         })
       });
 
-      const data = await response.json();
+      const data = await parseResponse(response);
+      const sentTime = nowLabel();
+
+      setConversations((current) => {
+        const matchingById = current.find((item) => item.id === activeConversationId);
+        const matching = matchingById || current.find((item) => item.phone === toNumber.trim());
+
+        const nextMessage: ConversationMessage = {
+          id: `m-${Date.now()}`,
+          direction: "out",
+          text: messageText,
+          time: sentTime
+        };
+
+        if (matching) {
+          return current
+            .map((item) => {
+              if (item.id !== matching.id) {
+                return item;
+              }
+
+              return {
+                ...item,
+                lastAt: sentTime,
+                messages: [...item.messages, nextMessage]
+              };
+            })
+            .sort((a, b) => (a.id === matching.id ? -1 : b.id === matching.id ? 1 : 0));
+        }
+
+        const created: ConversationContact = {
+          id: `c-${Date.now()}`,
+          name: "New Contact",
+          phone: toNumber.trim(),
+          unread: 0,
+          lastAt: sentTime,
+          messages: [nextMessage]
+        };
+
+        setActiveConversationId(created.id);
+        return [created, ...current];
+      });
+
       setStatusText(response.ok ? "Message accepted" : `Failed (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
     } catch (error) {
-      setStatusText("Network error");
-      setResponseText(error instanceof Error ? error.message : "Unknown error");
+      setStatusText("Backend unreachable");
+      setResponseText(
+        error instanceof Error
+          ? `${error.message}\n\nVerify backend is running and reachable at ${backendBaseUrl || "same-origin /api"}.`
+          : `Unknown error\n\nVerify backend is running and reachable at ${backendBaseUrl || "same-origin /api"}.`
+      );
     } finally {
       setLoading(false);
     }
   }
 
   const curlCommand = [
-    `curl -X POST \"${backendBaseUrl}/api/messages/send\"`,
+    `curl -X POST \"${apiUrl("/api/messages/send")}\"`,
     '  -H "Content-Type: application/json"',
     `  -d '${JSON.stringify({ to: toNumber, text: messageText })}'`
   ].join("\n");
@@ -166,7 +265,7 @@ function App() {
       formData.append("file", mediaFile);
       formData.append("messaging_product", "whatsapp");
 
-      const response = await fetch(`${backendBaseUrl}/api/media/upload`, {
+      const response = await fetch(apiUrl("/api/media/upload"), {
         method: "POST",
         body: formData
       });
@@ -183,7 +282,7 @@ function App() {
   }
 
   const mediaCurlCommand = [
-    `curl -X POST "${backendBaseUrl}/api/media/upload"`,
+    `curl -X POST "${apiUrl("/api/media/upload")}"`,
     '  -H "Content-Type: multipart/form-data"',
     '  -F "file=@/path/to/file.jpg"',
     '  -F "messaging_product=whatsapp"'
@@ -202,7 +301,7 @@ function App() {
     setTemplateStatus("Sending...");
 
     try {
-      const response = await fetch(`${backendBaseUrl}/api/templates/send-return-to-sender`, {
+      const response = await fetch(apiUrl("/api/templates/send-return-to-sender"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -244,7 +343,7 @@ function App() {
     setGenericStatus("Sending...");
 
     try {
-      const response = await fetch(`${backendBaseUrl}/api/templates/send-generic`, {
+      const response = await fetch(apiUrl("/api/templates/send-generic"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -282,7 +381,7 @@ function App() {
     setFeedbackStatus("Sending...");
 
     try {
-      const response = await fetch(`${backendBaseUrl}/api/templates/send-feedback-request`, {
+      const response = await fetch(apiUrl("/api/templates/send-feedback-request"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -326,31 +425,6 @@ function App() {
         </div>
       </header>
 
-      <section className="panel" id="capabilities">
-        <h2>Built for fast cloud API business execution</h2>
-        <div className="grid three">
-          {capabilities.map((item) => (
-            <article key={item.title} className="card">
-              <h3>{item.title}</h3>
-              <p>{item.text}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel" id="plans">
-        <h2>Simple plans to launch and scale</h2>
-        <div className="grid three">
-          {plans.map((plan) => (
-            <article key={plan.name} className="card plan">
-              <h3>{plan.name}</h3>
-              <p className="price">{plan.price}</p>
-              <p>{plan.note}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
       <section className="panel" id="api-console">
         <h2>WhatsApp Cloud API Message Console</h2>
         <p>
@@ -359,81 +433,146 @@ function App() {
           Notion logging.
         </p>
 
-        <div className="facts">
-          {docsFacts.map((fact) => (
-            <div key={fact.label} className="fact">
-              <span>{fact.label}</span>
-              <strong>{fact.value}</strong>
+        <div className="wa-console">
+          <aside className="wa-sidebar">
+            <div className="wa-search">
+              <input placeholder="Search or start a new chat" />
             </div>
-          ))}
-        </div>
 
-        <form className="api-form" onSubmit={sendMessage}>
-          <label>
-            API Version
-            <input
-              value={apiVersion}
-              onChange={(event) => setApiVersion(event.target.value)}
-              placeholder="v23.0"
-            />
-          </label>
+            <div className="wa-contact-list">
+              {conversations.map((contact) => {
+                const last = contact.messages[contact.messages.length - 1];
+                const isActive = contact.id === activeConversationId;
 
-          <label>
-            Phone Number ID
-            <input
-              value={phoneNumberId}
-              onChange={(event) => setPhoneNumberId(event.target.value)}
-              placeholder="configured in backend"
-            />
-          </label>
+                return (
+                  <button
+                    key={contact.id}
+                    type="button"
+                    className={`wa-contact ${isActive ? "active" : ""}`}
+                    onClick={() => {
+                      setActiveConversationId(contact.id);
+                      setToNumber(contact.phone);
+                    }}
+                  >
+                    <span className="wa-contact-avatar">{contact.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="wa-contact-meta">
+                      <strong>{contact.name}</strong>
+                      <small>{last?.text || "No messages yet"}</small>
+                    </span>
+                    <span className="wa-contact-right">
+                      <small>{contact.lastAt}</small>
+                      {contact.unread > 0 ? <b>{contact.unread}</b> : null}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
 
-          <label>
-            Recipient Number (E.164)
-            <input
-              value={toNumber}
-              onChange={(event) => setToNumber(event.target.value)}
-              placeholder="3519XXXXXXXX"
-            />
-          </label>
+          <div className="wa-phone">
+            <header className="wa-phone-header">
+              <div className="wa-avatar">LN</div>
+              <div>
+                <strong>{activeConversation?.name || "Live customer chat"}</strong>
+                <small>{toNumber || activeConversation?.phone || "No recipient"}</small>
+              </div>
+              <span className={`wa-live-status ${loading ? "busy" : ""}`}>{statusText}</span>
+            </header>
 
-          <label>
-            Text Message Body
-            <textarea
-              value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
-              rows={4}
-            />
-          </label>
+            <main className="wa-thread">
+              {(activeConversation?.messages || []).map((message) => (
+                <article key={message.id} className={`wa-msg ${message.direction === "in" ? "in" : "out"}`}>
+                  <p>{message.text}</p>
+                  <time>{message.time}</time>
+                </article>
+              ))}
+              {messageText ? (
+                <article className="wa-msg out composing">
+                  <p>{messageText}</p>
+                  <time>{loading ? "sending" : "draft"}</time>
+                </article>
+              ) : null}
+            </main>
 
-          <div className="api-actions">
-            <button className="btn btn-primary" type="submit" disabled={loading}>
-              {loading ? "Sending..." : "Send Text Message"}
-            </button>
-            <span className="status">Status: {statusText}</span>
+            <form className="wa-compose" onSubmit={sendMessage}>
+              <label>
+                Recipient Number (E.164)
+                <input
+                  value={toNumber}
+                  onChange={(event) => setToNumber(event.target.value)}
+                  placeholder="3519XXXXXXXX"
+                />
+              </label>
+              <label>
+                Message
+                <textarea
+                  value={messageText}
+                  onChange={(event) => setMessageText(event.target.value)}
+                  rows={2}
+                  placeholder="Write your response..."
+                />
+              </label>
+              <button className="wa-send" type="submit" disabled={loading}>
+                {loading ? "Sending..." : "Send Text Message"}
+              </button>
+            </form>
+
+            <details className="wa-details">
+              <summary>API Details</summary>
+
+              <div className="facts wa-facts">
+                {docsFacts.map((fact) => (
+                  <div key={fact.label} className="fact">
+                    <span>{fact.label}</span>
+                    <strong>{fact.value}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <form className="api-form wa-config">
+                <label>
+                  API Version
+                  <input
+                    value={apiVersion}
+                    onChange={(event) => setApiVersion(event.target.value)}
+                    placeholder="v23.0"
+                  />
+                </label>
+
+                <label>
+                  Phone Number ID
+                  <input
+                    value={phoneNumberId}
+                    onChange={(event) => setPhoneNumberId(event.target.value)}
+                    placeholder="configured in backend"
+                  />
+                </label>
+              </form>
+
+              <div className="code-grid wa-code-grid">
+                <article className="card code-block">
+                  <h3>Resolved Endpoint</h3>
+                  <pre>{endpoint}</pre>
+                </article>
+                <article className="card code-block">
+                  <h3>Backend Relay</h3>
+                  <pre>{apiUrl("/api/messages/send")}</pre>
+                </article>
+                <article className="card code-block">
+                  <h3>Request Payload</h3>
+                  <pre>{JSON.stringify(payload, null, 2)}</pre>
+                </article>
+                <article className="card code-block">
+                  <h3>cURL Example</h3>
+                  <pre>{curlCommand}</pre>
+                </article>
+                <article className="card code-block">
+                  <h3>API Response</h3>
+                  <pre>{responseText}</pre>
+                </article>
+              </div>
+            </details>
           </div>
-        </form>
-
-        <div className="code-grid">
-          <article className="card code-block">
-            <h3>Resolved Endpoint</h3>
-            <pre>{endpoint}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Backend Relay</h3>
-            <pre>{`${backendBaseUrl}/api/messages/send`}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Request Payload</h3>
-            <pre>{JSON.stringify(payload, null, 2)}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>cURL Example</h3>
-            <pre>{curlCommand}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>API Response</h3>
-            <pre>{responseText}</pre>
-          </article>
         </div>
       </section>
 
@@ -470,7 +609,7 @@ function App() {
           </article>
           <article className="card code-block">
             <h3>Backend Relay</h3>
-            <pre>{`${backendBaseUrl}/api/media/upload`}</pre>
+            <pre>{apiUrl("/api/media/upload")}</pre>
           </article>
           <article className="card code-block">
             <h3>cURL Example</h3>
@@ -538,7 +677,7 @@ function App() {
         <div className="code-grid">
           <article className="card code-block">
             <h3>Backend Relay</h3>
-            <pre>{`${backendBaseUrl}/api/templates/send-return-to-sender`}</pre>
+            <pre>{apiUrl("/api/templates/send-return-to-sender")}</pre>
           </article>
           <article className="card code-block">
             <h3>Template Response</h3>
@@ -611,7 +750,7 @@ function App() {
         <div className="code-grid">
           <article className="card code-block">
             <h3>Backend Relay</h3>
-            <pre>{`${backendBaseUrl}/api/templates/send-generic`}</pre>
+            <pre>{apiUrl("/api/templates/send-generic")}</pre>
           </article>
           <article className="card code-block">
             <h3>Template Response</h3>
@@ -684,7 +823,7 @@ function App() {
         <div className="code-grid">
           <article className="card code-block">
             <h3>Backend Relay</h3>
-            <pre>{`${backendBaseUrl}/api/templates/send-feedback-request`}</pre>
+            <pre>{apiUrl("/api/templates/send-feedback-request")}</pre>
           </article>
           <article className="card code-block">
             <h3>Template Response</h3>

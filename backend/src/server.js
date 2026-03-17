@@ -15,6 +15,7 @@ const upload = multer({
 });
 
 const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
+const notionEnabled = String(process.env.NOTION_ENABLED || "false").toLowerCase() === "true";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -22,6 +23,10 @@ function requiredEnv(name) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function normalizeRecipient(input) {
+  return String(input ?? "").replace(/\D/g, "");
 }
 
 function notionPropName(name, fallback) {
@@ -36,7 +41,24 @@ function titleText(text) {
   return [{ type: "text", text: { content: String(text ?? "") } }];
 }
 
+async function safeNotionLog(logFn) {
+  if (!notionEnabled) {
+    return null;
+  }
+
+  try {
+    await logFn();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Notion logging failed";
+  }
+}
+
 async function createNotionMessageRow({ to, text, status, messageId, rawResponse }) {
+  if (!notionEnabled) {
+    return null;
+  }
+
   const databaseId = requiredEnv("NOTION_DATABASE_ID");
   const titleProp = notionPropName("NOTION_PROP_TITLE", "Name");
   const messageIdProp = notionPropName("NOTION_PROP_MESSAGE_ID", "Message ID");
@@ -71,7 +93,85 @@ async function createNotionMessageRow({ to, text, status, messageId, rawResponse
   });
 }
 
+function inboundMessageText(message) {
+  const type = String(message?.type || "unknown");
+
+  if (type === "text") {
+    return String(message?.text?.body || "").trim() || "[text]";
+  }
+
+  if (type === "button") {
+    return `[button] ${String(message?.button?.text || "").trim()}`.trim();
+  }
+
+  if (type === "interactive") {
+    const listReply = String(message?.interactive?.list_reply?.title || "").trim();
+    const buttonReply = String(message?.interactive?.button_reply?.title || "").trim();
+    const reply = listReply || buttonReply;
+    return reply ? `[interactive] ${reply}` : "[interactive]";
+  }
+
+  if (type === "image") {
+    return "[image]";
+  }
+
+  if (type === "video") {
+    return "[video]";
+  }
+
+  if (type === "audio") {
+    return "[audio]";
+  }
+
+  if (type === "document") {
+    return "[document]";
+  }
+
+  return `[${type}]`;
+}
+
+async function logInboundMessage({ from, message, contact }) {
+  if (!notionEnabled) {
+    return null;
+  }
+
+  const inboundMessageId = String(message?.id || "").trim();
+  if (!inboundMessageId) {
+    return null;
+  }
+
+  const existing = await findRowByMessageId(inboundMessageId);
+  if (existing) {
+    return existing.id;
+  }
+
+  const contactName = String(contact?.profile?.name || "").trim();
+  const fromWaId = String(from || "").trim();
+  const summaryText = inboundMessageText(message);
+  const fullText = contactName
+    ? `[INBOUND] ${contactName} (${fromWaId}): ${summaryText}`
+    : `[INBOUND] ${fromWaId}: ${summaryText}`;
+
+  await createNotionMessageRow({
+    to: fromWaId,
+    text: fullText,
+    status: "received_inbound",
+    messageId: inboundMessageId,
+    rawResponse: {
+      direction: "inbound",
+      contact,
+      message
+    }
+  });
+
+  return inboundMessageId;
+}
+
 async function findRowByMessageId(messageId) {
+  if (!notionEnabled) {
+    return null;
+  }
+
   const databaseId = requiredEnv("NOTION_DATABASE_ID");
   const messageIdProp = notionPropName("NOTION_PROP_MESSAGE_ID", "Message ID");
 
@@ -88,6 +188,10 @@ async function findRowByMessageId(messageId) {
 }
 
 async function updateNotionMessageStatus({ messageId, status, rawStatus }) {
+  if (!notionEnabled) {
+    return null;
+  }
+
   const page = await findRowByMessageId(messageId);
   if (!page) {
     return null;
@@ -124,9 +228,18 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "linke-cloud-backend",
+    message: "API is running",
+    health: "/health"
+  });
+});
+
 app.post("/api/messages/send", async (req, res) => {
   try {
-    const to = String(req.body?.to || "").trim();
+    const to = normalizeRecipient(req.body?.to || "");
     const text = String(req.body?.text || "").trim();
 
     if (!to || !text) {
@@ -158,15 +271,22 @@ app.post("/api/messages/send", async (req, res) => {
     const responseBody = await response.json();
     const messageId = responseBody?.messages?.[0]?.id || "";
 
-    await createNotionMessageRow({
-      to,
-      text,
-      status: response.ok ? "accepted" : `failed_${response.status}`,
-      messageId,
-      rawResponse: responseBody
-    });
+    const notionWarning = await safeNotionLog(() =>
+      createNotionMessageRow({
+        to,
+        text,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        messageId,
+        rawResponse: responseBody
+      })
+    );
 
-    return res.status(response.ok ? 200 : response.status).json(responseBody);
+    const finalBody =
+      notionWarning && typeof responseBody === "object" && responseBody !== null
+        ? { ...responseBody, _notionWarning: notionWarning }
+        : responseBody;
+
+    return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send message",
@@ -176,6 +296,10 @@ app.post("/api/messages/send", async (req, res) => {
 });
 
 app.post("/api/messages/status", async (req, res) => {
+  if (!notionEnabled) {
+    return res.json({ success: true, skipped: "notion_disabled" });
+  }
+
   try {
     const messageId = String(req.body?.messageId || "").trim();
     const status = String(req.body?.status || "").trim();
@@ -229,17 +353,25 @@ app.post("/api/media/upload", upload.single("file"), async (req, res) => {
     const responseBody = await response.json();
     const mediaId = responseBody?.id || "";
 
-    if (process.env.NOTION_DATABASE_ID && process.env.NOTION_API_KEY) {
-      await createNotionMessageRow({
-        to: "media-upload",
-        text: `${req.file.originalname || "unknown"} (${req.file.mimetype || "unknown"})`,
-        status: response.ok ? "media_uploaded" : `media_failed_${response.status}`,
-        messageId: mediaId,
-        rawResponse: responseBody
-      });
-    }
+    const notionWarning =
+      process.env.NOTION_DATABASE_ID && process.env.NOTION_API_KEY
+        ? await safeNotionLog(() =>
+            createNotionMessageRow({
+              to: "media-upload",
+              text: `${req.file.originalname || "unknown"} (${req.file.mimetype || "unknown"})`,
+              status: response.ok ? "media_uploaded" : `media_failed_${response.status}`,
+              messageId: mediaId,
+              rawResponse: responseBody
+            })
+          )
+        : null;
 
-    return res.status(response.ok ? 200 : response.status).json(responseBody);
+    const finalBody =
+      notionWarning && typeof responseBody === "object" && responseBody !== null
+        ? { ...responseBody, _notionWarning: notionWarning }
+        : responseBody;
+
+    return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to upload media",
@@ -250,7 +382,7 @@ app.post("/api/media/upload", upload.single("file"), async (req, res) => {
 
 app.post("/api/templates/send-return-to-sender", async (req, res) => {
   try {
-    const to = String(req.body?.to || "").trim();
+    const to = normalizeRecipient(req.body?.to || "");
     const customerName = String(req.body?.customerName || "").trim();
     const shipmentCode = String(req.body?.shipmentCode || "").trim();
     const pickupDate = String(req.body?.pickupDate || "").trim();
@@ -302,15 +434,22 @@ app.post("/api/templates/send-return-to-sender", async (req, res) => {
     const responseBody = await response.json();
     const messageId = responseBody?.messages?.[0]?.id || "";
 
-    await createNotionMessageRow({
-      to,
-      text: `Template entrega_de_volta_ao_remetente | ${customerName} | ${shipmentCode} | ${pickupDate}`,
-      status: response.ok ? "accepted" : `failed_${response.status}`,
-      messageId,
-      rawResponse: responseBody
-    });
+    const notionWarning = await safeNotionLog(() =>
+      createNotionMessageRow({
+        to,
+        text: `Template entrega_de_volta_ao_remetente | ${customerName} | ${shipmentCode} | ${pickupDate}`,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        messageId,
+        rawResponse: responseBody
+      })
+    );
 
-    return res.status(response.ok ? 200 : response.status).json(responseBody);
+    const finalBody =
+      notionWarning && typeof responseBody === "object" && responseBody !== null
+        ? { ...responseBody, _notionWarning: notionWarning }
+        : responseBody;
+
+    return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send template message",
@@ -321,7 +460,7 @@ app.post("/api/templates/send-return-to-sender", async (req, res) => {
 
 app.post("/api/templates/send-generic", async (req, res) => {
   try {
-    const to = String(req.body?.to || "").trim();
+    const to = normalizeRecipient(req.body?.to || "");
     const templateName = String(req.body?.templateName || "").trim();
     const languageCode = String(
       req.body?.languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT"
@@ -391,15 +530,22 @@ app.post("/api/templates/send-generic", async (req, res) => {
     const responseBody = await response.json();
     const messageId = responseBody?.messages?.[0]?.id || "";
 
-    await createNotionMessageRow({
-      to,
-      text: `Template ${templateName} | Vars: ${bodyVariables.join(" | ")}`,
-      status: response.ok ? "accepted" : `failed_${response.status}`,
-      messageId,
-      rawResponse: responseBody
-    });
+    const notionWarning = await safeNotionLog(() =>
+      createNotionMessageRow({
+        to,
+        text: `Template ${templateName} | Vars: ${bodyVariables.join(" | ")}`,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        messageId,
+        rawResponse: responseBody
+      })
+    );
 
-    return res.status(response.ok ? 200 : response.status).json(responseBody);
+    const finalBody =
+      notionWarning && typeof responseBody === "object" && responseBody !== null
+        ? { ...responseBody, _notionWarning: notionWarning }
+        : responseBody;
+
+    return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send generic template message",
@@ -410,7 +556,7 @@ app.post("/api/templates/send-generic", async (req, res) => {
 
 app.post("/api/templates/send-feedback-request", async (req, res) => {
   try {
-    const to = String(req.body?.to || "").trim();
+    const to = normalizeRecipient(req.body?.to || "");
     const customerName = String(req.body?.customerName || "").trim();
     const storeName = String(req.body?.storeName || "").trim();
     const templateName = String(
@@ -465,18 +611,127 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
     const responseBody = await response.json();
     const messageId = responseBody?.messages?.[0]?.id || "";
 
-    await createNotionMessageRow({
-      to,
-      text: `Template ${templateName} | ${customerName} | ${storeName}`,
-      status: response.ok ? "accepted" : `failed_${response.status}`,
-      messageId,
-      rawResponse: responseBody
-    });
+    const notionWarning = await safeNotionLog(() =>
+      createNotionMessageRow({
+        to,
+        text: `Template ${templateName} | ${customerName} | ${storeName}`,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        messageId,
+        rawResponse: responseBody
+      })
+    );
 
-    return res.status(response.ok ? 200 : response.status).json(responseBody);
+    const finalBody =
+      notionWarning && typeof responseBody === "object" && responseBody !== null
+        ? { ...responseBody, _notionWarning: notionWarning }
+        : responseBody;
+
+    return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send feedback request template",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/templates", async (req, res) => {
+  try {
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+    const phoneNumberId = String(req.query.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    const limit = String(req.query.limit || "50").trim();
+    const fetchAll = String(req.query.fetchAll || "true").toLowerCase() !== "false";
+
+    if (!phoneNumberId) {
+      return res.status(400).json({
+        error: "Query param 'phoneNumberId' (or env WHATSAPP_PHONE_NUMBER_ID) is required."
+      });
+    }
+
+    const phoneLookupUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}?fields=whatsapp_business_account`;
+    const phoneLookupResponse = await fetch(phoneLookupUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const phoneLookupBody = await phoneLookupResponse.json();
+
+    if (!phoneLookupResponse.ok) {
+      return res.status(phoneLookupResponse.status).json(phoneLookupBody);
+    }
+
+    const wabaId = phoneLookupBody?.whatsapp_business_account?.id;
+
+    if (!wabaId) {
+      return res.status(404).json({
+        error: "Could not resolve WhatsApp Business Account for this phone number ID.",
+        phoneLookup: phoneLookupBody
+      });
+    }
+
+    const baseTemplatesUrl = `https://graph.facebook.com/${apiVersion}/${wabaId}/message_templates?limit=${encodeURIComponent(limit)}&fields=id,name,language,status,category,quality_score,components`;
+
+    if (!fetchAll) {
+      const templatesResponse = await fetch(baseTemplatesUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      const templatesBody = await templatesResponse.json();
+
+      if (!templatesResponse.ok) {
+        return res.status(templatesResponse.status).json(templatesBody);
+      }
+
+      return res.json({
+        phoneNumberId,
+        wabaId,
+        fetchedAllPages: false,
+        ...templatesBody
+      });
+    }
+
+    const templates = [];
+    let nextUrl = baseTemplatesUrl;
+    let pagesFetched = 0;
+    const maxPages = 50;
+
+    while (nextUrl && pagesFetched < maxPages) {
+      const pageResponse = await fetch(nextUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      const pageBody = await pageResponse.json();
+
+      if (!pageResponse.ok) {
+        return res.status(pageResponse.status).json(pageBody);
+      }
+
+      const pageData = Array.isArray(pageBody?.data) ? pageBody.data : [];
+      templates.push(...pageData);
+      nextUrl = pageBody?.paging?.next || "";
+      pagesFetched += 1;
+    }
+
+    return res.json({
+      phoneNumberId,
+      wabaId,
+      fetchedAllPages: !nextUrl,
+      pagesFetched,
+      data: templates,
+      paging: nextUrl ? { next: nextUrl } : undefined
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch templates",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
@@ -495,22 +750,41 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
+  if (!notionEnabled) {
+    return res.sendStatus(200);
+  }
+
   try {
     const entry = req.body?.entry || [];
-    const statuses = entry
-      .flatMap((item) => item?.changes || [])
-      .flatMap((change) => change?.value?.statuses || []);
+    const changes = entry.flatMap((item) => item?.changes || []);
 
-    for (const statusEvent of statuses) {
-      const messageId = statusEvent?.id;
-      const status = statusEvent?.status;
+    for (const change of changes) {
+      const value = change?.value || {};
+      const statuses = value?.statuses || [];
+      const messages = value?.messages || [];
+      const contacts = value?.contacts || [];
 
-      if (messageId && status) {
-        await updateNotionMessageStatus({
-          messageId: String(messageId),
-          status: String(status),
-          rawStatus: statusEvent
-        });
+      for (const statusEvent of statuses) {
+        const messageId = statusEvent?.id;
+        const status = statusEvent?.status;
+
+        if (messageId && status) {
+          await updateNotionMessageStatus({
+            messageId: String(messageId),
+            status: String(status),
+            rawStatus: statusEvent
+          });
+        }
+      }
+
+      for (const inboundMessage of messages) {
+        const from = String(inboundMessage?.from || "").trim();
+        if (!from) {
+          continue;
+        }
+
+        const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
+        await logInboundMessage({ from, message: inboundMessage, contact });
       }
     }
 
