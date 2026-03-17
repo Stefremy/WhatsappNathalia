@@ -57,6 +57,9 @@ npm --prefix backend run dev
 - `POST /api/messages/send` -> sends WhatsApp text and creates Notion row
 - `POST /api/messages/status` -> updates a Notion row status by message ID
 - `POST /api/media/upload` -> uploads media to WhatsApp Cloud API and returns media ID
+- `POST /api/templates/send-return-to-sender` -> sends template `entrega_de_volta_ao_remetente`
+- `POST /api/templates/send-generic` -> sends any approved template using dynamic variables
+- `POST /api/templates/send-feedback-request` -> sends feedback request template with 2 variables
 - `GET /webhook` and `POST /webhook` -> WhatsApp webhook verify + status updates
 
 ### Media upload relay

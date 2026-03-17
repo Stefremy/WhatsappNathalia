@@ -248,6 +248,240 @@ app.post("/api/media/upload", upload.single("file"), async (req, res) => {
   }
 });
 
+app.post("/api/templates/send-return-to-sender", async (req, res) => {
+  try {
+    const to = String(req.body?.to || "").trim();
+    const customerName = String(req.body?.customerName || "").trim();
+    const shipmentCode = String(req.body?.shipmentCode || "").trim();
+    const pickupDate = String(req.body?.pickupDate || "").trim();
+
+    if (!to || !customerName || !shipmentCode || !pickupDate) {
+      return res.status(400).json({
+        error: "Fields 'to', 'customerName', 'shipmentCode', and 'pickupDate' are required."
+      });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+    const templateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT";
+
+    const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "template",
+      template: {
+        name: "entrega_de_volta_ao_remetente",
+        language: {
+          code: templateLanguage
+        },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: customerName },
+              { type: "text", text: shipmentCode },
+              { type: "text", text: pickupDate }
+            ]
+          }
+        ]
+      }
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json();
+    const messageId = responseBody?.messages?.[0]?.id || "";
+
+    await createNotionMessageRow({
+      to,
+      text: `Template entrega_de_volta_ao_remetente | ${customerName} | ${shipmentCode} | ${pickupDate}`,
+      status: response.ok ? "accepted" : `failed_${response.status}`,
+      messageId,
+      rawResponse: responseBody
+    });
+
+    return res.status(response.ok ? 200 : response.status).json(responseBody);
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to send template message",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/templates/send-generic", async (req, res) => {
+  try {
+    const to = String(req.body?.to || "").trim();
+    const templateName = String(req.body?.templateName || "").trim();
+    const languageCode = String(
+      req.body?.languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT"
+    ).trim();
+
+    const bodyVariablesInput = Array.isArray(req.body?.bodyVariables)
+      ? req.body.bodyVariables
+      : [];
+    const bodyVariables = bodyVariablesInput
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+
+    const buttonUrlVariable = String(req.body?.buttonUrlVariable || "").trim();
+
+    if (!to || !templateName) {
+      return res.status(400).json({
+        error: "Fields 'to' and 'templateName' are required."
+      });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+    const components = [];
+
+    if (bodyVariables.length > 0) {
+      components.push({
+        type: "body",
+        parameters: bodyVariables.map((text) => ({ type: "text", text }))
+      });
+    }
+
+    if (buttonUrlVariable) {
+      components.push({
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: buttonUrlVariable }]
+      });
+    }
+
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: {
+          code: languageCode
+        },
+        components
+      }
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json();
+    const messageId = responseBody?.messages?.[0]?.id || "";
+
+    await createNotionMessageRow({
+      to,
+      text: `Template ${templateName} | Vars: ${bodyVariables.join(" | ")}`,
+      status: response.ok ? "accepted" : `failed_${response.status}`,
+      messageId,
+      rawResponse: responseBody
+    });
+
+    return res.status(response.ok ? 200 : response.status).json(responseBody);
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to send generic template message",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/templates/send-feedback-request", async (req, res) => {
+  try {
+    const to = String(req.body?.to || "").trim();
+    const customerName = String(req.body?.customerName || "").trim();
+    const storeName = String(req.body?.storeName || "").trim();
+    const templateName = String(
+      req.body?.templateName || process.env.WHATSAPP_FEEDBACK_TEMPLATE_NAME || "feedback_request_template"
+    ).trim();
+    const templateLanguage = String(
+      req.body?.languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT"
+    ).trim();
+
+    if (!to || !customerName || !storeName) {
+      return res.status(400).json({
+        error: "Fields 'to', 'customerName', and 'storeName' are required."
+      });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "template",
+      template: {
+        name: templateName,
+        language: {
+          code: templateLanguage
+        },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: customerName },
+              { type: "text", text: storeName }
+            ]
+          }
+        ]
+      }
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json();
+    const messageId = responseBody?.messages?.[0]?.id || "";
+
+    await createNotionMessageRow({
+      to,
+      text: `Template ${templateName} | ${customerName} | ${storeName}`,
+      status: response.ok ? "accepted" : `failed_${response.status}`,
+      messageId,
+      rawResponse: responseBody
+    });
+
+    return res.status(response.ok ? 200 : response.status).json(responseBody);
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to send feedback request template",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];

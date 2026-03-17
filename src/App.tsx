@@ -48,7 +48,9 @@ function App() {
     import.meta.env.VITE_WHATSAPP_PHONE_NUMBER_ID ?? "configured in backend"
   );
   const backendBaseUrl = import.meta.env.VITE_BACKEND_BASE_URL ?? "http://localhost:3001";
-  const [toNumber, setToNumber] = useState("");
+  const [toNumber, setToNumber] = useState(
+    import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229"
+  );
   const [messageText, setMessageText] = useState("Hello from Linke Cloud API frontend.");
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("Idle");
@@ -57,6 +59,35 @@ function App() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaStatusText, setMediaStatusText] = useState("Idle");
   const [mediaResponseText, setMediaResponseText] = useState("No upload sent yet.");
+  const [templateTo, setTemplateTo] = useState(
+    import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229"
+  );
+  const [customerName, setCustomerName] = useState("Cliente");
+  const [shipmentCode, setShipmentCode] = useState("1215");
+  const [pickupDate, setPickupDate] = useState("12/02/2026");
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateStatus, setTemplateStatus] = useState("Idle");
+  const [templateResponse, setTemplateResponse] = useState("No template request sent yet.");
+  const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229");
+  const [genericTemplateName, setGenericTemplateName] = useState(
+    import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
+  );
+  const [genericLanguage, setGenericLanguage] = useState("pt_PT");
+  const [genericVars, setGenericVars] = useState("John|12345|Jasper's Market, 1234 Baker street. Palo Alto, CA 94301|Referencia - valor");
+  const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
+  const [genericLoading, setGenericLoading] = useState(false);
+  const [genericStatus, setGenericStatus] = useState("Idle");
+  const [genericResponse, setGenericResponse] = useState("No generic template request sent yet.");
+  const [feedbackTo, setFeedbackTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "+351912858229");
+  const [feedbackTemplateName, setFeedbackTemplateName] = useState(
+    import.meta.env.VITE_FEEDBACK_TEMPLATE_NAME ?? "feedback_request_template"
+  );
+  const [feedbackLanguageCode, setFeedbackLanguageCode] = useState("pt_PT");
+  const [feedbackCustomerName, setFeedbackCustomerName] = useState("JOANA");
+  const [feedbackStoreName, setFeedbackStoreName] = useState("Patricia fashion star");
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackStatus, setFeedbackStatus] = useState("Idle");
+  const [feedbackResponse, setFeedbackResponse] = useState("No feedback template request sent yet.");
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -157,6 +188,124 @@ function App() {
     '  -F "file=@/path/to/file.jpg"',
     '  -F "messaging_product=whatsapp"'
   ].join("\n");
+
+  async function sendReturnToSenderTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!templateTo.trim() || !customerName.trim() || !shipmentCode.trim() || !pickupDate.trim()) {
+      setTemplateStatus("Missing required fields");
+      setTemplateResponse("Recipient, customer name, shipment code and pickup date are required.");
+      return;
+    }
+
+    setTemplateLoading(true);
+    setTemplateStatus("Sending...");
+
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/templates/send-return-to-sender`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: templateTo,
+          customerName,
+          shipmentCode,
+          pickupDate
+        })
+      });
+
+      const data = await response.json();
+      setTemplateStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
+      setTemplateResponse(JSON.stringify(data, null, 2));
+    } catch (error) {
+      setTemplateStatus("Network error");
+      setTemplateResponse(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setTemplateLoading(false);
+    }
+  }
+
+  async function sendGenericTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const variables = genericVars
+      .split("|")
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    if (!genericTo.trim() || !genericTemplateName.trim()) {
+      setGenericStatus("Missing required fields");
+      setGenericResponse("Recipient and template name are required.");
+      return;
+    }
+
+    setGenericLoading(true);
+    setGenericStatus("Sending...");
+
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/templates/send-generic`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: genericTo,
+          templateName: genericTemplateName,
+          languageCode: genericLanguage,
+          bodyVariables: variables,
+          buttonUrlVariable: genericButtonUrlVariable
+        })
+      });
+
+      const data = await response.json();
+      setGenericStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
+      setGenericResponse(JSON.stringify(data, null, 2));
+    } catch (error) {
+      setGenericStatus("Network error");
+      setGenericResponse(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setGenericLoading(false);
+    }
+  }
+
+  async function sendFeedbackTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!feedbackTo.trim() || !feedbackCustomerName.trim() || !feedbackStoreName.trim()) {
+      setFeedbackStatus("Missing required fields");
+      setFeedbackResponse("Recipient, customer name and store name are required.");
+      return;
+    }
+
+    setFeedbackLoading(true);
+    setFeedbackStatus("Sending...");
+
+    try {
+      const response = await fetch(`${backendBaseUrl}/api/templates/send-feedback-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: feedbackTo,
+          customerName: feedbackCustomerName,
+          storeName: feedbackStoreName,
+          templateName: feedbackTemplateName,
+          languageCode: feedbackLanguageCode
+        })
+      });
+
+      const data = await response.json();
+      setFeedbackStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
+      setFeedbackResponse(JSON.stringify(data, null, 2));
+    } catch (error) {
+      setFeedbackStatus("Network error");
+      setFeedbackResponse(error instanceof Error ? error.message : "Unknown error");
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }
 
   return (
     <div className="page">
@@ -330,6 +479,216 @@ function App() {
           <article className="card code-block">
             <h3>Upload Response</h3>
             <pre>{mediaResponseText}</pre>
+          </article>
+        </div>
+      </section>
+
+      <section className="panel" id="pickup-template-console">
+        <h2>Pickup Template Console</h2>
+        <p>
+          Sends template <strong>entrega_de_volta_ao_remetente</strong> with variables:
+          customer name, shipment code, and pickup date.
+        </p>
+
+        <form className="api-form" onSubmit={sendReturnToSenderTemplate}>
+          <label>
+            Recipient Number (E.164)
+            <input
+              value={templateTo}
+              onChange={(event) => setTemplateTo(event.target.value)}
+              placeholder="+351912858229"
+            />
+          </label>
+
+          <label>
+            Variable {"{{1}}"} Customer Name
+            <input
+              value={customerName}
+              onChange={(event) => setCustomerName(event.target.value)}
+              placeholder="Nathalia"
+            />
+          </label>
+
+          <label>
+            Variable {"{{2}}"} Shipment Code
+            <input
+              value={shipmentCode}
+              onChange={(event) => setShipmentCode(event.target.value)}
+              placeholder="1215"
+            />
+          </label>
+
+          <label>
+            Variable {"{{3}}"} Pickup Date
+            <input
+              value={pickupDate}
+              onChange={(event) => setPickupDate(event.target.value)}
+              placeholder="12/2/12"
+            />
+          </label>
+
+          <div className="api-actions">
+            <button className="btn btn-primary" type="submit" disabled={templateLoading}>
+              {templateLoading ? "Sending..." : "Send Pickup Template"}
+            </button>
+            <span className="status">Status: {templateStatus}</span>
+          </div>
+        </form>
+
+        <div className="code-grid">
+          <article className="card code-block">
+            <h3>Backend Relay</h3>
+            <pre>{`${backendBaseUrl}/api/templates/send-return-to-sender`}</pre>
+          </article>
+          <article className="card code-block">
+            <h3>Template Response</h3>
+            <pre>{templateResponse}</pre>
+          </article>
+        </div>
+      </section>
+
+      <section className="panel" id="generic-template-console">
+        <h2>Generic Template Console</h2>
+        <p>
+          For new templates like this one, paste template name/language and variable values in order.
+          Use <strong>|</strong> to separate variables.
+        </p>
+
+        <form className="api-form" onSubmit={sendGenericTemplate}>
+          <label>
+            Recipient Number (E.164)
+            <input
+              value={genericTo}
+              onChange={(event) => setGenericTo(event.target.value)}
+              placeholder="+351912858229"
+            />
+          </label>
+
+          <label>
+            Template Name
+            <input
+              value={genericTemplateName}
+              onChange={(event) => setGenericTemplateName(event.target.value)}
+              placeholder="your_template_name"
+            />
+          </label>
+
+          <label>
+            Language Code
+            <input
+              value={genericLanguage}
+              onChange={(event) => setGenericLanguage(event.target.value)}
+              placeholder="pt_PT"
+            />
+          </label>
+
+          <label>
+            Body Variables (ordered, separated by |)
+            <textarea
+              value={genericVars}
+              onChange={(event) => setGenericVars(event.target.value)}
+              rows={3}
+            />
+          </label>
+
+          <label>
+            URL Button Variable (optional)
+            <input
+              value={genericButtonUrlVariable}
+              onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
+              placeholder="optional dynamic suffix/parameter for first URL button"
+            />
+          </label>
+
+          <div className="api-actions">
+            <button className="btn btn-primary" type="submit" disabled={genericLoading}>
+              {genericLoading ? "Sending..." : "Send Generic Template"}
+            </button>
+            <span className="status">Status: {genericStatus}</span>
+          </div>
+        </form>
+
+        <div className="code-grid">
+          <article className="card code-block">
+            <h3>Backend Relay</h3>
+            <pre>{`${backendBaseUrl}/api/templates/send-generic`}</pre>
+          </article>
+          <article className="card code-block">
+            <h3>Template Response</h3>
+            <pre>{genericResponse}</pre>
+          </article>
+        </div>
+      </section>
+
+      <section className="panel" id="feedback-template-console">
+        <h2>Feedback Request Template Console</h2>
+        <p>
+          Sends your customer feedback message template (example: "Deixe 5 estrelas") with
+          customer and store variables.
+        </p>
+
+        <form className="api-form" onSubmit={sendFeedbackTemplate}>
+          <label>
+            Recipient Number (E.164)
+            <input
+              value={feedbackTo}
+              onChange={(event) => setFeedbackTo(event.target.value)}
+              placeholder="+351912858229"
+            />
+          </label>
+
+          <label>
+            Template Name
+            <input
+              value={feedbackTemplateName}
+              onChange={(event) => setFeedbackTemplateName(event.target.value)}
+              placeholder="feedback_request_template"
+            />
+          </label>
+
+          <label>
+            Language Code
+            <input
+              value={feedbackLanguageCode}
+              onChange={(event) => setFeedbackLanguageCode(event.target.value)}
+              placeholder="pt_PT"
+            />
+          </label>
+
+          <label>
+            Variable {"{{1}}"} Customer Name
+            <input
+              value={feedbackCustomerName}
+              onChange={(event) => setFeedbackCustomerName(event.target.value)}
+              placeholder="JOANA"
+            />
+          </label>
+
+          <label>
+            Variable {"{{2}}"} Store Name
+            <input
+              value={feedbackStoreName}
+              onChange={(event) => setFeedbackStoreName(event.target.value)}
+              placeholder="Patricia fashion star"
+            />
+          </label>
+
+          <div className="api-actions">
+            <button className="btn btn-primary" type="submit" disabled={feedbackLoading}>
+              {feedbackLoading ? "Sending..." : "Send Feedback Template"}
+            </button>
+            <span className="status">Status: {feedbackStatus}</span>
+          </div>
+        </form>
+
+        <div className="code-grid">
+          <article className="card code-block">
+            <h3>Backend Relay</h3>
+            <pre>{`${backendBaseUrl}/api/templates/send-feedback-request`}</pre>
+          </article>
+          <article className="card code-block">
+            <h3>Template Response</h3>
+            <pre>{feedbackResponse}</pre>
           </article>
         </div>
       </section>
