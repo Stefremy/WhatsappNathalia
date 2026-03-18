@@ -3,7 +3,8 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { Client as NotionClient } from "@notionhq/client";
-import { Readable } from "stream";
+import https from "https";
+import http from "http";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -960,10 +961,11 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
 });
 
 // ── Radio stream proxy (CORS bypass) ──────────────────────────────────────
-// Routes audio streams through the backend so the browser doesn't hit CORS.
+// Uses native http/https.request to handle ICY/SHOUTcast streams that
+// node's fetch API cannot handle. Only used for custom user-supplied URLs.
 const BLOCKED_HOSTS = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1$)/i;
 
-app.get("/api/radio/proxy", async (req, res) => {
+app.get("/api/radio/proxy", (req, res) => {
   const { url } = req.query;
   if (!url || typeof url !== "string") {
     return res.status(400).json({ error: "Missing url parameter" });
@@ -971,8 +973,9 @@ app.get("/api/radio/proxy", async (req, res) => {
   if (!/^https?:\/\//i.test(url)) {
     return res.status(400).json({ error: "Only http/https URLs are allowed" });
   }
+  let parsed;
   try {
-    const parsed = new URL(url);
+    parsed = new URL(url);
     if (BLOCKED_HOSTS.test(parsed.hostname)) {
       return res.status(400).json({ error: "Blocked URL" });
     }
@@ -980,40 +983,56 @@ app.get("/api/radio/proxy", async (req, res) => {
     return res.status(400).json({ error: "Invalid URL" });
   }
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const upstream = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkeRadioPT/1.0)", "Icy-MetaData": "0" },
-      redirect: "follow"
-    });
-    clearTimeout(timeout);
+  const transport = parsed.protocol === "https:" ? https : http;
+  const options = {
+    hostname: parsed.hostname,
+    port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+    path: parsed.pathname + parsed.search,
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; LinkeRadioPT/1.0)",
+      "Icy-MetaData": "0",
+      "Accept": "audio/mpeg, audio/ogg, audio/aac, audio/*, */*"
+    },
+    timeout: 12000
+  };
 
-    if (!upstream.ok) {
-      return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+  const proxyReq = transport.request(options, (proxyRes) => {
+    const status = proxyRes.statusCode || 0;
+    // Follow simple redirects
+    if ((status === 301 || status === 302 || status === 307 || status === 308) && proxyRes.headers.location) {
+      proxyReq.destroy();
+      req.query.url = proxyRes.headers.location;
+      return app._router.handle(req, res, () => {});
     }
-
-    const contentType = upstream.headers.get("content-type") || "audio/mpeg";
-    // Block obvious non-audio types
-    if (contentType.includes("text/html") || contentType.includes("application/json")) {
-      return res.status(400).json({ error: "URL does not point to an audio stream" });
+    if (status < 200 || status >= 400) {
+      if (!res.headersSent) res.status(502).json({ error: `Upstream returned ${status}` });
+      return;
     }
-
+    const contentType = proxyRes.headers["content-type"] || "audio/mpeg";
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Access-Control-Allow-Origin", "*");
+    proxyRes.pipe(res);
+    req.on("close", () => proxyReq.destroy());
+  });
 
-    const nodeStream = Readable.fromWeb(upstream.body);
-    nodeStream.pipe(res);
-    req.on("close", () => nodeStream.destroy());
-  } catch (error) {
-    if (!res.headersSent) {
-      res.status(502).json({ error: "Failed to connect to stream", details: error?.message });
-    }
-  }
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy();
+    if (!res.headersSent) res.status(504).json({ error: "Stream connection timed out" });
+  });
+
+  proxyReq.on("error", (err) => {
+    if (!res.headersSent) res.status(502).json({ error: "Failed to connect to stream", details: err.message });
+  });
+
+  proxyReq.end();
 });
 
-app.listen(port, () => {
-  console.log(`Backend running on http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Backend running on http://localhost:${port}`);
+  });
+}
+
+export default app;

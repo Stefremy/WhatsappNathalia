@@ -453,14 +453,16 @@ function App() {
     setNewReminderAt("");
   }
 
-  // Radio: build stream URL through backend proxy to bypass CORS
+  // Radio: build stream URL through backend proxy (only for custom URLs)
   function proxyStreamUrl(sourceUrl: string) {
     if (!backendBaseUrl) return sourceUrl;
     return `${backendBaseUrl}/api/radio/proxy?url=${encodeURIComponent(sourceUrl)}`;
   }
 
+  // Built-in stations play directly in browser (they have CORS headers).
+  // Proxy is only used for custom user-supplied URLs where CORS is unknown.
   function resolvedStreamUrl(idx: number) {
-    return proxyStreamUrl(radioStations[idx].url);
+    return radioStations[idx].url;
   }
 
   // Radio player controls
