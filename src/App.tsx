@@ -140,6 +140,49 @@ function contactDisplayName(phone: string) {
   return normalized ? `Contacto ${normalized}` : "Contacto desconhecido";
 }
 
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" }) {
+  switch (name) {
+    case "overview":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "chat":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 18.5 3.5 20V6.5A2.5 2.5 0 0 1 6 4h12a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 17H8z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "logs":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 7.5h12M6 12h12M6 16.5h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "upload":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 15V5m0 0 3.5 3.5M12 5 8.5 8.5M5 15.5V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "templates":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3.75a4 4 0 0 1 4 4v.55a3.7 3.7 0 0 0 1.05 2.6l.42.43a1.8 1.8 0 0 1-1.28 3.07H7.8a1.8 1.8 0 0 1-1.28-3.07l.42-.43A3.7 3.7 0 0 0 8 8.3v-.55a4 4 0 0 1 4-4Zm1.9 12.65a2 2 0 0 1-3.8 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "notes":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7 3.75v2.5M17 3.75v2.5M4.75 9h14.5M6.5 6.25h11A1.75 1.75 0 0 1 19.25 8v10.25A1.75 1.75 0 0 1 17.5 20h-11a1.75 1.75 0 0 1-1.75-1.75V8A1.75 1.75 0 0 1 6.5 6.25Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 function resolveContactName(phone: string, savedContacts: Record<string, string>) {
   const digits = digitsOnly(phone);
   return savedContacts[digits] || contactDisplayName(digits);
@@ -1448,8 +1491,52 @@ function App() {
 
   return (
     <>
-    <div className="page">
-      <header className="hero">
+    <div className="workspace-app-shell">
+      <header className="workspace-topbar">
+        <div className="workspace-brand">
+          <span className="workspace-logo">Linke</span>
+          <span className="workspace-brand-divider" aria-hidden="true" />
+          <strong>Linke Ops Dashboard</strong>
+        </div>
+        <div className="workspace-user">
+          <span className="workspace-user-avatar">A</span>
+          <span>Ana Santos</span>
+        </div>
+      </header>
+
+      <div className="workspace-frame">
+        <aside className="workspace-sidebar-nav">
+          <nav className="workspace-nav">
+            <a href="#overview" className="workspace-nav-link active">
+              <span className="workspace-nav-icon"><SidebarIcon name="overview" /></span>
+              <span>Overview</span>
+            </a>
+            <a href="#api-console" className="workspace-nav-link">
+              <span className="workspace-nav-icon"><SidebarIcon name="chat" /></span>
+              <span>Chat Console</span>
+            </a>
+            <a href="#logs-page" className="workspace-nav-link">
+              <span className="workspace-nav-icon"><SidebarIcon name="logs" /></span>
+              <span>Message Logs</span>
+            </a>
+            <a href="#media-console" className="workspace-nav-link">
+              <span className="workspace-nav-icon"><SidebarIcon name="upload" /></span>
+              <span>Media Upload</span>
+            </a>
+            <a href="#generic-template-console" className="workspace-nav-link">
+              <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
+              <span>Template Notifications</span>
+            </a>
+            <a href="#caderno-pessoal" className="workspace-nav-link">
+              <span className="workspace-nav-icon"><SidebarIcon name="notes" /></span>
+              <span>Notes &amp; Calendar</span>
+            </a>
+          </nav>
+        </aside>
+
+        <main className="workspace-content">
+          <div className="page">
+      <header className="hero" id="overview">
         <div className="badge">www.linke.pt</div>
         <h1>Workspace da Equipa para Operações WhatsApp</h1>
         <p>
@@ -2397,6 +2484,9 @@ function App() {
           Contactar hello@linke.pt
         </a>
       </section>
+          </div>
+        </main>
+      </div>
     </div>
 
     {/* ── Sticky Radio Bar ── */}
