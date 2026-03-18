@@ -14,6 +14,55 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }
 });
 
+// ── Server-Sent Events (delivery status ticks) ─────────────────────────────
+const sseClients = new Set();
+
+function broadcastSSE(event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch {}
+  }
+}
+
+// ── In-memory scheduled messages ──────────────────────────────────────────
+const scheduledMessages = [];
+
+async function processScheduledMessages() {
+  const now = Date.now();
+  for (const item of scheduledMessages) {
+    if (item.status !== "pending") continue;
+    if (new Date(item.scheduledAt).getTime() > now) continue;
+    item.status = "sending";
+    try {
+      const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+      const token = process.env.WHATSAPP_ACCESS_TOKEN || "";
+      if (!phoneNumberId || !token) { item.status = "failed"; continue; }
+      const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+      const components = [];
+      if (item.bodyVariables && item.bodyVariables.length > 0) {
+        components.push({
+          type: "body",
+          parameters: item.bodyVariables.map((text) => ({ type: "text", text }))
+        });
+      }
+      const templatePayload = { name: item.templateName, language: { code: item.languageCode || "pt_PT" } };
+      if (components.length > 0) templatePayload.components = components;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: item.to, type: "template", template: templatePayload })
+      });
+      item.status = response.ok ? "sent" : "failed";
+    } catch {
+      item.status = "failed";
+    }
+    broadcastSSE("scheduled_sent", { id: item.id, status: item.status });
+  }
+}
+
+setInterval(processScheduledMessages, 15000);
+
 const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
 const notionEnabled = String(process.env.NOTION_ENABLED || "false").toLowerCase() === "true";
 
@@ -223,6 +272,16 @@ async function updateNotionMessageStatus({ messageId, status, rawStatus }) {
 
   return page.id;
 }
+
+app.get("/api/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  sseClients.add(res);
+  const keepalive = setInterval(() => { try { res.write(": keepalive\n\n"); } catch {} }, 25000);
+  req.on("close", () => { sseClients.delete(res); clearInterval(keepalive); });
+});
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -764,9 +823,8 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
-  if (!notionEnabled) {
-    return res.sendStatus(200);
-  }
+  // Acknowledge immediately so Meta doesn't retry
+  res.sendStatus(200);
 
   try {
     const entry = req.body?.entry || [];
@@ -783,28 +841,120 @@ app.post("/webhook", async (req, res) => {
         const status = statusEvent?.status;
 
         if (messageId && status) {
-          await updateNotionMessageStatus({
-            messageId: String(messageId),
-            status: String(status),
-            rawStatus: statusEvent
-          });
+          // Always broadcast delivery ticks to SSE clients
+          broadcastSSE("status", { messageId: String(messageId), status: String(status) });
+
+          if (notionEnabled) {
+            await updateNotionMessageStatus({
+              messageId: String(messageId),
+              status: String(status),
+              rawStatus: statusEvent
+            });
+          }
         }
       }
 
-      for (const inboundMessage of messages) {
-        const from = String(inboundMessage?.from || "").trim();
-        if (!from) {
-          continue;
+      if (notionEnabled) {
+        for (const inboundMessage of messages) {
+          const from = String(inboundMessage?.from || "").trim();
+          if (!from) continue;
+          const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
+          await logInboundMessage({ from, message: inboundMessage, contact });
         }
-
-        const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
-        await logInboundMessage({ from, message: inboundMessage, contact });
       }
     }
-
-    return res.sendStatus(200);
   } catch (_error) {
-    return res.sendStatus(500);
+    // response already sent
+  }
+});
+
+// ── Scheduling endpoints ──────────────────────────────────────────────────
+app.post("/api/messages/schedule", async (req, res) => {
+  try {
+    const to = normalizeRecipient(req.body?.to || "");
+    const templateName = String(req.body?.templateName || "").trim();
+    const languageCode = String(req.body?.languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT").trim();
+    const bodyVariables = Array.isArray(req.body?.bodyVariables)
+      ? req.body.bodyVariables.map((v) => String(v ?? "").trim()).filter(Boolean)
+      : [];
+    const scheduledAt = String(req.body?.scheduledAt || "").trim();
+
+    if (!to || !templateName || !scheduledAt) {
+      return res.status(400).json({ error: "Fields 'to', 'templateName', and 'scheduledAt' are required." });
+    }
+    const when = new Date(scheduledAt);
+    if (isNaN(when.getTime())) {
+      return res.status(400).json({ error: "Invalid scheduledAt value." });
+    }
+
+    const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const item = { id, to, templateName, languageCode, bodyVariables, scheduledAt, status: "pending", createdAt: new Date().toISOString() };
+    scheduledMessages.push(item);
+    return res.json(item);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to schedule message", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+app.get("/api/messages/scheduled", (_req, res) => {
+  return res.json({ data: scheduledMessages });
+});
+
+// ── Send media message (upload + send in one call) ─────────────────────────
+app.post("/api/messages/send-media", upload.single("file"), async (req, res) => {
+  try {
+    const to = normalizeRecipient(req.body?.to || "");
+    if (!req.file || !to) {
+      return res.status(400).json({ error: "Fields 'file' (multipart) and 'to' are required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    // Step 1 – upload media
+    const uploadMultipart = new FormData();
+    const blob = new Blob([req.file.buffer], { type: req.file.mimetype || "application/octet-stream" });
+    uploadMultipart.append("messaging_product", "whatsapp");
+    uploadMultipart.append("file", blob, req.file.originalname || "upload.bin");
+
+    const uploadRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: uploadMultipart
+    });
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json();
+      return res.status(uploadRes.status).json({ error: "Media upload failed", details: err });
+    }
+    const uploadBody = await uploadRes.json();
+    const mediaId = String(uploadBody?.id || "").trim();
+    if (!mediaId) return res.status(500).json({ error: "Media upload returned no ID" });
+
+    // Step 2 – determine media type
+    const mime = req.file.mimetype || "";
+    let mediaType = "document";
+    if (mime.startsWith("image/")) mediaType = "image";
+    else if (mime.startsWith("video/")) mediaType = "video";
+    else if (mime.startsWith("audio/")) mediaType = "audio";
+
+    // Step 3 – send message
+    const sendPayload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: mediaType,
+      [mediaType]: { id: mediaId, filename: mediaType === "document" ? (req.file.originalname || "file") : undefined }
+    };
+    const sendRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(sendPayload)
+    });
+    const sendBody = await sendRes.json();
+    return res.status(sendRes.ok ? 200 : sendRes.status).json(sendBody);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to send media", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 

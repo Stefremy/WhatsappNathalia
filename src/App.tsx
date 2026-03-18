@@ -12,6 +12,18 @@ type ConversationMessage = {
   direction: "in" | "out";
   text: string;
   time: string;
+  apiMessageId?: string;
+  deliveryStatus?: "sent" | "delivered" | "read" | "failed";
+};
+
+type ScheduledItem = {
+  id: string;
+  to: string;
+  templateName: string;
+  languageCode: string;
+  bodyVariables: string[];
+  scheduledAt: string;
+  status: string;
 };
 
 type ConversationContact = {
@@ -49,6 +61,19 @@ function digitsOnly(value: string) {
 function contactDisplayName(phone: string) {
   const normalized = digitsOnly(phone);
   return normalized ? `Contact ${normalized}` : "Unknown contact";
+}
+
+function resolveContactName(phone: string, savedContacts: Record<string, string>) {
+  const digits = digitsOnly(phone);
+  return savedContacts[digits] || contactDisplayName(digits);
+}
+
+function deliveryTickMark(status?: ConversationMessage["deliveryStatus"]) {
+  if (status === "read") return " ✓✓";
+  if (status === "delivered") return " ✓✓";
+  if (status === "sent") return " ✓";
+  if (status === "failed") return " ✗";
+  return "";
 }
 
 function nowLabel() {
@@ -129,9 +154,50 @@ function App() {
   const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
   const [metaTemplatesLoading, setMetaTemplatesLoading] = useState(false);
   const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Not loaded");
-  const [conversations, setConversations] = useState<ConversationContact[]>(initialConversations);
-  const [activeConversationId, setActiveConversationId] = useState(initialConversations[0]?.id || "");
+  const [conversations, setConversations] = useState<ConversationContact[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_conversations") || "[]") as ConversationContact[]; } catch { return []; }
+  });
+  const [activeConversationId, setActiveConversationId] = useState(() => {
+    try {
+      const c = JSON.parse(localStorage.getItem("wa_conversations") || "[]") as ConversationContact[];
+      return c[0]?.id || "";
+    } catch { return ""; }
+  });
   const [emojiOpen, setEmojiOpen] = useState(false);
+
+  // Feature 1: Contact book
+  const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_contacts") || "{}"); } catch { return {}; }
+  });
+  const [contactBookOpen, setContactBookOpen] = useState(false);
+  const [newContactPhone, setNewContactPhone] = useState("");
+  const [newContactName, setNewContactName] = useState("");
+
+  // Feature 2: Template var presets
+  const [templatePresets, setTemplatePresets] = useState<Record<string, Record<number, string>>>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_template_presets") || "{}"); } catch { return {}; }
+  });
+
+  // Feature 3: Bulk send
+  const [bulkCsv, setBulkCsv] = useState("");
+  const [bulkRows, setBulkRows] = useState<Array<{ phone: string; status: string }>>([]);
+  const [bulkProgress, setBulkProgress] = useState({ sent: 0, total: 0 });
+  const [bulkRunning, setBulkRunning] = useState(false);
+
+  // Feature 4: Message scheduling
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [useSchedule, setUseSchedule] = useState(false);
+  const [scheduledItems, setScheduledItems] = useState<ScheduledItem[]>([]);
+
+  // Feature 5: Delivery ticks via SSE
+  const [messageStatuses, setMessageStatuses] = useState<Record<string, string>>({});
+
+  // Feature 9: Sidebar search
+  const [contactSearch, setContactSearch] = useState("");
+
+  // Feature 10: Media in composer
+  const [composeMedia, setComposeMedia] = useState<File | null>(null);
+  const [composeMediaLoading, setComposeMediaLoading] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId) || null,
@@ -186,6 +252,131 @@ function App() {
   function addEmoji(emoji: string) {
     setMessageText((current) => `${current}${emoji}`);
     setEmojiOpen(false);
+  }
+
+  // Feature 1: Contact book
+  function saveContact() {
+    const digits = digitsOnly(newContactPhone);
+    if (!digits || !newContactName.trim()) return;
+    setSavedContacts((prev) => ({ ...prev, [digits]: newContactName.trim() }));
+    setConversations((prev) =>
+      prev.map((c) =>
+        digitsOnly(c.phone) === digits ? { ...c, name: newContactName.trim() } : c
+      )
+    );
+    setNewContactPhone("");
+    setNewContactName("");
+  }
+
+  function removeContact(digits: string) {
+    setSavedContacts((prev) => {
+      const { [digits]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }
+
+  // Feature 2: Template var presets
+  function savePreset() {
+    if (!genericTemplateName || requiredBodyVarCount === 0) return;
+    setTemplatePresets((prev) => ({ ...prev, [genericTemplateName]: { ...genericBodyVars } }));
+  }
+
+  function loadPreset() {
+    const preset = templatePresets[genericTemplateName];
+    if (preset) setGenericBodyVars({ ...preset });
+  }
+
+  // Feature 3: Bulk send
+  async function runBulkSend() {
+    if (bulkRunning || !bulkCsv.trim()) return;
+    const parsed = bulkCsv
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const cols = line.split(",").map((c) => c.trim());
+        return { phone: digitsOnly(cols[0]), vars: cols.slice(1).filter(Boolean) };
+      })
+      .filter((r) => r.phone.length >= 7);
+    if (!parsed.length) return;
+    setBulkRunning(true);
+    setBulkProgress({ sent: 0, total: parsed.length });
+    setBulkRows([]);
+    for (let i = 0; i < parsed.length; i++) {
+      const { phone, vars } = parsed[i];
+      try {
+        const res = await fetch(apiUrl("/api/templates/send-generic"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: phone,
+            templateName: genericTemplateName,
+            languageCode: genericLanguage,
+            bodyVariables: vars.length ? vars : previewBodyVars
+          })
+        });
+        setBulkRows((prev) => [...prev, { phone, status: res.ok ? "sent ✓" : `failed_${res.status}` }]);
+      } catch {
+        setBulkRows((prev) => [...prev, { phone, status: "network_error" }]);
+      }
+      setBulkProgress({ sent: i + 1, total: parsed.length });
+    }
+    setBulkRunning(false);
+  }
+
+  // Feature 10: Media send in composer
+  async function sendMediaMessage() {
+    if (!composeMedia || !toNumber.trim()) return;
+    setComposeMediaLoading(true);
+    setStatusText("Sending media...");
+    try {
+      const formData = new FormData();
+      formData.append("file", composeMedia);
+      formData.append("to", toNumber);
+      const response = await fetch(apiUrl("/api/messages/send-media"), {
+        method: "POST",
+        body: formData
+      });
+      const data = await parseResponse(response);
+      const sentTime = nowLabel();
+      const mediaLabel = `[📎 ${composeMedia.name}]`;
+      const apiMsgId = String(data?.messages?.[0]?.id || "").trim();
+      const targetPhone = digitsOnly(toNumber.trim());
+      setConversations((current) => {
+        const existing = current.find(
+          (c) => c.id === activeConversationId || digitsOnly(c.phone) === targetPhone
+        );
+        const msg: ConversationMessage = {
+          id: `m-${Date.now()}`,
+          direction: "out",
+          text: mediaLabel,
+          time: sentTime,
+          apiMessageId: apiMsgId || undefined,
+          deliveryStatus: apiMsgId ? "sent" : undefined
+        };
+        if (existing) {
+          return current
+            .map((c) => c.id !== existing.id ? c : { ...c, lastAt: sentTime, messages: [...c.messages, msg] })
+            .sort((a, b) => (a.id === existing.id ? -1 : b.id === existing.id ? 1 : 0));
+        }
+        const created: ConversationContact = {
+          id: `c-${Date.now()}`,
+          name: resolveContactName(targetPhone, savedContacts),
+          phone: targetPhone,
+          unread: 0,
+          lastAt: sentTime,
+          messages: [msg]
+        };
+        setActiveConversationId(created.id);
+        return [created, ...current];
+      });
+      setStatusText(response.ok ? "Media sent" : `Failed (${response.status})`);
+      if (response.ok) setComposeMedia(null);
+    } catch {
+      setStatusText("Media send failed");
+    } finally {
+      setComposeMediaLoading(false);
+    }
   }
 
   async function fetchMetaTemplates() {
@@ -251,6 +442,72 @@ function App() {
     fetchMetaTemplates();
   }, [phoneNumberId, wabaId]);
 
+  // Persist conversations
+  useEffect(() => {
+    try { localStorage.setItem("wa_conversations", JSON.stringify(conversations)); } catch {}
+  }, [conversations]);
+
+  // Persist saved contacts
+  useEffect(() => {
+    try { localStorage.setItem("wa_contacts", JSON.stringify(savedContacts)); } catch {}
+  }, [savedContacts]);
+
+  // Persist template presets
+  useEffect(() => {
+    try { localStorage.setItem("wa_template_presets", JSON.stringify(templatePresets)); } catch {}
+  }, [templatePresets]);
+
+  // SSE – delivery status ticks & scheduled_sent events
+  useEffect(() => {
+    const url = apiUrl("/api/events");
+    const evtSource = new EventSource(url);
+    evtSource.addEventListener("status", (e) => {
+      try {
+        const { messageId, status } = JSON.parse((e as MessageEvent).data);
+        if (messageId && status) {
+          setMessageStatuses((prev) => ({ ...prev, [messageId]: status }));
+          setConversations((prev) =>
+            prev.map((c) => ({
+              ...c,
+              messages: c.messages.map((m) =>
+                m.apiMessageId === messageId
+                  ? { ...m, deliveryStatus: status as ConversationMessage["deliveryStatus"] }
+                  : m
+              )
+            }))
+          );
+        }
+      } catch {}
+    });
+    evtSource.addEventListener("scheduled_sent", (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data);
+        setScheduledItems((prev) =>
+          prev.map((item) => item.id === data.id ? { ...item, status: data.status } : item)
+        );
+      } catch {}
+    });
+    return () => evtSource.close();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load scheduled items from backend on mount
+  useEffect(() => {
+    fetch(apiUrl("/api/messages/scheduled"))
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d?.data)) setScheduledItems(d.data); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredConversations = useMemo(() => {
+    const q = contactSearch.trim().toLowerCase();
+    if (!q) return conversations;
+    return conversations.filter(
+      (c) =>
+        resolveContactName(c.phone, savedContacts).toLowerCase().includes(q) ||
+        c.phone.includes(contactSearch.trim())
+    );
+  }, [conversations, contactSearch, savedContacts]);
+
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
     const cleanPhoneId = phoneNumberId.trim() || "configured in backend";
@@ -298,7 +555,8 @@ function App() {
       const sentTime = nowLabel();
       const resolvedWaId = String(data?.contacts?.[0]?.wa_id || "").trim();
       const targetPhone = digitsOnly(resolvedWaId || toNumber.trim());
-      const targetName = contactDisplayName(targetPhone);
+      const targetName = resolveContactName(targetPhone, savedContacts);
+      const apiMsgId = String(data?.messages?.[0]?.id || "").trim();
       let nextActiveConversationId = activeConversationId;
 
       setConversations((current) => {
@@ -310,7 +568,9 @@ function App() {
           id: `m-${Date.now()}`,
           direction: "out",
           text: messageText,
-          time: sentTime
+          time: sentTime,
+          apiMessageId: apiMsgId || undefined,
+          deliveryStatus: apiMsgId ? "sent" : undefined
         };
 
         if (matching) {
@@ -440,6 +700,39 @@ function App() {
       return;
     }
 
+    // Feature 4: Schedule mode
+    if (useSchedule) {
+      if (!scheduleAt) {
+        setGenericStatus("Please select a date/time to schedule");
+        return;
+      }
+      try {
+        const response = await fetch(apiUrl("/api/messages/schedule"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: genericTo,
+            templateName: genericTemplateName,
+            languageCode: genericLanguage,
+            bodyVariables: variables,
+            scheduledAt: scheduleAt
+          })
+        });
+        const data = await response.json();
+        if (response.ok) {
+          setScheduledItems((prev) => [data as ScheduledItem, ...prev]);
+          setScheduleAt("");
+          setUseSchedule(false);
+          setGenericStatus("Scheduled ✓");
+        } else {
+          setGenericStatus(`Schedule failed: ${data?.error || response.status}`);
+        }
+      } catch {
+        setGenericStatus("Schedule request failed");
+      }
+      return;
+    }
+
     setGenericLoading(true);
     setGenericStatus("Sending...");
 
@@ -525,7 +818,11 @@ function App() {
         <div className="wa-console">
           <aside className="wa-sidebar">
             <div className="wa-search">
-              <input placeholder="Search or start a new chat" />
+              <input
+                placeholder="Search contacts..."
+                value={contactSearch}
+                onChange={(e) => setContactSearch(e.target.value)}
+              />
             </div>
 
             <div className="wa-contact-list">
@@ -535,9 +832,10 @@ function App() {
                 </div>
               ) : null}
 
-              {conversations.map((contact) => {
+              {filteredConversations.map((contact) => {
                 const last = contact.messages[contact.messages.length - 1];
                 const isActive = contact.id === activeConversationId;
+                const displayName = resolveContactName(contact.phone, savedContacts);
 
                 return (
                   <button
@@ -549,9 +847,9 @@ function App() {
                       setToNumber(contact.phone);
                     }}
                   >
-                    <span className="wa-contact-avatar">{contact.name.slice(0, 2).toUpperCase()}</span>
+                    <span className="wa-contact-avatar">{displayName.slice(0, 2).toUpperCase()}</span>
                     <span className="wa-contact-meta">
-                      <strong>{contact.name}</strong>
+                      <strong>{displayName}</strong>
                       <small>{last?.text || "No messages yet"}</small>
                     </span>
                     <span className="wa-contact-right">
@@ -562,13 +860,54 @@ function App() {
                 );
               })}
             </div>
+
+            <div className="wa-contact-book-bar">
+              <button
+                type="button"
+                className="wa-contact-book-toggle"
+                onClick={() => setContactBookOpen((o) => !o)}
+              >
+                👤 {contactBookOpen ? "Hide contacts" : "Manage contacts"}
+              </button>
+            </div>
+            {contactBookOpen ? (
+              <div className="wa-contact-book">
+                <div className="wa-contact-book-add">
+                  <input
+                    placeholder="Phone (digits)"
+                    value={newContactPhone}
+                    onChange={(e) => setNewContactPhone(e.target.value)}
+                  />
+                  <input
+                    placeholder="Name"
+                    value={newContactName}
+                    onChange={(e) => setNewContactName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveContact(); } }}
+                  />
+                  <button type="button" className="wa-contact-book-save" onClick={saveContact}>Save</button>
+                </div>
+                {Object.keys(savedContacts).length > 0 ? (
+                  <div className="wa-contact-book-list">
+                    {Object.entries(savedContacts).map(([digits, name]) => (
+                      <div key={digits} className="wa-contact-book-row">
+                        <span>{digits}</span>
+                        <strong>{name}</strong>
+                        <button type="button" className="wa-contact-book-del" onClick={() => removeContact(digits)}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="wa-empty-contacts">No saved contacts yet.</p>
+                )}
+              </div>
+            ) : null}
           </aside>
 
           <div className="wa-phone">
             <header className="wa-phone-header">
               <div className="wa-avatar">LN</div>
               <div>
-                <strong>{activeConversation?.name || "Live customer chat"}</strong>
+                <strong>{activeConversation ? resolveContactName(activeConversation.phone, savedContacts) : "Live customer chat"}</strong>
                 <small>{toNumber || activeConversation?.phone || "No recipient"}</small>
               </div>
               <span className={`wa-live-status ${loading ? "busy" : ""}`}>{statusText}</span>
@@ -578,7 +917,14 @@ function App() {
               {(activeConversation?.messages || []).map((message) => (
                 <article key={message.id} className={`wa-msg ${message.direction === "in" ? "in" : "out"}`}>
                   <p>{message.text}</p>
-                  <time>{message.time}</time>
+                  <time>
+                    {message.time}
+                    {message.direction === "out" ? (
+                      <span className={`wa-tick${message.deliveryStatus === "read" ? " wa-tick-read" : message.deliveryStatus === "delivered" ? " wa-tick-delivered" : ""}`}>
+                        {deliveryTickMark(message.deliveryStatus)}
+                      </span>
+                    ) : null}
+                  </time>
                 </article>
               ))}
               {loading && messageText ? (
@@ -632,8 +978,31 @@ function App() {
                     rows={2}
                     placeholder="Write your response..."
                   />
+                  <label className="wa-attach-btn" title="Attach file">
+                    📎
+                    <input
+                      type="file"
+                      className="wa-attach-input"
+                      accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                      onChange={(e) => setComposeMedia(e.target.files?.[0] || null)}
+                    />
+                  </label>
                 </div>
               </label>
+              {composeMedia ? (
+                <div className="wa-compose-file-bar">
+                  <span className="wa-compose-file-name">📎 {composeMedia.name}</span>
+                  <button
+                    type="button"
+                    className="wa-send"
+                    onClick={sendMediaMessage}
+                    disabled={composeMediaLoading}
+                  >
+                    {composeMediaLoading ? "Sending..." : "Send File"}
+                  </button>
+                  <button type="button" className="wa-attach-clear" onClick={() => setComposeMedia(null)}>×</button>
+                </div>
+              ) : null}
               <button className="wa-send" type="submit" disabled={loading}>
                 {loading ? "Sending..." : "Send Text Message"}
               </button>
@@ -832,6 +1201,19 @@ function App() {
             </div>
           ) : null}
 
+          {requiredBodyVarCount > 0 ? (
+            <div className="preset-bar">
+              <button type="button" className="btn btn-secondary" onClick={savePreset}>
+                💾 Save preset
+              </button>
+              {templatePresets[genericTemplateName] ? (
+                <button type="button" className="btn btn-secondary" onClick={loadPreset}>
+                  📂 Load preset
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           <article className="template-chat-box">
             <header>
               <strong>Template Text Box</strong>
@@ -860,9 +1242,32 @@ function App() {
             </label>
           ) : null}
 
+          <label className="schedule-toggle">
+            <input
+              type="checkbox"
+              checked={useSchedule}
+              onChange={(e) => setUseSchedule(e.target.checked)}
+            />
+            Schedule for later
+          </label>
+          {useSchedule ? (
+            <label>
+              Send at
+              <input
+                type="datetime-local"
+                value={scheduleAt}
+                onChange={(e) => setScheduleAt(e.target.value)}
+              />
+            </label>
+          ) : null}
+
           <div className="api-actions">
-            <button className="btn btn-primary" type="submit" disabled={genericLoading}>
-              {genericLoading ? "Sending..." : "Send Template Notification"}
+            <button
+              className={useSchedule ? "btn btn-secondary" : "btn btn-primary"}
+              type="submit"
+              disabled={genericLoading || (useSchedule && !scheduleAt)}
+            >
+              {genericLoading ? "Sending..." : useSchedule ? "⏰ Schedule Message" : "Send Template Notification"}
             </button>
             <span className="status">Status: {genericStatus}</span>
           </div>
@@ -899,6 +1304,68 @@ function App() {
             </div>
           )}
         </section>
+
+        {scheduledItems.length > 0 ? (
+          <section className="template-history">
+            <h3>⏰ Scheduled Messages</h3>
+            <div className="template-history-list">
+              {scheduledItems.map((item) => (
+                <article key={item.id} className="template-history-item">
+                  <header>
+                    <strong>{item.templateName}</strong>
+                    <span>{item.scheduledAt ? new Date(item.scheduledAt).toLocaleString() : ""}</span>
+                  </header>
+                  <p>To: {item.to}</p>
+                  <span className={`status ${item.status === "sent" ? "status-ok" : item.status === "failed" ? "status-err" : ""}`}>
+                    Status: {item.status}
+                  </span>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <details className="bulk-send-section">
+          <summary>📋 Bulk Send (CSV)</summary>
+          <div className="bulk-send-body">
+            <p>One recipient per line: <code>phone,var1,var2,...</code> — uses current template &amp; language.</p>
+            <textarea
+              className="bulk-csv"
+              rows={5}
+              placeholder={`351912858229,João,Loja A\n351910000001,Maria,Loja B`}
+              value={bulkCsv}
+              onChange={(e) => setBulkCsv(e.target.value)}
+            />
+            <div className="api-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={runBulkSend}
+                disabled={bulkRunning || !bulkCsv.trim()}
+              >
+                {bulkRunning
+                  ? `Sending ${bulkProgress.sent}/${bulkProgress.total}...`
+                  : "Send to All"}
+              </button>
+              {bulkProgress.total > 0 && !bulkRunning ? (
+                <span className="status">{bulkProgress.sent}/{bulkProgress.total} sent</span>
+              ) : null}
+            </div>
+            {bulkRows.length > 0 ? (
+              <div className="bulk-results">
+                {bulkRows.map((row, i) => (
+                  <div
+                    key={i}
+                    className={`bulk-result-row ${row.status.startsWith("sent") ? "ok" : "err"}`}
+                  >
+                    <span>{row.phone}</span>
+                    <span>{row.status}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </details>
       </section>
 
       <section className="panel cta" id="contact">
