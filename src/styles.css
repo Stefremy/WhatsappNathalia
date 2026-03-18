@@ -120,6 +120,63 @@ p {
   gap: 1rem;
 }
 
+.shortcut-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.shortcut-card {
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--ink);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.shortcut-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.shortcut-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: #fff;
+  padding: 1px;
+  border: 1px solid rgba(15, 23, 32, 0.14);
+}
+
+.shortcut-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(27, 143, 99, 0.5);
+  box-shadow: 0 10px 20px rgba(27, 143, 99, 0.15);
+}
+
+.shortcut-card strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.98rem;
+}
+
+.shortcut-card span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.shortcut-card small {
+  color: #1b8f63;
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+
 .grid {
   display: grid;
   gap: 0.85rem;
@@ -655,6 +712,85 @@ p {
   border-top: 1px solid rgba(255, 255, 255, 0.09);
 }
 
+.team-tools {
+  display: grid;
+  gap: 0.65rem;
+  background: #0d1b20;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  padding: 0.8rem;
+}
+
+.team-tools h3 {
+  color: #d9eee5;
+  font-size: 0.95rem;
+}
+
+.team-tools p {
+  color: #b8ccc4;
+  font-size: 0.82rem;
+}
+
+.team-tools label {
+  display: grid;
+  gap: 0.35rem;
+  color: #c2d4cd;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.team-tools textarea,
+.team-tools input {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  font: inherit;
+  color: #f4fff9;
+  background: rgba(10, 24, 28, 0.7);
+  padding: 0.62rem 0.72rem;
+}
+
+.team-reminder-grid {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.team-reminder-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.team-reminder-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.team-reminder-item div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.team-reminder-item strong {
+  color: #e8f4ef;
+  font-size: 0.86rem;
+}
+
+.team-reminder-item small {
+  color: #aac3b9;
+  font-size: 0.75rem;
+}
+
+.team-reminder-empty {
+  color: #aac3b9;
+  font-size: 0.8rem;
+}
+
 .wa-details summary {
   cursor: pointer;
   list-style: none;
@@ -959,6 +1095,10 @@ p {
 }
 
 @media (max-width: 900px) {
+  .shortcut-grid {
+    grid-template-columns: 1fr;
+  }
+
   .grid.three {
     grid-template-columns: 1fr;
   }
@@ -982,4 +1122,464 @@ p {
   .template-var-grid {
     grid-template-columns: 1fr;
   }
+
+  .team-reminder-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .caderno-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   CADERNO & CALENDÁRIO — notebook style
+   ────────────────────────────────────────────────────────── */
+
+.caderno-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+  align-items: start;
+}
+
+/* ── Bloco de Notas ── */
+.caderno-notas {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 18px rgba(15, 23, 32, 0.1);
+}
+
+.caderno-capa {
+  background: #2b5c35;
+  padding: 0.55rem 1rem;
+  color: #e8f5e2;
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.caderno-formulario {
+  background: #fffef5;
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-top: none;
+  padding: 0.85rem 0.9rem 0.85rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  /* lined paper: red margin + blue horizontal rules */
+  background-image:
+    linear-gradient(to right, #f4a0a0 1px, transparent 1px),
+    repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 27px,
+      rgba(100, 149, 237, 0.2) 27px,
+      rgba(100, 149, 237, 0.2) 28px
+    );
+  background-size: 40px 28px, 100% 28px;
+  background-position: 32px 0, 0 0;
+}
+
+.nota-cores {
+  display: flex;
+  gap: 0.45rem;
+  padding: 6px 0.7rem 6px 46px;
+}
+
+.cor-btn {
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.12s;
+  flex-shrink: 0;
+}
+.cor-btn.ativo {
+  border-color: var(--ink);
+  transform: scale(1.25);
+}
+.cor-amarelo { background: #fde68a; }
+.cor-verde   { background: #bbf7d0; }
+.cor-azul    { background: #bfdbfe; }
+.cor-rosa    { background: #fbcfe8; }
+.cor-branco  { background: #ffffff; border-color: rgba(15, 23, 32, 0.3); }
+
+.nota-titulo-input,
+.nota-conteudo {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.9rem;
+  color: var(--ink);
+  resize: none;
+  outline: none;
+  padding-left: 46px;
+  padding-right: 0.7rem;
+  line-height: 28px;
+  display: block;
+}
+.nota-titulo-input {
+  font-weight: 700;
+  height: 28px;
+}
+.nota-conteudo {
+  min-height: 84px;
+}
+
+.btn-sm {
+  margin: 6px 0.7rem 6px 46px;
+  width: fit-content;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.75rem;
+}
+
+/* Notes list */
+.notas-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  max-height: 440px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.notas-vazio {
+  font-size: 0.84rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.6rem;
+  opacity: 0.7;
+}
+
+.nota-card {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 32, 0.11);
+  padding: 0.7rem 0.8rem 0.55rem 0.65rem;
+  position: relative;
+  background-image:
+    linear-gradient(to right, rgba(244, 160, 160, 0.45) 1px, transparent 1px),
+    repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 21px,
+      rgba(100, 149, 237, 0.14) 21px,
+      rgba(100, 149, 237, 0.14) 22px
+    );
+  background-size: 26px 22px, 100% 22px;
+  background-position: 20px 0, 0 44px;
+  transition: box-shadow 0.15s;
+}
+.nota-card:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 32, 0.1);
+}
+.nota-cor-amarelo { background-color: #fffde7; }
+.nota-cor-verde   { background-color: #f0fdf4; }
+.nota-cor-azul    { background-color: #eff6ff; }
+.nota-cor-rosa    { background-color: #fdf2f8; }
+.nota-cor-branco  { background-color: #ffffff; }
+
+.nota-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.nota-titulo {
+  font-size: 0.88rem;
+  font-weight: 700;
+  flex: 1;
+  line-height: 1.35;
+}
+.nota-titulo-edit {
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 700;
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px solid var(--accent);
+  outline: none;
+  font-family: "Manrope", sans-serif;
+  color: var(--ink);
+  width: 100%;
+}
+.nota-acoes {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+.nota-acoes button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  transition: background 0.12s;
+  color: var(--muted);
+  line-height: 1;
+}
+.nota-acoes button:hover {
+  background: rgba(15, 23, 32, 0.09);
+}
+.nota-texto {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  margin: 0 0 0.35rem;
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+.nota-conteudo-edit {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.4rem;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.86rem;
+  resize: vertical;
+  outline: none;
+  color: var(--ink);
+  margin-bottom: 0.35rem;
+  display: block;
+}
+.nota-data {
+  font-size: 0.73rem;
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+/* ── Calendário ── */
+.caderno-calendario {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  background: #fffef5;
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 4px 18px rgba(15, 23, 32, 0.09);
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 27px,
+      rgba(100, 149, 237, 0.12) 27px,
+      rgba(100, 149, 237, 0.12) 28px
+    );
+  background-size: 100% 28px;
+}
+
+.cal-cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.cal-mes-label {
+  font-family: "Space Grotesp", "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 0.97rem;
+  text-transform: capitalize;
+  flex: 1;
+  text-align: center;
+  color: var(--ink);
+}
+.cal-nav {
+  background: rgba(15, 23, 32, 0.07);
+  border: none;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  color: var(--ink);
+  transition: background 0.14s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.cal-nav:hover {
+  background: rgba(27, 143, 99, 0.2);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-dow {
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 0.18rem 0 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cal-cell {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  transition: background 0.12s;
+  position: relative;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1;
+}
+.cal-cell:hover:not(.cal-vazio) {
+  background: rgba(27, 143, 99, 0.12);
+}
+.cal-vazio {
+  cursor: default;
+  pointer-events: none;
+}
+.cal-hoje {
+  background: rgba(27, 143, 99, 0.16);
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+.cal-selecionado {
+  background: var(--accent) !important;
+  color: #fff !important;
+  font-weight: 700;
+}
+.cal-tem-evento {
+  font-weight: 600;
+}
+.cal-ponto {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: block;
+  flex-shrink: 0;
+}
+.cal-selecionado .cal-ponto {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* Event panel below calendar */
+.cal-eventos {
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 10px;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cal-data-titulo {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  color: var(--accent-dark);
+}
+.cal-novo-evento {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.cal-novo-evento input:not([type="time"]) {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.83rem;
+  font-family: "Manrope", sans-serif;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+}
+.cal-novo-evento input[type="time"] {
+  width: 88px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.35rem;
+  font-size: 0.83rem;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+}
+.cal-novo-evento .btn-sm {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+.cal-sem-eventos {
+  font-size: 0.81rem;
+  color: var(--muted);
+  margin: 0;
+  opacity: 0.75;
+}
+.cal-lista-eventos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+}
+.cal-evento-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(27, 143, 99, 0.08);
+  border-radius: 6px;
+  padding: 0.32rem 0.5rem;
+  font-size: 0.83rem;
+}
+.cal-evento-hora {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--accent-dark);
+  min-width: 38px;
+}
+.cal-evento-titulo {
+  flex: 1;
+  color: var(--ink);
+}
+.cal-remover {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 0.1rem 0.22rem;
+  border-radius: 4px;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1;
+}
+.cal-remover:hover {
+  background: rgba(184, 60, 42, 0.1);
+  color: #b83c2a;
+}
+.cal-dica {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+  opacity: 0.65;
 }

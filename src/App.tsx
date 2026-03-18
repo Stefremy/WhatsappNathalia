@@ -7,6 +7,33 @@ const docsFacts = [
   { label: "Auth", value: "Bearer token" }
 ];
 
+const quickApps = [
+  {
+    name: "Tracking Linke",
+    description: "Acompanhar envios e estado operacional em tempo real.",
+    url: "https://portal.linke.pt/en/tracking",
+    icon: "https://portal.linke.pt/assets/img/logo/logo.svg"
+  },
+  {
+    name: "CTT Tracking",
+    description: "Consulta de envios CTT para apoio ao acompanhamento operacional.",
+    url: "https://www.ctt.pt/particulares/",
+    icon: "https://www.ctt.pt/application/themes/images/logo-ctt.svg"
+  },
+  {
+    name: "Notion Linke Space",
+    description: "Base de conhecimento, processos e notas da equipa.",
+    url: "https://www.notion.so/75be28fa59874502895a9700549329a1",
+    icon: "https://www.insightplatforms.com/wp-content/uploads/2023/10/Notion-Logo-Square-Insight-Platforms.png"
+  },
+  {
+    name: "Portal Linke TMS",
+    description: "Gestão de shipments e operação logística diária.",
+    url: "https://portal.linke.pt/admin/shipments",
+    icon: "https://portal.linke.pt/assets/img/logo/logo.svg"
+  }
+];
+
 type ConversationMessage = {
   id: string;
   direction: "in" | "out";
@@ -52,7 +79,28 @@ type TemplateHistoryItem = {
   status: string;
 };
 
-const initialConversations: ConversationContact[] = [];
+type TeamReminder = {
+  id: string;
+  phone: string;
+  note: string;
+  dueAt: string;
+  done: boolean;
+};
+
+type PersonalNote = {
+  id: string;
+  title: string;
+  content: string;
+  color: string;
+  createdAt: string;
+};
+
+type CalendarEvent = {
+  id: string;
+  date: string;
+  title: string;
+  time: string;
+};
 
 function digitsOnly(value: string) {
   return String(value || "").replace(/\D/g, "");
@@ -60,7 +108,7 @@ function digitsOnly(value: string) {
 
 function contactDisplayName(phone: string) {
   const normalized = digitsOnly(phone);
-  return normalized ? `Contact ${normalized}` : "Unknown contact";
+  return normalized ? `Contacto ${normalized}` : "Contacto desconhecido";
 }
 
 function resolveContactName(phone: string, savedContacts: Record<string, string>) {
@@ -132,14 +180,14 @@ function App() {
     return { raw: text || "Empty response" };
   }
   const [toNumber, setToNumber] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
-  const [messageText, setMessageText] = useState("Hello from Linke Cloud API frontend.");
+  const [messageText, setMessageText] = useState("Olá! Esta é uma mensagem enviada pelo workspace da equipa.");
   const [loading, setLoading] = useState(false);
-  const [statusText, setStatusText] = useState("Idle");
-  const [responseText, setResponseText] = useState("No request sent yet.");
+  const [statusText, setStatusText] = useState("Inativo");
+  const [responseText, setResponseText] = useState("Ainda não foi enviado nenhum pedido.");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
-  const [mediaStatusText, setMediaStatusText] = useState("Idle");
-  const [mediaResponseText, setMediaResponseText] = useState("No upload sent yet.");
+  const [mediaStatusText, setMediaStatusText] = useState("Inativo");
+  const [mediaResponseText, setMediaResponseText] = useState("Ainda não foi enviado nenhum ficheiro.");
   const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
   const [genericTemplateName, setGenericTemplateName] = useState(
     import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
@@ -148,12 +196,12 @@ function App() {
   const [genericBodyVars, setGenericBodyVars] = useState<Record<number, string>>({});
   const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
   const [genericLoading, setGenericLoading] = useState(false);
-  const [genericStatus, setGenericStatus] = useState("Idle");
-  const [genericResponse, setGenericResponse] = useState("No generic template request sent yet.");
+  const [genericStatus, setGenericStatus] = useState("Inativo");
+  const [genericResponse, setGenericResponse] = useState("Ainda não foi enviado nenhum template.");
   const [templateHistory, setTemplateHistory] = useState<TemplateHistoryItem[]>([]);
   const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
   const [metaTemplatesLoading, setMetaTemplatesLoading] = useState(false);
-  const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Not loaded");
+  const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Por carregar");
   const [conversations, setConversations] = useState<ConversationContact[]>(() => {
     try { return JSON.parse(localStorage.getItem("wa_conversations") || "[]") as ConversationContact[]; } catch { return []; }
   });
@@ -189,15 +237,40 @@ function App() {
   const [useSchedule, setUseSchedule] = useState(false);
   const [scheduledItems, setScheduledItems] = useState<ScheduledItem[]>([]);
 
-  // Feature 5: Delivery ticks via SSE
-  const [messageStatuses, setMessageStatuses] = useState<Record<string, string>>({});
-
   // Feature 9: Sidebar search
   const [contactSearch, setContactSearch] = useState("");
 
   // Feature 10: Media in composer
   const [composeMedia, setComposeMedia] = useState<File | null>(null);
   const [composeMediaLoading, setComposeMediaLoading] = useState(false);
+  const [contactNotes, setContactNotes] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_contact_notes") || "{}"); } catch { return {}; }
+  });
+  const [newReminderNote, setNewReminderNote] = useState("");
+  const [newReminderAt, setNewReminderAt] = useState("");
+  const [teamReminders, setTeamReminders] = useState<TeamReminder[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_team_reminders") || "[]") as TeamReminder[]; } catch { return []; }
+  });
+
+  // Caderno pessoal
+  const [personalNotes, setPersonalNotes] = useState<PersonalNote[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_personal_notes") || "[]") as PersonalNote[]; } catch { return []; }
+  });
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteContent, setNoteContent] = useState("");
+  const [noteColor, setNoteColor] = useState("amarelo");
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+
+  // Calendário pessoal
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_calendar_events") || "[]") as CalendarEvent[]; } catch { return []; }
+  });
+  const _today = new Date();
+  const [calMonth, setCalMonth] = useState(_today.getMonth());
+  const [calYear, setCalYear] = useState(_today.getFullYear());
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [newEventTitle, setNewEventTitle] = useState("");
+  const [newEventTime, setNewEventTime] = useState("");
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId) || null,
@@ -239,6 +312,53 @@ function App() {
     [selectedTemplateBody, previewBodyVars]
   );
 
+  const activeContactPhone = useMemo(
+    () => digitsOnly(activeConversation?.phone || toNumber || ""),
+    [activeConversation?.phone, toNumber]
+  );
+
+  const activeContactNote = useMemo(
+    () => (activeContactPhone ? String(contactNotes[activeContactPhone] || "") : ""),
+    [activeContactPhone, contactNotes]
+  );
+
+  const activeContactReminders = useMemo(
+    () =>
+      teamReminders
+        .filter((item) => !item.done && digitsOnly(item.phone) === activeContactPhone)
+        .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime()),
+    [activeContactPhone, teamReminders]
+  );
+
+  const calendarDays = useMemo(() => {
+    const firstDow = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    const startOffset = (firstDow + 6) % 7; // shift to Mon-first
+    const cells: Array<{ day: number; dateStr: string } | null> = [];
+    for (let i = 0; i < startOffset; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push({
+        day: d,
+        dateStr: `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+      });
+    }
+    return cells;
+  }, [calMonth, calYear]);
+
+  const todayStr = useMemo(() => {
+    return `${_today.getFullYear()}-${String(_today.getMonth() + 1).padStart(2, "0")}-${String(_today.getDate()).padStart(2, "0")}`;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const eventsForSelectedDate = useMemo(
+    () =>
+      selectedDate
+        ? calendarEvents
+            .filter((e) => e.date === selectedDate)
+            .sort((a, b) => a.time.localeCompare(b.time))
+        : [],
+    [selectedDate, calendarEvents]
+  );
+
   useEffect(() => {
     setGenericBodyVars((current) => {
       const next: Record<number, string> = {};
@@ -273,6 +393,93 @@ function App() {
       const { [digits]: _removed, ...rest } = prev;
       return rest;
     });
+  }
+
+  function saveContactNote(value: string) {
+    if (!activeContactPhone) {
+      return;
+    }
+    setContactNotes((prev) => ({
+      ...prev,
+      [activeContactPhone]: value
+    }));
+  }
+
+  function createReminder() {
+    if (!activeContactPhone || !newReminderNote.trim() || !newReminderAt.trim()) {
+      return;
+    }
+
+    setTeamReminders((prev) => [
+      {
+        id: `r-${Date.now()}`,
+        phone: activeContactPhone,
+        note: newReminderNote.trim(),
+        dueAt: newReminderAt,
+        done: false
+      },
+      ...prev
+    ]);
+
+    setNewReminderNote("");
+    setNewReminderAt("");
+  }
+
+  function completeReminder(reminderId: string) {
+    setTeamReminders((prev) =>
+      prev.map((item) => (item.id === reminderId ? { ...item, done: true } : item))
+    );
+  }
+
+  // Caderno pessoal
+  function addNote() {
+    if (!noteContent.trim()) return;
+    setPersonalNotes((prev) => [
+      {
+        id: `n-${Date.now()}`,
+        title: noteTitle.trim() || nowLabel(),
+        content: noteContent.trim(),
+        color: noteColor,
+        createdAt: nowLabel()
+      },
+      ...prev
+    ]);
+    setNoteTitle("");
+    setNoteContent("");
+  }
+
+  function deleteNote(id: string) {
+    setPersonalNotes((prev) => prev.filter((n) => n.id !== id));
+    if (editingNoteId === id) setEditingNoteId(null);
+  }
+
+  function updateNote(id: string, changes: Partial<PersonalNote>) {
+    setPersonalNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...changes } : n)));
+  }
+
+  // Calendário pessoal
+  function addCalendarEvent() {
+    if (!selectedDate || !newEventTitle.trim()) return;
+    setCalendarEvents((prev) => [
+      ...prev,
+      { id: `e-${Date.now()}`, date: selectedDate, title: newEventTitle.trim(), time: newEventTime }
+    ]);
+    setNewEventTitle("");
+    setNewEventTime("");
+  }
+
+  function deleteCalendarEvent(id: string) {
+    setCalendarEvents((prev) => prev.filter((e) => e.id !== id));
+  }
+
+  function prevMonth() {
+    if (calMonth === 0) { setCalMonth(11); setCalYear((y) => y - 1); }
+    else setCalMonth((m) => m - 1);
+  }
+
+  function nextMonth() {
+    if (calMonth === 11) { setCalMonth(0); setCalYear((y) => y + 1); }
+    else setCalMonth((m) => m + 1);
   }
 
   // Feature 2: Template var presets
@@ -328,7 +535,7 @@ function App() {
   async function sendMediaMessage() {
     if (!composeMedia || !toNumber.trim()) return;
     setComposeMediaLoading(true);
-    setStatusText("Sending media...");
+    setStatusText("A enviar media...");
     try {
       const formData = new FormData();
       formData.append("file", composeMedia);
@@ -370,10 +577,10 @@ function App() {
         setActiveConversationId(created.id);
         return [created, ...current];
       });
-      setStatusText(response.ok ? "Media sent" : `Failed (${response.status})`);
+      setStatusText(response.ok ? "Media enviada" : `Falhou (${response.status})`);
       if (response.ok) setComposeMedia(null);
     } catch {
-      setStatusText("Media send failed");
+      setStatusText("Falha no envio de media");
     } finally {
       setComposeMediaLoading(false);
     }
@@ -381,12 +588,12 @@ function App() {
 
   async function fetchMetaTemplates() {
     if (!phoneNumberId.trim()) {
-      setMetaTemplatesStatus("Phone number ID is required to fetch templates");
+      setMetaTemplatesStatus("O Phone Number ID é obrigatório para carregar templates");
       return;
     }
 
     setMetaTemplatesLoading(true);
-    setMetaTemplatesStatus("Loading templates...");
+    setMetaTemplatesStatus("A carregar templates...");
 
     try {
       const query = new URLSearchParams({
@@ -406,11 +613,11 @@ function App() {
       const data = await parseResponse(response);
 
       if (!response.ok) {
-        setMetaTemplatesStatus(`Failed to load templates (${response.status})`);
+        setMetaTemplatesStatus(`Falha ao carregar templates (${response.status})`);
         return;
       }
 
-      const rows = Array.isArray(data?.data) ? data.data : [];
+      const rows: Array<Record<string, unknown>> = Array.isArray(data?.data) ? data.data : [];
       const approved = rows
         .filter((item) => String(item?.status || "").toUpperCase() === "APPROVED")
         .map((item) => ({
@@ -424,7 +631,7 @@ function App() {
 
       setMetaTemplates(approved);
       setMetaTemplatesStatus(
-        approved.length > 0 ? `Loaded ${approved.length} approved templates` : "No approved templates found"
+        approved.length > 0 ? `${approved.length} templates aprovados carregados` : "Não foram encontrados templates aprovados"
       );
 
       if (approved.length > 0 && !approved.some((item) => item.name === genericTemplateName)) {
@@ -432,7 +639,7 @@ function App() {
         setGenericLanguage(approved[0].language || "pt_PT");
       }
     } catch (error) {
-      setMetaTemplatesStatus(error instanceof Error ? error.message : "Failed to load templates");
+      setMetaTemplatesStatus(error instanceof Error ? error.message : "Falha ao carregar templates");
     } finally {
       setMetaTemplatesLoading(false);
     }
@@ -457,6 +664,23 @@ function App() {
     try { localStorage.setItem("wa_template_presets", JSON.stringify(templatePresets)); } catch {}
   }, [templatePresets]);
 
+  // Persist team notes/reminders
+  useEffect(() => {
+    try { localStorage.setItem("wa_contact_notes", JSON.stringify(contactNotes)); } catch {}
+  }, [contactNotes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("wa_team_reminders", JSON.stringify(teamReminders)); } catch {}
+  }, [teamReminders]);
+
+  useEffect(() => {
+    try { localStorage.setItem("wa_personal_notes", JSON.stringify(personalNotes)); } catch {}
+  }, [personalNotes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("wa_calendar_events", JSON.stringify(calendarEvents)); } catch {}
+  }, [calendarEvents]);
+
   // SSE – delivery status ticks & scheduled_sent events
   useEffect(() => {
     const url = apiUrl("/api/events");
@@ -465,7 +689,6 @@ function App() {
       try {
         const { messageId, status } = JSON.parse((e as MessageEvent).data);
         if (messageId && status) {
-          setMessageStatuses((prev) => ({ ...prev, [messageId]: status }));
           setConversations((prev) =>
             prev.map((c) => ({
               ...c,
@@ -531,13 +754,13 @@ function App() {
     event.preventDefault();
 
     if (!toNumber.trim() || !messageText.trim()) {
-      setStatusText("Missing required fields");
-      setResponseText("Recipient number and message are required.");
+      setStatusText("Faltam campos obrigatórios");
+      setResponseText("Número de destino e mensagem são obrigatórios.");
       return;
     }
 
     setLoading(true);
-    setStatusText("Sending...");
+    setStatusText("A enviar...");
 
     try {
       const response = await fetch(apiUrl("/api/messages/send"), {
@@ -608,17 +831,17 @@ function App() {
         setActiveConversationId(nextActiveConversationId);
       }
 
-      setStatusText(response.ok ? "Accepted by API (delivery pending)" : `Failed (${response.status})`);
+      setStatusText(response.ok ? "Aceite pela API (entrega pendente)" : `Falhou (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
       if (response.ok) {
         setMessageText("");
       }
     } catch (error) {
-      setStatusText("Backend unreachable");
+      setStatusText("Backend indisponível");
       setResponseText(
         error instanceof Error
-          ? `${error.message}\n\nVerify backend is running and reachable at ${backendBaseUrl || "same-origin /api"}.`
-          : `Unknown error\n\nVerify backend is running and reachable at ${backendBaseUrl || "same-origin /api"}.`
+          ? `${error.message}\n\nVerifica se o backend está ativo e acessível em ${backendBaseUrl || "same-origin /api"}.`
+          : `Erro desconhecido\n\nVerifica se o backend está ativo e acessível em ${backendBaseUrl || "same-origin /api"}.`
       );
     } finally {
       setLoading(false);
@@ -635,13 +858,13 @@ function App() {
     event.preventDefault();
 
     if (!mediaFile) {
-      setMediaStatusText("Missing file");
-      setMediaResponseText("Choose a file first.");
+      setMediaStatusText("Ficheiro em falta");
+      setMediaResponseText("Escolhe primeiro um ficheiro.");
       return;
     }
 
     setMediaLoading(true);
-    setMediaStatusText("Uploading...");
+    setMediaStatusText("A carregar...");
 
     try {
       const formData = new FormData();
@@ -654,11 +877,11 @@ function App() {
       });
 
       const data = await response.json();
-      setMediaStatusText(response.ok ? "Media uploaded" : `Failed (${response.status})`);
+      setMediaStatusText(response.ok ? "Media carregada" : `Falhou (${response.status})`);
       setMediaResponseText(JSON.stringify(data, null, 2));
     } catch (error) {
-      setMediaStatusText("Network error");
-      setMediaResponseText(error instanceof Error ? error.message : "Unknown error");
+      setMediaStatusText("Erro de rede");
+      setMediaResponseText(error instanceof Error ? error.message : "Erro desconhecido");
     } finally {
       setMediaLoading(false);
     }
@@ -681,29 +904,29 @@ function App() {
     const variables = previewBodyVars;
 
     if (!genericTo.trim() || !genericTemplateName.trim()) {
-      setGenericStatus("Missing required fields");
-      setGenericResponse("Recipient and template name are required.");
+      setGenericStatus("Faltam campos obrigatórios");
+      setGenericResponse("Número de destino e nome do template são obrigatórios.");
       return;
     }
 
     if (missingIndexes.length > 0) {
-      setGenericStatus("Missing template variables");
+      setGenericStatus("Faltam variáveis do template");
       setGenericResponse(
-        `Fill required variables for indexes: ${missingIndexes.join(", ")}.`
+        `Preenche as variáveis obrigatórias dos índices: ${missingIndexes.join(", ")}.`
       );
       return;
     }
 
     if (needsUrlButtonVariable && !genericButtonUrlVariable.trim()) {
-      setGenericStatus("Missing URL button variable");
-      setGenericResponse("This template includes a dynamic URL button and requires button URL variable.");
+      setGenericStatus("Falta variável do botão URL");
+      setGenericResponse("Este template inclui um botão URL dinâmico e precisa dessa variável.");
       return;
     }
 
     // Feature 4: Schedule mode
     if (useSchedule) {
       if (!scheduleAt) {
-        setGenericStatus("Please select a date/time to schedule");
+        setGenericStatus("Seleciona data/hora para agendar");
         return;
       }
       try {
@@ -723,18 +946,18 @@ function App() {
           setScheduledItems((prev) => [data as ScheduledItem, ...prev]);
           setScheduleAt("");
           setUseSchedule(false);
-          setGenericStatus("Scheduled ✓");
+          setGenericStatus("Agendado ✓");
         } else {
-          setGenericStatus(`Schedule failed: ${data?.error || response.status}`);
+          setGenericStatus(`Falha no agendamento: ${data?.error || response.status}`);
         }
       } catch {
-        setGenericStatus("Schedule request failed");
+        setGenericStatus("Falha no pedido de agendamento");
       }
       return;
     }
 
     setGenericLoading(true);
-    setGenericStatus("Sending...");
+    setGenericStatus("A enviar...");
 
     const historyPreview = selectedTemplatePreview || selectedTemplateBody || `Template ${genericTemplateName}`;
 
@@ -754,7 +977,7 @@ function App() {
       });
 
       const data = await response.json();
-      setGenericStatus(response.ok ? "Template accepted" : `Failed (${response.status})`);
+      setGenericStatus(response.ok ? "Template aceite" : `Falhou (${response.status})`);
       setGenericResponse(JSON.stringify(data, null, 2));
 
       setTemplateHistory((current) => [
@@ -769,8 +992,8 @@ function App() {
         ...current
       ]);
     } catch (error) {
-      setGenericStatus("Network error");
-      setGenericResponse(error instanceof Error ? error.message : "Unknown error");
+      setGenericStatus("Erro de rede");
+      setGenericResponse(error instanceof Error ? error.message : "Erro desconhecido");
 
       setTemplateHistory((current) => [
         {
@@ -792,34 +1015,58 @@ function App() {
     <div className="page">
       <header className="hero">
         <div className="badge">www.linke.pt</div>
-        <h1>Own your cloud API frontend without Make bottlenecks.</h1>
+        <h1>Workspace da Equipa para Operações WhatsApp</h1>
         <p>
-          Linke gives your business a direct and resilient frontend to present, sell,
-          and operate API products with confidence.
+          Gere conversas, templates e envios num único lugar. Feito para o trabalho diário
+          de uma equipa pequena, com contexto partilhado e foco na execução.
         </p>
         <div className="hero-actions">
-          <a href="#contact" className="btn btn-primary">
-            Start with Linke
+          <a href="#api-console" className="btn btn-primary">
+            Abrir Workspace
           </a>
-          <a href="#plans" className="btn btn-secondary">
-            View plans
+          <a href="#team-tools" className="btn btn-secondary">
+            Ver Notas da Equipa
           </a>
         </div>
       </header>
 
-      <section className="panel" id="api-console">
-        <h2>WhatsApp Cloud API Message Console</h2>
+      <section className="panel" id="atalhos-linke">
+        <h2>Atalhos Rápidos Linke</h2>
         <p>
-          Based on official docs: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/messages</strong>
-          with Bearer authentication and JSON payload, relayed by your backend for secure
-          Notion logging.
+          Acesso direto às ferramentas mais usadas pela equipa de mediação logística.
+        </p>
+        <div className="shortcut-grid">
+          {quickApps.map((app) => (
+            <a
+              key={app.url}
+              className="shortcut-card"
+              href={app.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <div className="shortcut-card-head">
+                <img className="shortcut-icon" src={app.icon} alt={`${app.name} logo`} loading="lazy" />
+                <strong>{app.name}</strong>
+              </div>
+              <span>{app.description}</span>
+              <small>{app.url}</small>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel" id="api-console">
+        <h2>Consola de Mensagens WhatsApp Cloud API</h2>
+        <p>
+          Baseado na documentação oficial: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/messages</strong>
+          com autenticação Bearer e payload JSON, encaminhado pelo backend da equipa.
         </p>
 
         <div className="wa-console">
           <aside className="wa-sidebar">
             <div className="wa-search">
               <input
-                placeholder="Search contacts..."
+                placeholder="Pesquisar contactos..."
                 value={contactSearch}
                 onChange={(e) => setContactSearch(e.target.value)}
               />
@@ -828,7 +1075,7 @@ function App() {
             <div className="wa-contact-list">
               {conversations.length === 0 ? (
                 <div className="wa-empty-contacts">
-                  No conversations yet. Send a message to create contact history.
+                  Ainda não há conversas. Envia uma mensagem para criar histórico.
                 </div>
               ) : null}
 
@@ -850,7 +1097,7 @@ function App() {
                     <span className="wa-contact-avatar">{displayName.slice(0, 2).toUpperCase()}</span>
                     <span className="wa-contact-meta">
                       <strong>{displayName}</strong>
-                      <small>{last?.text || "No messages yet"}</small>
+                      <small>{last?.text || "Sem mensagens"}</small>
                     </span>
                     <span className="wa-contact-right">
                       <small>{contact.lastAt}</small>
@@ -867,24 +1114,24 @@ function App() {
                 className="wa-contact-book-toggle"
                 onClick={() => setContactBookOpen((o) => !o)}
               >
-                👤 {contactBookOpen ? "Hide contacts" : "Manage contacts"}
+                👤 {contactBookOpen ? "Esconder contactos" : "Gerir contactos"}
               </button>
             </div>
             {contactBookOpen ? (
               <div className="wa-contact-book">
                 <div className="wa-contact-book-add">
                   <input
-                    placeholder="Phone (digits)"
+                    placeholder="Telefone (dígitos)"
                     value={newContactPhone}
                     onChange={(e) => setNewContactPhone(e.target.value)}
                   />
                   <input
-                    placeholder="Name"
+                    placeholder="Nome"
                     value={newContactName}
                     onChange={(e) => setNewContactName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveContact(); } }}
                   />
-                  <button type="button" className="wa-contact-book-save" onClick={saveContact}>Save</button>
+                  <button type="button" className="wa-contact-book-save" onClick={saveContact}>Guardar</button>
                 </div>
                 {Object.keys(savedContacts).length > 0 ? (
                   <div className="wa-contact-book-list">
@@ -897,7 +1144,7 @@ function App() {
                     ))}
                   </div>
                 ) : (
-                  <p className="wa-empty-contacts">No saved contacts yet.</p>
+                  <p className="wa-empty-contacts">Ainda não existem contactos guardados.</p>
                 )}
               </div>
             ) : null}
@@ -907,8 +1154,8 @@ function App() {
             <header className="wa-phone-header">
               <div className="wa-avatar">LN</div>
               <div>
-                <strong>{activeConversation ? resolveContactName(activeConversation.phone, savedContacts) : "Live customer chat"}</strong>
-                <small>{toNumber || activeConversation?.phone || "No recipient"}</small>
+                <strong>{activeConversation ? resolveContactName(activeConversation.phone, savedContacts) : "Chat de cliente"}</strong>
+                <small>{toNumber || activeConversation?.phone || "Sem destinatário"}</small>
               </div>
               <span className={`wa-live-status ${loading ? "busy" : ""}`}>{statusText}</span>
             </header>
@@ -930,14 +1177,14 @@ function App() {
               {loading && messageText ? (
                 <article className="wa-msg out composing">
                   <p>{messageText}</p>
-                  <time>{loading ? "sending" : "draft"}</time>
+                  <time>{loading ? "a enviar" : "rascunho"}</time>
                 </article>
               ) : null}
             </main>
 
             <form className="wa-compose" onSubmit={sendMessage}>
               <label>
-                Recipient Number (E.164)
+                Número de destino (E.164)
                 <input
                   value={toNumber}
                   onChange={(event) => setToNumber(event.target.value)}
@@ -945,20 +1192,20 @@ function App() {
                 />
               </label>
               <label>
-                Message
+                Mensagem
                 <div className="wa-message-bar">
                   <div className="wa-emoji-wrap">
                     <button
                       type="button"
                       className="wa-emoji"
                       onClick={() => setEmojiOpen((open) => !open)}
-                      aria-label="Open emoji picker"
-                      title="Open emoji picker"
+                      aria-label="Abrir seletor de emoji"
+                      title="Abrir seletor de emoji"
                     >
                       🙂
                     </button>
                     {emojiOpen ? (
-                      <div className="wa-emoji-picker" role="menu" aria-label="Emoji picker">
+                      <div className="wa-emoji-picker" role="menu" aria-label="Seletor de emoji">
                         {"😀 😅 😂 😊 😉 😍 😎 🙌 👍 👌 ✅ 🎉 ❤️".split(" ").map((emoji) => (
                           <button
                             key={emoji}
@@ -976,9 +1223,9 @@ function App() {
                     value={messageText}
                     onChange={(event) => setMessageText(event.target.value)}
                     rows={2}
-                    placeholder="Write your response..."
+                    placeholder="Escreve a resposta..."
                   />
-                  <label className="wa-attach-btn" title="Attach file">
+                  <label className="wa-attach-btn" title="Anexar ficheiro">
                     📎
                     <input
                       type="file"
@@ -998,18 +1245,75 @@ function App() {
                     onClick={sendMediaMessage}
                     disabled={composeMediaLoading}
                   >
-                    {composeMediaLoading ? "Sending..." : "Send File"}
+                    {composeMediaLoading ? "A enviar..." : "Enviar ficheiro"}
                   </button>
                   <button type="button" className="wa-attach-clear" onClick={() => setComposeMedia(null)}>×</button>
                 </div>
               ) : null}
               <button className="wa-send" type="submit" disabled={loading}>
-                {loading ? "Sending..." : "Send Text Message"}
+                {loading ? "A enviar..." : "Enviar mensagem"}
               </button>
             </form>
 
+            <section className="team-tools" id="team-tools">
+              <h3>Notas e Lembretes da Equipa</h3>
+              <p>
+                Contexto interno por contacto para não perder informação entre turnos.
+              </p>
+
+              <label>
+                Nota interna ({activeContactPhone || "sem contacto ativo"})
+                <textarea
+                  value={activeContactNote}
+                  onChange={(event) => saveContactNote(event.target.value)}
+                  placeholder="Ex.: Cliente pediu confirmação amanhã de manhã."
+                  rows={3}
+                  disabled={!activeContactPhone}
+                />
+              </label>
+
+              <div className="team-reminder-grid">
+                <input
+                  value={newReminderNote}
+                  onChange={(event) => setNewReminderNote(event.target.value)}
+                  placeholder="Lembrete (ex.: ligar para validar morada)"
+                />
+                <input
+                  type="datetime-local"
+                  value={newReminderAt}
+                  onChange={(event) => setNewReminderAt(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={createReminder}
+                  disabled={!activeContactPhone || !newReminderNote.trim() || !newReminderAt}
+                >
+                  + Criar lembrete
+                </button>
+              </div>
+
+              {activeContactReminders.length > 0 ? (
+                <div className="team-reminder-list">
+                  {activeContactReminders.map((item) => (
+                    <article key={item.id} className="team-reminder-item">
+                      <div>
+                        <strong>{item.note}</strong>
+                        <small>{new Date(item.dueAt).toLocaleString("pt-PT")}</small>
+                      </div>
+                      <button type="button" className="btn btn-secondary" onClick={() => completeReminder(item.id)}>
+                        Concluído
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="team-reminder-empty">Sem lembretes pendentes para este contacto.</p>
+              )}
+            </section>
+
             <details className="wa-details">
-              <summary>API Details</summary>
+              <summary>Detalhes da API</summary>
 
               <div className="facts wa-facts">
                 {docsFacts.map((fact) => (
@@ -1022,7 +1326,7 @@ function App() {
 
               <form className="api-form wa-config">
                 <label>
-                  API Version
+                  Versão da API
                   <input
                     value={apiVersion}
                     onChange={(event) => setApiVersion(event.target.value)}
@@ -1042,23 +1346,23 @@ function App() {
 
               <div className="code-grid wa-code-grid">
                 <article className="card code-block">
-                  <h3>Resolved Endpoint</h3>
+                  <h3>Endpoint Resolvido</h3>
                   <pre>{endpoint}</pre>
                 </article>
                 <article className="card code-block">
-                  <h3>Backend Relay</h3>
+                  <h3>Relay Backend</h3>
                   <pre>{apiUrl("/api/messages/send")}</pre>
                 </article>
                 <article className="card code-block">
-                  <h3>Request Payload</h3>
+                  <h3>Payload do Pedido</h3>
                   <pre>{JSON.stringify(payload, null, 2)}</pre>
                 </article>
                 <article className="card code-block">
-                  <h3>cURL Example</h3>
+                  <h3>Exemplo cURL</h3>
                   <pre>{curlCommand}</pre>
                 </article>
                 <article className="card code-block">
-                  <h3>API Response</h3>
+                  <h3>Resposta da API</h3>
                   <pre>{responseText}</pre>
                 </article>
               </div>
@@ -1068,16 +1372,16 @@ function App() {
       </section>
 
       <section className="panel" id="media-console">
-        <h2>WhatsApp Cloud API Media Upload Console</h2>
+        <h2>Consola de Upload de Media</h2>
         <p>
-          Based on official docs: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/media</strong>
-          using multipart form-data. This returns a media <strong>id</strong> that you can use in
-          media messages.
+          Baseado na documentação oficial: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/media</strong>
+          com multipart form-data. Este endpoint devolve um <strong>id</strong> de media para usar
+          em mensagens de media.
         </p>
 
         <form className="api-form" onSubmit={uploadMedia}>
           <label>
-            Select Media File
+            Selecionar Ficheiro de Media
             <input
               type="file"
               onChange={(event) => setMediaFile(event.target.files?.[0] || null)}
@@ -1087,44 +1391,44 @@ function App() {
 
           <div className="api-actions">
             <button className="btn btn-primary" type="submit" disabled={mediaLoading}>
-              {mediaLoading ? "Uploading..." : "Upload Media"}
+              {mediaLoading ? "A carregar..." : "Carregar media"}
             </button>
-            <span className="status">Status: {mediaStatusText}</span>
+            <span className="status">Estado: {mediaStatusText}</span>
           </div>
         </form>
 
         <div className="code-grid">
           <article className="card code-block">
-            <h3>Graph Upload Endpoint</h3>
+            <h3>Endpoint Graph (Upload)</h3>
             <pre>{`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`}</pre>
           </article>
           <article className="card code-block">
-            <h3>Backend Relay</h3>
+            <h3>Relay Backend</h3>
             <pre>{apiUrl("/api/media/upload")}</pre>
           </article>
           <article className="card code-block">
-            <h3>cURL Example</h3>
+            <h3>Exemplo cURL</h3>
             <pre>{mediaCurlCommand}</pre>
           </article>
           <article className="card code-block">
-            <h3>Upload Response</h3>
+            <h3>Resposta do Upload</h3>
             <pre>{mediaResponseText}</pre>
           </article>
         </div>
       </section>
 
       <section className="panel" id="generic-template-console">
-        <h2>Template Notifications</h2>
+        <h2>Notificações por Template</h2>
         <p>
-          Pick an approved template from your Meta account, fill variables, preview the message,
-          and send the notification.
+          Escolhe um template aprovado da tua conta Meta, preenche variáveis, pré-visualiza
+          a mensagem e envia a notificação.
         </p>
 
         <div className="template-toolbar">
           <input
             value={wabaId}
             onChange={(event) => setWabaId(event.target.value)}
-            placeholder="Optional: paste WABA ID"
+            placeholder="Opcional: colar WABA ID"
           />
           <button
             className="btn btn-secondary"
@@ -1132,14 +1436,14 @@ function App() {
             onClick={fetchMetaTemplates}
             disabled={metaTemplatesLoading}
           >
-            {metaTemplatesLoading ? "Loading..." : "Refresh Templates"}
+            {metaTemplatesLoading ? "A carregar..." : "Atualizar templates"}
           </button>
           <span className="status">{metaTemplatesStatus}</span>
         </div>
 
         <form className="api-form" onSubmit={sendGenericTemplate}>
           <label>
-            Recipient Number (E.164)
+            Número de destino (E.164)
             <input
               value={genericTo}
               onChange={(event) => setGenericTo(event.target.value)}
@@ -1148,7 +1452,7 @@ function App() {
           </label>
 
           <label>
-            Template (Approved)
+            Template (Aprovado)
             <select
               value={genericTemplateName}
               onChange={(event) => {
@@ -1159,7 +1463,7 @@ function App() {
                 }
               }}
             >
-              {metaTemplates.length === 0 ? <option value="">No templates loaded</option> : null}
+              {metaTemplates.length === 0 ? <option value="">Sem templates carregados</option> : null}
               {metaTemplates.map((template) => (
                 <option key={template.id || template.name} value={template.name}>
                   {template.name} ({template.language || "pt_PT"})
@@ -1169,7 +1473,7 @@ function App() {
           </label>
 
           <label>
-            Language Code
+            Código de idioma
             <input
               value={genericLanguage}
               onChange={(event) => setGenericLanguage(event.target.value)}
@@ -1178,14 +1482,14 @@ function App() {
           </label>
 
           <span className="status">
-            Required body vars: {requiredBodyVarCount} {requiredBodyVarCount > 0 ? `(indexes: ${requiredBodyIndexes.join(", ")})` : ""}
+            Variáveis obrigatórias no body: {requiredBodyVarCount} {requiredBodyVarCount > 0 ? `(índices: ${requiredBodyIndexes.join(", ")})` : ""}
           </span>
 
           {requiredBodyVarCount > 0 ? (
             <div className="template-var-grid">
               {requiredBodyIndexes.map((index) => (
                 <label key={index}>
-                  Variable {`{{${index}}}`}
+                  Variável {`{{${index}}}`}
                   <input
                     value={genericBodyVars[index] || ""}
                     onChange={(event) =>
@@ -1194,7 +1498,7 @@ function App() {
                         [index]: event.target.value
                       }))
                     }
-                    placeholder={`Value for {{${index}}}`}
+                    placeholder={`Valor para {{${index}}}`}
                   />
                 </label>
               ))}
@@ -1204,11 +1508,11 @@ function App() {
           {requiredBodyVarCount > 0 ? (
             <div className="preset-bar">
               <button type="button" className="btn btn-secondary" onClick={savePreset}>
-                💾 Save preset
+                💾 Guardar preset
               </button>
               {templatePresets[genericTemplateName] ? (
                 <button type="button" className="btn btn-secondary" onClick={loadPreset}>
-                  📂 Load preset
+                  📂 Carregar preset
                 </button>
               ) : null}
             </div>
@@ -1216,28 +1520,28 @@ function App() {
 
           <article className="template-chat-box">
             <header>
-              <strong>Template Text Box</strong>
-              <span>{genericTemplateName || "No template selected"}</span>
+              <strong>Caixa de Texto do Template</strong>
+              <span>{genericTemplateName || "Sem template selecionado"}</span>
             </header>
             <div className="template-thread">
               <article className="wa-msg in">
-                <p>Template selected: {genericTemplateName || "-"}</p>
+                <p>Template selecionado: {genericTemplateName || "-"}</p>
                 <time>{genericLanguage || "pt_PT"}</time>
               </article>
               <article className="wa-msg out">
-                <p>{selectedTemplatePreview || selectedTemplateBody || "No body text in selected template"}</p>
-                <time>preview</time>
+                <p>{selectedTemplatePreview || selectedTemplateBody || "Sem texto no body do template selecionado"}</p>
+                <time>pré-visualização</time>
               </article>
             </div>
           </article>
 
           {needsUrlButtonVariable ? (
             <label>
-              URL Button Variable (required)
+              Variável do Botão URL (obrigatória)
               <input
                 value={genericButtonUrlVariable}
                 onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
-                placeholder="dynamic URL variable"
+                placeholder="variável dinâmica de URL"
               />
             </label>
           ) : null}
@@ -1248,11 +1552,11 @@ function App() {
               checked={useSchedule}
               onChange={(e) => setUseSchedule(e.target.checked)}
             />
-            Schedule for later
+            Agendar para mais tarde
           </label>
           {useSchedule ? (
             <label>
-              Send at
+              Enviar em
               <input
                 type="datetime-local"
                 value={scheduleAt}
@@ -1267,27 +1571,27 @@ function App() {
               type="submit"
               disabled={genericLoading || (useSchedule && !scheduleAt)}
             >
-              {genericLoading ? "Sending..." : useSchedule ? "⏰ Schedule Message" : "Send Template Notification"}
+              {genericLoading ? "A enviar..." : useSchedule ? "⏰ Agendar mensagem" : "Enviar notificação"}
             </button>
-            <span className="status">Status: {genericStatus}</span>
+            <span className="status">Estado: {genericStatus}</span>
           </div>
         </form>
 
         <div className="code-grid">
           <article className="card code-block">
-            <h3>Backend Relay</h3>
+            <h3>Relay Backend</h3>
             <pre>{apiUrl("/api/templates/send-generic")}</pre>
           </article>
           <article className="card code-block">
-            <h3>Template Response</h3>
+            <h3>Resposta do Template</h3>
             <pre>{genericResponse}</pre>
           </article>
         </div>
 
         <section className="template-history">
-          <h3>Sent Template History</h3>
+          <h3>Histórico de Templates Enviados</h3>
           {templateHistory.length === 0 ? (
-            <p>No template notifications sent yet.</p>
+            <p>Ainda não foram enviadas notificações de template.</p>
           ) : (
             <div className="template-history-list">
               {templateHistory.map((item) => (
@@ -1296,9 +1600,9 @@ function App() {
                     <strong>{item.templateName}</strong>
                     <span>{item.time}</span>
                   </header>
-                  <p>To: {item.to}</p>
+                  <p>Para: {item.to}</p>
                   <p>{item.previewText}</p>
-                  <span className="status">Status: {item.status}</span>
+                  <span className="status">Estado: {item.status}</span>
                 </article>
               ))}
             </div>
@@ -1307,7 +1611,7 @@ function App() {
 
         {scheduledItems.length > 0 ? (
           <section className="template-history">
-            <h3>⏰ Scheduled Messages</h3>
+            <h3>⏰ Mensagens Agendadas</h3>
             <div className="template-history-list">
               {scheduledItems.map((item) => (
                 <article key={item.id} className="template-history-item">
@@ -1315,9 +1619,9 @@ function App() {
                     <strong>{item.templateName}</strong>
                     <span>{item.scheduledAt ? new Date(item.scheduledAt).toLocaleString() : ""}</span>
                   </header>
-                  <p>To: {item.to}</p>
+                  <p>Para: {item.to}</p>
                   <span className={`status ${item.status === "sent" ? "status-ok" : item.status === "failed" ? "status-err" : ""}`}>
-                    Status: {item.status}
+                    Estado: {item.status}
                   </span>
                 </article>
               ))}
@@ -1326,9 +1630,9 @@ function App() {
         ) : null}
 
         <details className="bulk-send-section">
-          <summary>📋 Bulk Send (CSV)</summary>
+          <summary>📋 Envio em Massa (CSV)</summary>
           <div className="bulk-send-body">
-            <p>One recipient per line: <code>phone,var1,var2,...</code> — uses current template &amp; language.</p>
+            <p>Um destinatário por linha: <code>telefone,var1,var2,...</code> - usa o template e idioma atuais.</p>
             <textarea
               className="bulk-csv"
               rows={5}
@@ -1344,11 +1648,11 @@ function App() {
                 disabled={bulkRunning || !bulkCsv.trim()}
               >
                 {bulkRunning
-                  ? `Sending ${bulkProgress.sent}/${bulkProgress.total}...`
-                  : "Send to All"}
+                  ? `A enviar ${bulkProgress.sent}/${bulkProgress.total}...`
+                  : "Enviar para todos"}
               </button>
               {bulkProgress.total > 0 && !bulkRunning ? (
-                <span className="status">{bulkProgress.sent}/{bulkProgress.total} sent</span>
+                <span className="status">{bulkProgress.sent}/{bulkProgress.total} enviados</span>
               ) : null}
             </div>
             {bulkRows.length > 0 ? (
@@ -1368,11 +1672,190 @@ function App() {
         </details>
       </section>
 
+      <section className="panel caderno-panel" id="caderno-pessoal">
+        <h2>📓 Caderno &amp; Calendário</h2>
+        <p>As tuas notas e compromissos locais, guardados no teu browser.</p>
+
+        <div className="caderno-layout">
+
+          {/* ── BLOCO DE NOTAS ── */}
+          <div className="caderno-notas">
+            <div className="caderno-capa">
+              <span>Bloco de Notas</span>
+            </div>
+
+            <div className="caderno-formulario">
+              <div className="nota-cores">
+                {(["amarelo", "verde", "azul", "rosa", "branco"] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-label={c}
+                    className={`cor-btn cor-${c}${noteColor === c ? " ativo" : ""}`}
+                    onClick={() => setNoteColor(c)}
+                  />
+                ))}
+              </div>
+              <input
+                className="nota-titulo-input"
+                placeholder="Título (opcional)"
+                value={noteTitle}
+                onChange={(e) => setNoteTitle(e.target.value)}
+              />
+              <textarea
+                className="nota-conteudo"
+                placeholder="Escreve aqui a tua nota..."
+                value={noteContent}
+                rows={3}
+                onChange={(e) => setNoteContent(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) addNote();
+                }}
+              />
+              <button type="button" className="btn btn-primary btn-sm" onClick={addNote}>
+                + Adicionar nota
+              </button>
+            </div>
+
+            <div className="notas-lista">
+              {personalNotes.length === 0 ? (
+                <p className="notas-vazio">Nenhuma nota ainda. Começa a escrever acima.</p>
+              ) : null}
+              {personalNotes.map((nota) => (
+                <div key={nota.id} className={`nota-card nota-cor-${nota.color}`}>
+                  <div className="nota-header">
+                    {editingNoteId === nota.id ? (
+                      <input
+                        className="nota-titulo-edit"
+                        value={nota.title}
+                        onChange={(e) => updateNote(nota.id, { title: e.target.value })}
+                      />
+                    ) : (
+                      <strong className="nota-titulo">{nota.title}</strong>
+                    )}
+                    <div className="nota-acoes">
+                      <button
+                        type="button"
+                        title={editingNoteId === nota.id ? "Guardar" : "Editar"}
+                        onClick={() => setEditingNoteId(editingNoteId === nota.id ? null : nota.id)}
+                      >
+                        {editingNoteId === nota.id ? "✓" : "✏️"}
+                      </button>
+                      <button type="button" title="Apagar" onClick={() => deleteNote(nota.id)}>
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+
+                  {editingNoteId === nota.id ? (
+                    <textarea
+                      className="nota-conteudo nota-conteudo-edit"
+                      value={nota.content}
+                      rows={4}
+                      onChange={(e) => updateNote(nota.id, { content: e.target.value })}
+                    />
+                  ) : (
+                    <p className="nota-texto">{nota.content}</p>
+                  )}
+                  <small className="nota-data">{nota.createdAt}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── CALENDÁRIO ── */}
+          <div className="caderno-calendario">
+            <div className="cal-cabecalho">
+              <button type="button" className="cal-nav" onClick={prevMonth}>‹</button>
+              <span className="cal-mes-label">
+                {new Date(calYear, calMonth).toLocaleDateString("pt-PT", { month: "long", year: "numeric" })}
+              </span>
+              <button type="button" className="cal-nav" onClick={nextMonth}>›</button>
+            </div>
+
+            <div className="cal-grid">
+              {["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((d) => (
+                <div key={d} className="cal-dow">{d}</div>
+              ))}
+              {calendarDays.map((cell, i) => {
+                if (!cell) return <div key={`empty-${i}`} className="cal-cell cal-vazio" />;
+                const hasEvents = calendarEvents.some((e) => e.date === cell.dateStr);
+                const isToday = cell.dateStr === todayStr;
+                const isSelected = cell.dateStr === selectedDate;
+                return (
+                  <button
+                    key={cell.dateStr}
+                    type="button"
+                    className={[
+                      "cal-cell",
+                      isToday ? "cal-hoje" : "",
+                      isSelected ? "cal-selecionado" : "",
+                      hasEvents ? "cal-tem-evento" : ""
+                    ].filter(Boolean).join(" ")}
+                    onClick={() => setSelectedDate(isSelected ? null : cell.dateStr)}
+                  >
+                    {cell.day}
+                    {hasEvents && <span className="cal-ponto" />}
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedDate ? (
+              <div className="cal-eventos">
+                <h4 className="cal-data-titulo">
+                  {new Date(`${selectedDate}T12:00:00`).toLocaleDateString("pt-PT", {
+                    weekday: "long", day: "numeric", month: "long"
+                  })}
+                </h4>
+                <div className="cal-novo-evento">
+                  <input
+                    placeholder="Título do evento"
+                    value={newEventTitle}
+                    onChange={(e) => setNewEventTitle(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addCalendarEvent()}
+                  />
+                  <input
+                    type="time"
+                    value={newEventTime}
+                    onChange={(e) => setNewEventTime(e.target.value)}
+                  />
+                  <button type="button" className="btn btn-primary btn-sm" onClick={addCalendarEvent}>
+                    +
+                  </button>
+                </div>
+                {eventsForSelectedDate.length === 0 ? (
+                  <p className="cal-sem-eventos">Sem eventos neste dia.</p>
+                ) : (
+                  <ul className="cal-lista-eventos">
+                    {eventsForSelectedDate.map((ev) => (
+                      <li key={ev.id} className="cal-evento-item">
+                        {ev.time && <span className="cal-evento-hora">{ev.time}</span>}
+                        <span className="cal-evento-titulo">{ev.title}</span>
+                        <button
+                          type="button"
+                          className="cal-remover"
+                          onClick={() => deleteCalendarEvent(ev.id)}
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <p className="cal-dica">Clica num dia para ver ou adicionar eventos.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
       <section className="panel cta" id="contact">
-        <h2>Ready to replace fragile automations?</h2>
-        <p>Deploy a frontend that your team fully controls and your clients can trust.</p>
+        <h2>Workspace pronto para o dia a dia da equipa?</h2>
+        <p>Organiza comunicação, notas e lembretes num só local.</p>
         <a className="btn btn-primary" href="mailto:hello@linke.pt">
-          Contact hello@linke.pt
+          Contactar hello@linke.pt
         </a>
       </section>
     </div>
