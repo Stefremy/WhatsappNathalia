@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { Client as NotionClient } from "@notionhq/client";
+import { Readable } from "stream";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -955,6 +956,61 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
     return res.status(sendRes.ok ? 200 : sendRes.status).json(sendBody);
   } catch (error) {
     return res.status(500).json({ error: "Failed to send media", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+// ── Radio stream proxy (CORS bypass) ──────────────────────────────────────
+// Routes audio streams through the backend so the browser doesn't hit CORS.
+const BLOCKED_HOSTS = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1$)/i;
+
+app.get("/api/radio/proxy", async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== "string") {
+    return res.status(400).json({ error: "Missing url parameter" });
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    return res.status(400).json({ error: "Only http/https URLs are allowed" });
+  }
+  try {
+    const parsed = new URL(url);
+    if (BLOCKED_HOSTS.test(parsed.hostname)) {
+      return res.status(400).json({ error: "Blocked URL" });
+    }
+  } catch {
+    return res.status(400).json({ error: "Invalid URL" });
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const upstream = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LinkeRadioPT/1.0)", "Icy-MetaData": "0" },
+      redirect: "follow"
+    });
+    clearTimeout(timeout);
+
+    if (!upstream.ok) {
+      return res.status(502).json({ error: `Upstream returned ${upstream.status}` });
+    }
+
+    const contentType = upstream.headers.get("content-type") || "audio/mpeg";
+    // Block obvious non-audio types
+    if (contentType.includes("text/html") || contentType.includes("application/json")) {
+      return res.status(400).json({ error: "URL does not point to an audio stream" });
+    }
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    const nodeStream = Readable.fromWeb(upstream.body);
+    nodeStream.pipe(res);
+    req.on("close", () => nodeStream.destroy());
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Failed to connect to stream", details: error?.message });
+    }
   }
 });
 

@@ -1,10 +1,26 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const docsFacts = [
   { label: "Version", value: "v23.0" },
   { label: "Method", value: "POST" },
   { label: "Endpoint", value: "/{Version}/{Phone-Number-ID}/messages" },
   { label: "Auth", value: "Bearer token" }
+];
+
+type RadioStation = {
+  name: string;
+  genre: string;
+  url: string;
+  emoji: string;
+};
+
+const radioStations: RadioStation[] = [
+  { name: "Antena 1", genre: "Cultura · Notícias", url: "https://streaming.rtp.pt/live/a1/a1", emoji: "📻" },
+  { name: "Antena 3", genre: "Rock · Alternativo", url: "https://streaming.rtp.pt/live/a3/a3", emoji: "🎸" },
+  { name: "Antena 2", genre: "Música Clássica", url: "https://streaming.rtp.pt/live/a2/a2", emoji: "🎻" },
+  { name: "TSF", genre: "Notícias · Debates", url: "https://icecast.tsf.pt/tsf-128k", emoji: "📰" },
+  { name: "Rádio Comercial", genre: "Pop · Hits", url: "https://mcr.iosys.pt/live/comercial", emoji: "🌟" },
+  { name: "RFM", genre: "Pop · Dance", url: "https://mcr.iosys.pt/live/rfm", emoji: "🎵" },
 ];
 
 const quickApps = [
@@ -243,6 +259,18 @@ function App() {
   // Feature 10: Media in composer
   const [composeMedia, setComposeMedia] = useState<File | null>(null);
   const [composeMediaLoading, setComposeMediaLoading] = useState(false);
+  // Radio player
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [radioPlaying, setRadioPlaying] = useState(false);
+  const [radioLoading, setRadioLoading] = useState(false);
+  const [radioError, setRadioError] = useState(false);
+  const [radioCurrentIdx, setRadioCurrentIdx] = useState(0);
+  const [radioVolume, setRadioVolume] = useState(() => {
+    try { return parseFloat(localStorage.getItem("wa_radio_volume") || "0.7"); } catch { return 0.7; }
+  });
+  const [radioDrawerOpen, setRadioDrawerOpen] = useState(false);
+  const [radioCustomUrl, setRadioCustomUrl] = useState("");
+
   const [contactNotes, setContactNotes] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem("wa_contact_notes") || "{}"); } catch { return {}; }
   });
@@ -425,11 +453,98 @@ function App() {
     setNewReminderAt("");
   }
 
+  // Radio: build stream URL through backend proxy to bypass CORS
+  function proxyStreamUrl(sourceUrl: string) {
+    if (!backendBaseUrl) return sourceUrl;
+    return `${backendBaseUrl}/api/radio/proxy?url=${encodeURIComponent(sourceUrl)}`;
+  }
+
+  function resolvedStreamUrl(idx: number) {
+    return proxyStreamUrl(radioStations[idx].url);
+  }
+
+  // Radio player controls
+  function radioToggle() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (radioPlaying) {
+      audio.pause();
+      setRadioPlaying(false);
+    } else {
+      setRadioError(false);
+      setRadioLoading(true);
+      audio.src = resolvedStreamUrl(radioCurrentIdx);
+      audio.load();
+      audio.play().catch(() => {
+        setRadioLoading(false);
+        setRadioError(true);
+        setRadioPlaying(false);
+      });
+    }
+  }
+
+  function radioChangeStation(idx: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setRadioCurrentIdx(idx);
+    setRadioError(false);
+    if (radioPlaying) {
+      audio.pause();
+      setRadioLoading(true);
+      audio.src = resolvedStreamUrl(idx);
+      audio.load();
+      audio.play().catch(() => {
+        setRadioLoading(false);
+        setRadioError(true);
+        setRadioPlaying(false);
+      });
+    }
+  }
+
+  function radioPlayCustomUrl() {
+    const trimmed = radioCustomUrl.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    setRadioError(false);
+    setRadioLoading(true);
+    audio.src = proxyStreamUrl(trimmed);
+    audio.load();
+    audio.play().catch(() => { setRadioLoading(false); setRadioError(true); setRadioPlaying(false); });
+    setRadioDrawerOpen(false);
+  }
+
+  function radioNext() {
+    radioChangeStation((radioCurrentIdx + 1) % radioStations.length);
+  }
+
+  function radioPrev() {
+    radioChangeStation((radioCurrentIdx - 1 + radioStations.length) % radioStations.length);
+  }
+
   function completeReminder(reminderId: string) {
     setTeamReminders((prev) =>
       prev.map((item) => (item.id === reminderId ? { ...item, done: true } : item))
     );
   }
+
+  // Radio: init audio element once
+  useEffect(() => {
+    const audio = new Audio();
+    audio.volume = radioVolume;
+    audio.addEventListener("playing", () => { setRadioLoading(false); setRadioPlaying(true); });
+    audio.addEventListener("waiting", () => setRadioLoading(true));
+    audio.addEventListener("pause", () => { setRadioPlaying(false); setRadioLoading(false); });
+    audio.addEventListener("error", () => { setRadioError(true); setRadioLoading(false); setRadioPlaying(false); });
+    audioRef.current = audio;
+    return () => { audio.pause(); audioRef.current = null; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Radio: sync volume
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = radioVolume;
+    try { localStorage.setItem("wa_radio_volume", String(radioVolume)); } catch {}
+  }, [radioVolume]);
 
   // Caderno pessoal
   function addNote() {
@@ -1011,7 +1126,10 @@ function App() {
     }
   }
 
+  const radioStation = radioStations[radioCurrentIdx];
+
   return (
+    <>
     <div className="page">
       <header className="hero">
         <div className="badge">www.linke.pt</div>
@@ -1859,6 +1977,77 @@ function App() {
         </a>
       </section>
     </div>
+
+    {/* ── Sticky Radio Bar ── */}
+    <div className={`radio-bar${radioDrawerOpen ? " radio-bar--open" : ""}`}>
+      {radioDrawerOpen && (
+        <div className="radio-drawer">
+          <p className="radio-drawer-titulo">Escolher Estação</p>
+          {radioStations.map((station, idx) => (
+            <button
+              key={station.url}
+              type="button"
+              className={`radio-station-item${idx === radioCurrentIdx ? " ativo" : ""}`}
+              onClick={() => { radioChangeStation(idx); setRadioDrawerOpen(false); }}
+            >
+              <span className="radio-station-emoji">{station.emoji}</span>
+              <span className="radio-station-info">
+                <strong>{station.name}</strong>
+                <small>{station.genre}</small>
+              </span>
+              {idx === radioCurrentIdx && radioPlaying && <span className="radio-equalizer">▶</span>}
+            </button>
+          ))}
+          <div className="radio-custom-url">
+            <input
+              type="url"
+              placeholder="URL de stream personalizado (https://...)" 
+              value={radioCustomUrl}
+              onChange={(e) => setRadioCustomUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && radioPlayCustomUrl()}
+            />
+            <button type="button" onClick={radioPlayCustomUrl} title="Ouvir URL">▶</button>
+          </div>
+        </div>
+      )}
+
+      <div className="radio-controls">
+        <button type="button" className="radio-btn radio-btn-sm" onClick={radioPrev} title="Anterior">⏮</button>
+
+        <button
+          type="button"
+          className={`radio-btn radio-btn-play${radioLoading ? " loading" : ""}`}
+          onClick={radioToggle}
+          title={radioPlaying ? "Pausar" : "Ouvir"}
+        >
+          {radioLoading ? "⏳" : radioPlaying ? "⏸" : "▶"}
+        </button>
+
+        <button type="button" className="radio-btn radio-btn-sm" onClick={radioNext} title="Próxima">⏭</button>
+
+        <div className="radio-info" onClick={() => setRadioDrawerOpen((o) => !o)}>
+          <span className="radio-emoji">{radioStation.emoji}</span>
+          <span className="radio-text">
+            <strong>{radioStation.name}</strong>
+            <small>{radioError ? "Erro – tenta outra estação" : radioPlaying ? "● AO VIVO" : radioStation.genre}</small>
+          </span>
+          <span className="radio-caret">{radioDrawerOpen ? "▾" : "▸"}</span>
+        </div>
+
+        <label className="radio-volume" title="Volume">
+          🔊
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.02}
+            value={radioVolume}
+            onChange={(e) => setRadioVolume(parseFloat(e.target.value))}
+          />
+        </label>
+      </div>
+    </div>
+    </>
   );
 }
 
