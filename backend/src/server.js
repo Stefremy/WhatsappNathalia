@@ -57,6 +57,24 @@ async function processScheduledMessages() {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: item.to, type: "template", template: templatePayload })
       });
+      const responseBody = await response.json().catch(() => ({}));
+      const messageId = responseBody?.messages?.[0]?.id || "";
+      await safeSupabaseLog(() =>
+        createSupabaseLogRow({
+          direction: "out",
+          channel: "template",
+          to: item.to,
+          messageText: Array.isArray(item.bodyVariables) ? item.bodyVariables.join(" | ") : "",
+          templateName: item.templateName,
+          status: response.ok ? "sent" : `failed_${response.status}`,
+          apiMessageId: messageId,
+          payload: {
+            source: "scheduler",
+            scheduledAt: item.scheduledAt,
+            response: responseBody
+          }
+        })
+      );
       item.status = response.ok ? "sent" : "failed";
     } catch {
       item.status = "failed";
@@ -83,6 +101,31 @@ const pgPool = pgEnabled
     ssl: { rejectUnauthorized: false }
   })
   : null;
+
+const PERSISTENCE_KEYS = [
+  "contacts",
+  "contact_notes",
+  "team_reminders",
+  "personal_notes",
+  "calendar_events"
+];
+
+async function ensurePersistentStateTable() {
+  if (!pgEnabled || !pgPool) {
+    return;
+  }
+
+  await pgPool.query(`
+    create table if not exists public.workspace_state (
+      key text primary key,
+      value jsonb not null default '{}'::jsonb,
+      updated_at timestamptz not null default now()
+    )
+  `);
+}
+
+// Best effort init. If it fails, API responses will show an explicit error.
+ensurePersistentStateTable().catch(() => {});
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -1128,6 +1171,113 @@ app.get("/api/logs", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch logs",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/state", async (_req, res) => {
+  const defaults = {
+    contacts: {},
+    contact_notes: {},
+    team_reminders: [],
+    personal_notes: [],
+    calendar_events: []
+  };
+
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return res.json({ data: defaults, warning: "persistent_state_not_configured" });
+  }
+
+  try {
+    if (supabaseEnabled && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("workspace_state")
+          .select("key,value")
+          .in("key", PERSISTENCE_KEYS);
+
+        if (!error) {
+          const next = { ...defaults };
+          for (const row of data || []) {
+            if (row?.key && Object.prototype.hasOwnProperty.call(next, row.key)) {
+              next[row.key] = row.value;
+            }
+          }
+          return res.json({ data: next });
+        }
+      } catch {}
+    }
+
+    if (pgEnabled && pgPool) {
+      await ensurePersistentStateTable();
+      const { rows } = await pgPool.query(
+        `select key, value from public.workspace_state where key = any($1::text[])`,
+        [PERSISTENCE_KEYS]
+      );
+      const next = { ...defaults };
+      for (const row of rows || []) {
+        if (row?.key && Object.prototype.hasOwnProperty.call(next, row.key)) {
+          next[row.key] = row.value;
+        }
+      }
+      return res.json({ data: next });
+    }
+
+    return res.status(500).json({ error: "Failed to fetch persistent state", details: "No reachable state backend" });
+  } catch (error) {
+    return res.json({
+      data: defaults,
+      warning: error instanceof Error ? error.message : "persistent_state_unavailable"
+    });
+  }
+});
+
+app.post("/api/state", async (req, res) => {
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return res.status(400).json({ error: "persistent_state_not_configured" });
+  }
+
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  const updates = PERSISTENCE_KEYS
+    .filter((key) => Object.prototype.hasOwnProperty.call(body, key))
+    .map((key) => ({ key, value: body[key] }));
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: "No valid state keys supplied" });
+  }
+
+  try {
+    if (supabaseEnabled && supabase) {
+      try {
+        const payload = updates.map((item) => ({ key: item.key, value: item.value ?? null }));
+        const { error } = await supabase
+          .from("workspace_state")
+          .upsert(payload, { onConflict: "key" });
+
+        if (!error) {
+          return res.json({ ok: true, updated: updates.length, via: "supabase" });
+        }
+      } catch {}
+    }
+
+    if (pgEnabled && pgPool) {
+      await ensurePersistentStateTable();
+      for (const item of updates) {
+        await pgPool.query(
+          `insert into public.workspace_state (key, value, updated_at)
+          values ($1, $2::jsonb, now())
+          on conflict (key) do update set value = excluded.value, updated_at = now()`,
+          [item.key, JSON.stringify(item.value ?? null)]
+        );
+      }
+      return res.json({ ok: true, updated: updates.length, via: "postgres" });
+    }
+
+    return res.status(500).json({ error: "Failed to persist state", details: "No reachable state backend" });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to persist state",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
