@@ -320,6 +320,10 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [newEventTitle, setNewEventTitle] = useState("");
   const [newEventTime, setNewEventTime] = useState("");
+  const [calcDisplay, setCalcDisplay] = useState("0");
+  const [calcStored, setCalcStored] = useState<number | null>(null);
+  const [calcOperator, setCalcOperator] = useState<"+" | "-" | "*" | "/" | null>(null);
+  const [calcWaitingNext, setCalcWaitingNext] = useState(false);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeConversationId) || null,
@@ -407,6 +411,13 @@ function App() {
         : [],
     [selectedDate, calendarEvents]
   );
+
+  const calcExpression = useMemo(() => {
+    if (calcStored === null || calcOperator === null) {
+      return "";
+    }
+    return `${formatCalcValue(calcStored)} ${calcOperator}`;
+  }, [calcOperator, calcStored]);
 
   useEffect(() => {
     setGenericBodyVars((current) => {
@@ -618,6 +629,115 @@ function App() {
   function nextMonth() {
     if (calMonth === 11) { setCalMonth(0); setCalYear((y) => y + 1); }
     else setCalMonth((m) => m + 1);
+  }
+
+  function formatCalcValue(value: number) {
+    if (!Number.isFinite(value)) return "Erro";
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(8)));
+  }
+
+  function applyCalcOperation(a: number, b: number, op: "+" | "-" | "*" | "/") {
+    switch (op) {
+      case "+": return a + b;
+      case "-": return a - b;
+      case "*": return a * b;
+      case "/": return b === 0 ? NaN : a / b;
+      default: return b;
+    }
+  }
+
+  function inputCalcDigit(digit: string) {
+    if (calcDisplay === "Erro") {
+      setCalcDisplay(digit);
+      setCalcWaitingNext(false);
+      return;
+    }
+
+    if (calcWaitingNext) {
+      setCalcDisplay(digit);
+      setCalcWaitingNext(false);
+      return;
+    }
+
+    setCalcDisplay((prev) => (prev === "0" ? digit : `${prev}${digit}`));
+  }
+
+  function inputCalcDecimal() {
+    if (calcDisplay === "Erro") {
+      setCalcDisplay("0.");
+      setCalcWaitingNext(false);
+      return;
+    }
+
+    if (calcWaitingNext) {
+      setCalcDisplay("0.");
+      setCalcWaitingNext(false);
+      return;
+    }
+
+    if (!calcDisplay.includes(".")) {
+      setCalcDisplay((prev) => `${prev}.`);
+    }
+  }
+
+  function clearCalculator() {
+    setCalcDisplay("0");
+    setCalcStored(null);
+    setCalcOperator(null);
+    setCalcWaitingNext(false);
+  }
+
+  function toggleCalcSign() {
+    if (calcDisplay === "0" || calcDisplay === "Erro") return;
+    setCalcDisplay((prev) => (prev.startsWith("-") ? prev.slice(1) : `-${prev}`));
+  }
+
+  function applyCalcPercent() {
+    if (calcDisplay === "Erro") return;
+    const current = Number(calcDisplay);
+    if (!Number.isFinite(current)) {
+      setCalcDisplay("Erro");
+      return;
+    }
+    setCalcDisplay(formatCalcValue(current / 100));
+  }
+
+  function chooseCalcOperator(nextOp: "+" | "-" | "*" | "/") {
+    const current = Number(calcDisplay);
+    if (!Number.isFinite(current)) {
+      setCalcDisplay("Erro");
+      return;
+    }
+
+    if (calcStored === null || calcOperator === null || calcWaitingNext) {
+      setCalcStored(current);
+      setCalcOperator(nextOp);
+      setCalcWaitingNext(true);
+      return;
+    }
+
+    const result = applyCalcOperation(calcStored, current, calcOperator);
+    const formatted = formatCalcValue(result);
+    setCalcDisplay(formatted);
+    setCalcStored(Number.isFinite(result) ? result : null);
+    setCalcOperator(nextOp);
+    setCalcWaitingNext(true);
+  }
+
+  function evaluateCalculator() {
+    if (calcOperator === null || calcStored === null) return;
+    const current = Number(calcDisplay);
+    if (!Number.isFinite(current)) {
+      setCalcDisplay("Erro");
+      return;
+    }
+
+    const result = applyCalcOperation(calcStored, current, calcOperator);
+    const formatted = formatCalcValue(result);
+    setCalcDisplay(formatted);
+    setCalcStored(Number.isFinite(result) ? result : null);
+    setCalcOperator(null);
+    setCalcWaitingNext(true);
   }
 
   // Feature 2: Template var presets
@@ -2230,6 +2350,42 @@ function App() {
             ) : (
               <p className="cal-dica">Clica num dia para ver ou adicionar eventos.</p>
             )}
+
+            <div className="cute-calculator" aria-label="Calculadora">
+              <div className="cute-calculator-header">
+                <span>🧮 Mini Calculadora</span>
+                <small>contas rápidas</small>
+              </div>
+              <div className="cute-calculator-display-wrap">
+                <div className="cute-calculator-expression">{calcExpression || " "}</div>
+                <div className="cute-calculator-display">{calcDisplay}</div>
+              </div>
+              <div className="cute-calculator-grid">
+                <button type="button" className="calc-btn calc-func" onClick={clearCalculator}>AC</button>
+                <button type="button" className="calc-btn calc-func" onClick={toggleCalcSign}>+/-</button>
+                <button type="button" className="calc-btn calc-func" onClick={applyCalcPercent}>%</button>
+                <button type="button" className="calc-btn calc-op" onClick={() => chooseCalcOperator("/")}>÷</button>
+
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("7")}>7</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("8")}>8</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("9")}>9</button>
+                <button type="button" className="calc-btn calc-op" onClick={() => chooseCalcOperator("*")}>×</button>
+
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("4")}>4</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("5")}>5</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("6")}>6</button>
+                <button type="button" className="calc-btn calc-op" onClick={() => chooseCalcOperator("-")}>-</button>
+
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("1")}>1</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("2")}>2</button>
+                <button type="button" className="calc-btn" onClick={() => inputCalcDigit("3")}>3</button>
+                <button type="button" className="calc-btn calc-op" onClick={() => chooseCalcOperator("+")}>+</button>
+
+                <button type="button" className="calc-btn calc-zero" onClick={() => inputCalcDigit("0")}>0</button>
+                <button type="button" className="calc-btn" onClick={inputCalcDecimal}>.</button>
+                <button type="button" className="calc-btn calc-eq" onClick={evaluateCalculator}>=</button>
+              </div>
+            </div>
           </div>
         </div>
       </section>

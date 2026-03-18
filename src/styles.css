@@ -1650,6 +1650,197 @@ p {
   opacity: 0.65;
 }
 
+/* ── Mini Calculadora (cute / green glass) ── */
+.cute-calculator {
+  position: relative;
+  margin-top: 0.4rem;
+  border-radius: 22px;
+  padding: 0.95rem;
+  background: linear-gradient(160deg, rgba(240, 255, 244, 0.82), rgba(165, 241, 190, 0.36) 48%, rgba(86, 193, 132, 0.5));
+  border: 1px solid rgba(245, 255, 247, 0.62);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 22px 35px rgba(24, 66, 42, 0.22);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.cute-calculator::before,
+.cute-calculator::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.cute-calculator::before {
+  width: 180px;
+  height: 180px;
+  left: -56px;
+  top: -78px;
+  background: radial-gradient(circle, rgba(158, 244, 185, 0.46), rgba(158, 244, 185, 0));
+}
+
+.cute-calculator::after {
+  width: 150px;
+  height: 150px;
+  right: -52px;
+  bottom: -74px;
+  background: radial-gradient(circle, rgba(41, 156, 95, 0.42), rgba(41, 156, 95, 0));
+}
+
+.cute-calculator > * {
+  position: relative;
+  z-index: 1;
+}
+
+.cute-calculator-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.cute-calculator-header span {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  font-weight: 700;
+  color: #1d5536;
+}
+
+.cute-calculator-header small {
+  color: rgba(20, 60, 41, 0.72);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cute-calculator-display-wrap {
+  border-radius: 14px;
+  margin-bottom: 0.72rem;
+  padding: 0.42rem 0.72rem 0.52rem;
+  background: linear-gradient(170deg, rgba(246, 255, 248, 0.95), rgba(236, 252, 241, 0.78));
+  border: 1px solid rgba(229, 252, 237, 0.95);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 8px 15px rgba(20, 77, 48, 0.14);
+}
+
+.cute-calculator-expression {
+  min-height: 18px;
+  text-align: right;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.78rem;
+  color: rgba(22, 72, 46, 0.55);
+  letter-spacing: 0.01em;
+}
+
+.cute-calculator-display {
+  min-height: 42px;
+  color: #144029;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-align: right;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cute-calculator-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.calc-btn {
+  appearance: none;
+  border: 1px solid rgba(244, 255, 247, 0.9);
+  border-radius: 12px;
+  min-height: 44px;
+  font-family: "Manrope", sans-serif;
+  font-size: 1.01rem;
+  font-weight: 700;
+  color: #1a5134;
+  background: linear-gradient(155deg, rgba(248, 255, 250, 0.86), rgba(212, 244, 223, 0.75));
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 8px 14px rgba(23, 78, 49, 0.16);
+  transition: transform 0.11s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.calc-btn:hover {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.92), rgba(197, 241, 213, 0.8));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 10px 18px rgba(24, 79, 50, 0.2);
+}
+
+.calc-btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.calc-btn.calc-func {
+  font-size: 0.92rem;
+  color: #246344;
+  background: linear-gradient(155deg, rgba(236, 253, 242, 0.95), rgba(200, 240, 214, 0.82));
+}
+
+.calc-btn.calc-op {
+  color: #effff5;
+  border-color: rgba(124, 221, 164, 0.86);
+  background: linear-gradient(160deg, rgba(75, 181, 121, 0.9), rgba(43, 139, 88, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(209, 255, 227, 0.4),
+    0 10px 16px rgba(25, 100, 60, 0.28);
+}
+
+.calc-btn.calc-eq {
+  color: #f4fffa;
+  border-color: rgba(111, 235, 171, 0.85);
+  background: linear-gradient(165deg, rgba(61, 203, 131, 0.98), rgba(26, 155, 94, 0.98));
+}
+
+.calc-btn.calc-zero {
+  grid-column: span 2;
+}
+
+@media (max-width: 900px) {
+  .cute-calculator {
+    padding: 0.82rem;
+    border-radius: 18px;
+  }
+
+  .cute-calculator-display {
+    font-size: 1.35rem;
+    min-height: 38px;
+  }
+
+  .calc-btn {
+    min-height: 40px;
+    border-radius: 10px;
+  }
+}
+
+@media (max-width: 560px) {
+  .cute-calculator-grid {
+    gap: 0.42rem;
+  }
+
+  .cute-calculator-header span {
+    font-size: 0.76rem;
+  }
+
+  .cute-calculator-header small {
+    font-size: 0.62rem;
+  }
+}
+
 /* ──────────────────────────────────────────────────────────
    RÁDIO — sticky bottom bar
    ────────────────────────────────────────────────────────── */
