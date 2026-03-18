@@ -110,6 +110,9 @@ const PERSISTENCE_KEYS = [
   "calendar_events"
 ];
 
+const STATE_FALLBACK_CHANNEL = "workspace_state_snapshot";
+const STATE_FALLBACK_TO = "workspace";
+
 async function ensurePersistentStateTable() {
   if (!pgEnabled || !pgPool) {
     return;
@@ -122,6 +125,234 @@ async function ensurePersistentStateTable() {
       updated_at timestamptz not null default now()
     )
   `);
+}
+
+function defaultWorkspaceState() {
+  return {
+    contacts: {},
+    contact_notes: {},
+    team_reminders: [],
+    personal_notes: [],
+    calendar_events: []
+  };
+}
+
+function normalizeWorkspaceState(input) {
+  const defaults = defaultWorkspaceState();
+  const source = input && typeof input === "object" ? input : {};
+  const next = { ...defaults };
+
+  for (const key of PERSISTENCE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      next[key] = source[key];
+    }
+  }
+
+  if (!next.contacts || typeof next.contacts !== "object" || Array.isArray(next.contacts)) {
+    next.contacts = {};
+  }
+  if (!next.contact_notes || typeof next.contact_notes !== "object" || Array.isArray(next.contact_notes)) {
+    next.contact_notes = {};
+  }
+  if (!Array.isArray(next.team_reminders)) {
+    next.team_reminders = [];
+  }
+  if (!Array.isArray(next.personal_notes)) {
+    next.personal_notes = [];
+  }
+  if (!Array.isArray(next.calendar_events)) {
+    next.calendar_events = [];
+  }
+
+  return next;
+}
+
+function normalizeContactsMap(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+
+  const entries = Object.entries(input)
+    .map(([phone, name]) => [String(phone || "").trim(), String(name || "").trim()])
+    .filter(([phone, name]) => phone.length > 0 && name.length > 0);
+
+  return Object.fromEntries(entries);
+}
+
+function contactsMapFromRows(rows) {
+  if (!Array.isArray(rows)) {
+    return {};
+  }
+
+  const entries = rows
+    .map((row) => [String(row?.phone || "").trim(), String(row?.name || "").trim()])
+    .filter(([phone, name]) => phone.length > 0 && name.length > 0);
+
+  return Object.fromEntries(entries);
+}
+
+async function loadContactsFromDedicatedTable() {
+  if (supabaseEnabled && supabase) {
+    const { data, error } = await supabase.from("workspace_contacts").select("phone,name");
+    if (error) {
+      throw new Error(error.message || "Failed to read workspace_contacts");
+    }
+    return contactsMapFromRows(data || []);
+  }
+
+  if (pgEnabled && pgPool) {
+    const { rows } = await pgPool.query(`select phone, name from public.workspace_contacts`);
+    return contactsMapFromRows(rows || []);
+  }
+
+  return {};
+}
+
+async function syncContactsToDedicatedTable(contactsMapInput) {
+  const contactsMap = normalizeContactsMap(contactsMapInput);
+  const rows = Object.entries(contactsMap).map(([phone, name]) => ({ phone, name }));
+
+  if (supabaseEnabled && supabase) {
+    if (rows.length > 0) {
+      const { error: upsertError } = await supabase
+        .from("workspace_contacts")
+        .upsert(rows, { onConflict: "phone" });
+      if (upsertError) {
+        throw new Error(upsertError.message || "Failed to upsert workspace_contacts");
+      }
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from("workspace_contacts")
+      .select("phone");
+    if (existingError) {
+      throw new Error(existingError.message || "Failed to list existing workspace_contacts");
+    }
+
+    const desiredPhones = new Set(Object.keys(contactsMap));
+    const phonesToDelete = (existing || [])
+      .map((row) => String(row?.phone || "").trim())
+      .filter((phone) => phone.length > 0 && !desiredPhones.has(phone));
+
+    if (phonesToDelete.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("workspace_contacts")
+        .delete()
+        .in("phone", phonesToDelete);
+      if (deleteError) {
+        throw new Error(deleteError.message || "Failed to delete stale workspace_contacts rows");
+      }
+    }
+    return;
+  }
+
+  if (pgEnabled && pgPool) {
+    await pgPool.query(`
+      create table if not exists public.workspace_contacts (
+        id bigserial primary key,
+        phone text not null unique,
+        name text not null,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      )
+    `);
+
+    for (const [phone, name] of Object.entries(contactsMap)) {
+      await pgPool.query(
+        `insert into public.workspace_contacts (phone, name, updated_at)
+        values ($1, $2, now())
+        on conflict (phone) do update set name = excluded.name, updated_at = now()`,
+        [phone, name]
+      );
+    }
+
+    const desiredPhones = Object.keys(contactsMap);
+    if (desiredPhones.length === 0) {
+      await pgPool.query(`delete from public.workspace_contacts`);
+    } else {
+      await pgPool.query(
+        `delete from public.workspace_contacts where not (phone = any($1::text[]))`,
+        [desiredPhones]
+      );
+    }
+  }
+}
+
+async function getWorkspaceStateFromLogsFallback() {
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return null;
+  }
+
+  if (supabaseEnabled && supabase) {
+    const { data, error } = await supabase
+      .from("whatsapp_logs")
+      .select("payload")
+      .eq("channel", STATE_FALLBACK_CHANNEL)
+      .eq("to_number", STATE_FALLBACK_TO)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw new Error(error.message || "Failed to read fallback workspace state");
+    }
+
+    const payload = Array.isArray(data) && data.length > 0 ? data[0]?.payload : null;
+    const snapshot = payload && typeof payload === "object" ? payload.state : null;
+    return normalizeWorkspaceState(snapshot);
+  }
+
+  const { rows } = await pgPool.query(
+    `select payload
+    from public.whatsapp_logs
+    where channel = $1 and to_number = $2
+    order by created_at desc
+    limit 1`,
+    [STATE_FALLBACK_CHANNEL, STATE_FALLBACK_TO]
+  );
+
+  const payload = Array.isArray(rows) && rows.length > 0 ? rows[0]?.payload : null;
+  const snapshot = payload && typeof payload === "object" ? payload.state : null;
+  return normalizeWorkspaceState(snapshot);
+}
+
+async function writeWorkspaceStateToLogsFallback(nextState) {
+  const state = normalizeWorkspaceState(nextState);
+
+  if (supabaseEnabled && supabase) {
+    const { error } = await supabase.from("whatsapp_logs").insert({
+      direction: "system",
+      channel: STATE_FALLBACK_CHANNEL,
+      to_number: STATE_FALLBACK_TO,
+      contact_name: null,
+      message_text: null,
+      template_name: null,
+      status: "snapshot",
+      api_message_id: null,
+      payload: { state }
+    });
+
+    if (error) {
+      throw new Error(error.message || "Failed to write fallback workspace state");
+    }
+    return;
+  }
+
+  await pgPool.query(
+    `insert into public.whatsapp_logs
+    (direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload)
+    values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+    [
+      "system",
+      STATE_FALLBACK_CHANNEL,
+      STATE_FALLBACK_TO,
+      null,
+      null,
+      null,
+      "snapshot",
+      null,
+      JSON.stringify({ state })
+    ]
+  );
 }
 
 // Best effort init. If it fails, API responses will show an explicit error.
@@ -1150,6 +1381,7 @@ app.get("/api/logs", async (req, res) => {
       const { data, error } = await supabase
         .from("whatsapp_logs")
         .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id")
+        .neq("channel", STATE_FALLBACK_CHANNEL)
         .order("created_at", { ascending: false })
         .limit(limit);
 
@@ -1163,9 +1395,10 @@ app.get("/api/logs", async (req, res) => {
     const { rows } = await pgPool.query(
       `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id
       from public.whatsapp_logs
+      where channel is distinct from $2
       order by created_at desc
       limit $1`,
-      [limit]
+      [limit, STATE_FALLBACK_CHANNEL]
     );
     return res.json({ data: rows || [] });
   } catch (error) {
@@ -1177,13 +1410,7 @@ app.get("/api/logs", async (req, res) => {
 });
 
 app.get("/api/state", async (_req, res) => {
-  const defaults = {
-    contacts: {},
-    contact_notes: {},
-    team_reminders: [],
-    personal_notes: [],
-    calendar_events: []
-  };
+  const defaults = defaultWorkspaceState();
 
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
     return res.json({ data: defaults, warning: "persistent_state_not_configured" });
@@ -1204,7 +1431,22 @@ app.get("/api/state", async (_req, res) => {
               next[row.key] = row.value;
             }
           }
+
+          try {
+            const contacts = await loadContactsFromDedicatedTable();
+            if (Object.keys(contacts).length > 0) {
+              next.contacts = contacts;
+            }
+          } catch {}
+
           return res.json({ data: next });
+        }
+      } catch {}
+
+      try {
+        const snapshot = await getWorkspaceStateFromLogsFallback();
+        if (snapshot) {
+          return res.json({ data: snapshot, warning: "workspace_state_table_unavailable_using_log_fallback" });
         }
       } catch {}
     }
@@ -1221,6 +1463,14 @@ app.get("/api/state", async (_req, res) => {
           next[row.key] = row.value;
         }
       }
+
+      try {
+        const contacts = await loadContactsFromDedicatedTable();
+        if (Object.keys(contacts).length > 0) {
+          next.contacts = contacts;
+        }
+      } catch {}
+
       return res.json({ data: next });
     }
 
@@ -1242,6 +1492,7 @@ app.post("/api/state", async (req, res) => {
   const updates = PERSISTENCE_KEYS
     .filter((key) => Object.prototype.hasOwnProperty.call(body, key))
     .map((key) => ({ key, value: body[key] }));
+  const contactsUpdate = updates.find((item) => item.key === "contacts");
 
   if (updates.length === 0) {
     return res.status(400).json({ error: "No valid state keys supplied" });
@@ -1256,8 +1507,30 @@ app.post("/api/state", async (req, res) => {
           .upsert(payload, { onConflict: "key" });
 
         if (!error) {
+          if (contactsUpdate) {
+            try {
+              await syncContactsToDedicatedTable(contactsUpdate.value);
+            } catch {}
+          }
           return res.json({ ok: true, updated: updates.length, via: "supabase" });
         }
+      } catch {}
+
+      try {
+        const existing = (await getWorkspaceStateFromLogsFallback()) || defaultWorkspaceState();
+        const next = { ...existing };
+        for (const item of updates) {
+          next[item.key] = item.value ?? null;
+        }
+        await writeWorkspaceStateToLogsFallback(next);
+
+        if (contactsUpdate) {
+          try {
+            await syncContactsToDedicatedTable(contactsUpdate.value);
+          } catch {}
+        }
+
+        return res.json({ ok: true, updated: updates.length, via: "supabase_logs_fallback", warning: "workspace_state_table_unavailable_using_log_fallback" });
       } catch {}
     }
 
@@ -1271,6 +1544,13 @@ app.post("/api/state", async (req, res) => {
           [item.key, JSON.stringify(item.value ?? null)]
         );
       }
+
+      if (contactsUpdate) {
+        try {
+          await syncContactsToDedicatedTable(contactsUpdate.value);
+        } catch {}
+      }
+
       return res.json({ ok: true, updated: updates.length, via: "postgres" });
     }
 

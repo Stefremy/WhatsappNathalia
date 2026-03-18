@@ -2057,7 +2057,7 @@ function App() {
 
       <section className="panel caderno-panel" id="caderno-pessoal">
         <h2>📓 Caderno &amp; Calendário</h2>
-        <p>As tuas notas e compromissos locais, guardados no teu browser.</p>
+        <p>As tuas notas e compromissos são guardados automaticamente no browser e sincronizados na cloud quando o backend está ativo.</p>
 
         <div className="caderno-layout">
 
