@@ -13,10 +13,12 @@
   },
   "dependencies": {
     "@notionhq/client": "^5.13.0",
+    "@supabase/supabase-js": "^2.99.2",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "multer": "^2.1.1",
+    "pg": "^8.20.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

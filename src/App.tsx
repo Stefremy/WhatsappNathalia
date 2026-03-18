@@ -111,6 +111,19 @@ type PersonalNote = {
   createdAt: string;
 };
 
+type SharedLogItem = {
+  id: number;
+  created_at: string;
+  direction?: string;
+  channel?: string;
+  to_number?: string;
+  contact_name?: string | null;
+  message_text?: string | null;
+  template_name?: string | null;
+  status?: string | null;
+  api_message_id?: string | null;
+};
+
 type CalendarEvent = {
   id: string;
   date: string;
@@ -214,7 +227,9 @@ function App() {
   const [genericLoading, setGenericLoading] = useState(false);
   const [genericStatus, setGenericStatus] = useState("Inativo");
   const [genericResponse, setGenericResponse] = useState("Ainda não foi enviado nenhum template.");
-  const [templateHistory, setTemplateHistory] = useState<TemplateHistoryItem[]>([]);
+  const [templateHistory, setTemplateHistory] = useState<TemplateHistoryItem[]>(() => {
+    try { return JSON.parse(localStorage.getItem("wa_template_history") || "[]") as TemplateHistoryItem[]; } catch { return []; }
+  });
   const [metaTemplates, setMetaTemplates] = useState<MetaTemplate[]>([]);
   const [metaTemplatesLoading, setMetaTemplatesLoading] = useState(false);
   const [metaTemplatesStatus, setMetaTemplatesStatus] = useState("Por carregar");
@@ -228,6 +243,10 @@ function App() {
     } catch { return ""; }
   });
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
+  const [sharedLogs, setSharedLogs] = useState<SharedLogItem[]>([]);
+  const [sharedLogsLoading, setSharedLogsLoading] = useState(false);
+  const [sharedLogsError, setSharedLogsError] = useState("");
 
   // Feature 1: Contact book
   const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
@@ -781,6 +800,11 @@ function App() {
     try { localStorage.setItem("wa_template_presets", JSON.stringify(templatePresets)); } catch {}
   }, [templatePresets]);
 
+  // Persist template history
+  useEffect(() => {
+    try { localStorage.setItem("wa_template_history", JSON.stringify(templateHistory)); } catch {}
+  }, [templateHistory]);
+
   // Persist team notes/reminders
   useEffect(() => {
     try { localStorage.setItem("wa_contact_notes", JSON.stringify(contactNotes)); } catch {}
@@ -847,6 +871,93 @@ function App() {
         c.phone.includes(contactSearch.trim())
     );
   }, [conversations, contactSearch, savedContacts]);
+
+  const sentHistory = useMemo(() => {
+    const chatEntries = conversations.flatMap((contact) =>
+      contact.messages
+        .filter((message) => message.direction === "out")
+        .map((message) => ({
+          id: message.id,
+          channel: "chat",
+          to: `${resolveContactName(contact.phone, savedContacts)} (${contact.phone})`,
+          content: message.text,
+          status: message.deliveryStatus || "sent",
+          time: message.time,
+          ts: Number(String(message.id || "").split("-")[1] || 0)
+        }))
+    );
+
+    const templateEntries = templateHistory.map((item) => ({
+      id: item.id,
+      channel: "template",
+      to: item.to,
+      content: item.previewText,
+      status: item.status,
+      time: item.time,
+      ts: Number(String(item.id || "").split("-")[1] || 0)
+    }));
+
+    return [...chatEntries, ...templateEntries].sort((a, b) => b.ts - a.ts);
+  }, [conversations, savedContacts, templateHistory]);
+
+  const displayedHistory = useMemo(() => {
+    if (sharedLogs.length > 0) {
+      return sharedLogs.map((item) => ({
+        id: String(item.id),
+        channel: String(item.channel || "chat"),
+        to: item.contact_name
+          ? `${item.contact_name} (${String(item.to_number || "")})`
+          : String(item.to_number || ""),
+        content: String(item.message_text || item.template_name || "[sem conteúdo]"),
+        status: String(item.status || "sent"),
+        time: new Date(item.created_at).toLocaleString(),
+        ts: new Date(item.created_at).getTime()
+      }));
+    }
+
+    return sentHistory;
+  }, [sentHistory, sharedLogs]);
+
+  useEffect(() => {
+    if (!historyPanelOpen) {
+      return;
+    }
+
+    let cancelled = false;
+    setSharedLogsLoading(true);
+    setSharedLogsError("");
+
+    fetch(apiUrl("/api/logs?limit=200"))
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (Array.isArray(data?.data)) {
+          setSharedLogs(data.data as SharedLogItem[]);
+          if (data?.warning === "supabase_not_configured") {
+            setSharedLogsError("Supabase ainda não está configurado no backend. A mostrar histórico local.");
+          }
+        } else {
+          setSharedLogs([]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSharedLogsError("Não foi possível carregar histórico partilhado. A mostrar histórico local.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSharedLogsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [historyPanelOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -1181,6 +1292,48 @@ function App() {
           Baseado na documentação oficial: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/messages</strong>
           com autenticação Bearer e payload JSON, encaminhado pelo backend da equipa.
         </p>
+
+        <div className="sent-history-toolbar">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setHistoryPanelOpen((value) => !value)}
+          >
+            {historyPanelOpen ? "Fechar histórico" : "Histórico"}
+          </button>
+          <span className="status">
+            {displayedHistory.length} mensagens enviadas
+          </span>
+        </div>
+
+        {historyPanelOpen ? (
+          <section className="sent-history-panel">
+            <h3>Histórico de Mensagens Enviadas</h3>
+            {sharedLogsLoading ? (
+              <p>A carregar histórico partilhado...</p>
+            ) : null}
+            {sharedLogsError ? (
+              <p className="status">{sharedLogsError}</p>
+            ) : null}
+            {displayedHistory.length === 0 ? (
+              <p>Ainda não existem mensagens enviadas no histórico.</p>
+            ) : (
+              <div className="sent-history-list">
+                {displayedHistory.map((item) => (
+                  <article key={`${item.channel}-${item.id}`} className="sent-history-item">
+                    <header>
+                      <strong>{item.channel === "template" ? "Template" : "Mensagem"}</strong>
+                      <span>{item.time}</span>
+                    </header>
+                    <p>Para: {item.to}</p>
+                    <p>{item.content}</p>
+                    <span className="status">Estado: {item.status}</span>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : null}
 
         <div className="wa-console">
           <aside className="wa-sidebar">

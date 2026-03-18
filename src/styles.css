@@ -379,6 +379,53 @@ p {
   font-size: 0.79rem;
   line-height: 1.45;
 }
+.sent-history-toolbar {
+  margin: 0.9rem 0 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+.sent-history-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 0.9rem;
+  margin-bottom: 1rem;
+}
+.sent-history-panel h3 {
+  margin: 0 0 0.7rem;
+  font-size: 0.95rem;
+}
+.sent-history-list {
+  max-height: 280px;
+  overflow: auto;
+  display: grid;
+  gap: 0.55rem;
+}
+.sent-history-item {
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.6rem;
+  display: grid;
+  gap: 0.25rem;
+}
+.sent-history-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.sent-history-item header span {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.sent-history-item p {
+  margin: 0;
+  font-size: 0.84rem;
+  word-break: break-word;
+}
 
 .wa-console {
   display: grid;

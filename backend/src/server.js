@@ -3,6 +3,8 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { Client as NotionClient } from "@notionhq/client";
+import { createClient } from "@supabase/supabase-js";
+import { Pool } from "pg";
 import https from "https";
 import http from "http";
 
@@ -67,6 +69,20 @@ setInterval(processScheduledMessages, 15000);
 
 const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
 const notionEnabled = String(process.env.NOTION_ENABLED || "false").toLowerCase() === "true";
+const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
+const supabaseServiceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const supabaseEnabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
+const supabase = supabaseEnabled
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { persistSession: false } })
+  : null;
+const supabaseDbUrl = String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "").trim();
+const pgEnabled = Boolean(supabaseDbUrl);
+const pgPool = pgEnabled
+  ? new Pool({
+    connectionString: supabaseDbUrl,
+    ssl: { rejectUnauthorized: false }
+  })
+  : null;
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -102,6 +118,74 @@ async function safeNotionLog(logFn) {
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : "Notion logging failed";
+  }
+}
+
+async function safeSupabaseLog(logFn) {
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return null;
+  }
+
+  try {
+    await logFn();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Supabase logging failed";
+  }
+}
+
+async function createSupabaseLogRow({
+  direction = "out",
+  channel,
+  to,
+  contactName,
+  messageText,
+  templateName,
+  status,
+  apiMessageId,
+  payload
+}) {
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return null;
+  }
+
+  const row = {
+    direction,
+    channel,
+    to_number: String(to || "").trim(),
+    contact_name: contactName ? String(contactName) : null,
+    message_text: messageText ? String(messageText) : null,
+    template_name: templateName ? String(templateName) : null,
+    status: status ? String(status) : null,
+    api_message_id: apiMessageId ? String(apiMessageId) : null,
+    payload: payload && typeof payload === "object" ? payload : {}
+  };
+
+  if (supabaseEnabled && supabase) {
+    const { error } = await supabase.from("whatsapp_logs").insert(row);
+    if (error) {
+      throw new Error(error.message || "Failed to insert Supabase log row");
+    }
+    return;
+  }
+
+  if (pgEnabled && pgPool) {
+    await pgPool.query(
+      `insert into public.whatsapp_logs
+      (direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+      [
+        row.direction,
+        row.channel,
+        row.to_number,
+        row.contact_name,
+        row.message_text,
+        row.template_name,
+        row.status,
+        row.api_message_id,
+        JSON.stringify(row.payload || {})
+      ]
+    );
   }
 }
 
@@ -342,10 +426,26 @@ app.post("/api/messages/send", async (req, res) => {
       })
     );
 
+    const supabaseWarning = await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "text",
+        to,
+        messageText: text,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        apiMessageId: messageId,
+        payload: responseBody
+      })
+    );
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
         : responseBody;
+
+    if (supabaseWarning && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._supabaseWarning = supabaseWarning;
+    }
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
@@ -606,10 +706,27 @@ app.post("/api/templates/send-generic", async (req, res) => {
       })
     );
 
+    const supabaseWarning = await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "template",
+        to,
+        messageText: bodyVariables.join(" | "),
+        templateName,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        apiMessageId: messageId,
+        payload: responseBody
+      })
+    );
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
         : responseBody;
+
+    if (supabaseWarning && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._supabaseWarning = supabaseWarning;
+    }
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
@@ -954,9 +1071,65 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
       body: JSON.stringify(sendPayload)
     });
     const sendBody = await sendRes.json();
+    const messageId = sendBody?.messages?.[0]?.id || "";
+    const supabaseWarning = await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "media",
+        to,
+        messageText: req.file?.originalname || "[media]",
+        status: sendRes.ok ? "accepted" : `failed_${sendRes.status}`,
+        apiMessageId: messageId,
+        payload: sendBody
+      })
+    );
+    if (supabaseWarning && typeof sendBody === "object" && sendBody !== null) {
+      sendBody._supabaseWarning = supabaseWarning;
+    }
     return res.status(sendRes.ok ? 200 : sendRes.status).json(sendBody);
   } catch (error) {
     return res.status(500).json({ error: "Failed to send media", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+app.get("/api/logs", async (req, res) => {
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return res.json({ data: [], warning: "supabase_not_configured" });
+  }
+
+  try {
+    const requestedLimit = Number(req.query?.limit || 100);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 500)
+      : 100;
+
+    if (supabaseEnabled && supabase) {
+      const { data, error } = await supabase
+        .from("whatsapp_logs")
+        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id")
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
+      }
+
+      return res.json({ data: Array.isArray(data) ? data : [] });
+    }
+
+    const { rows } = await pgPool.query(
+      `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id
+      from public.whatsapp_logs
+      order by created_at desc
+      limit $1`,
+      [limit]
+    );
+    return res.json({ data: rows || [] });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch logs",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 });
 
