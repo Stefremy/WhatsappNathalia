@@ -213,6 +213,17 @@ function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function statusTone(status: string) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized.includes("read") || normalized.includes("delivered") || normalized.includes("sent") || normalized.includes("accept")) {
+    return "ok";
+  }
+  if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("reject") || normalized.includes("invalid") || normalized.includes("undeliver")) {
+    return "err";
+  }
+  return "neutral";
+}
+
 function extractBodyTemplateText(template: MetaTemplate | null) {
   if (!template?.components) {
     return "";
@@ -2073,7 +2084,10 @@ function App() {
                   </header>
                   <p>Para: {item.to}</p>
                   <p>{item.content}</p>
-                  <span className="status">Estado: {item.status}</span>
+                  <span className={`status sent-history-status sent-history-status-${statusTone(item.status)}`}>
+                    <span className="sent-history-dot" aria-hidden="true" />
+                    Estado: {item.status}
+                  </span>
                 </article>
               ))}
             </div>

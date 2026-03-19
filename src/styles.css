@@ -663,6 +663,43 @@ p {
   word-break: break-word;
 }
 
+.sent-history-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.sent-history-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa7a1;
+  box-shadow: 0 0 0 2px rgba(154, 167, 161, 0.18);
+}
+
+.sent-history-status-ok {
+  color: #228b55;
+}
+
+.sent-history-status-ok .sent-history-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
+}
+
+.sent-history-status-err {
+  color: #bf2f2f;
+}
+
+.sent-history-status-err .sent-history-dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+}
+
+.sent-history-status-neutral {
+  color: var(--muted);
+}
+
 .wa-console {
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(320px, 860px);
