@@ -75,6 +75,23 @@ async function processScheduledMessages() {
           }
         })
       );
+
+      if (!response.ok) {
+        const fallbackMessage = buildTemplateFallbackText({
+          templateName: item.templateName,
+          bodyVariables: item.bodyVariables
+        });
+
+        item.smsFallback = await maybeSendAutomaticSmsFallback({
+          to: item.to,
+          message: fallbackMessage,
+          source: "wa_template_scheduled_failure",
+          templateName: item.templateName,
+          waStatus: `failed_${response.status}`,
+          waResponse: responseBody
+        });
+      }
+
       item.status = response.ok ? "sent" : "failed";
     } catch {
       item.status = "failed";
@@ -368,6 +385,149 @@ function requiredEnv(name) {
 
 function normalizeRecipient(input) {
   return String(input ?? "").replace(/\D/g, "");
+}
+
+function isAutoSmsFallbackEnabled() {
+  const rawValue = String(process.env.AUTO_SMS_FALLBACK_ENABLED || "true").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(rawValue);
+}
+
+function buildTemplateFallbackText({ templateName, bodyVariables = [], buttonUrlVariable = "" }) {
+  const cleanTemplateName = String(templateName || "").trim();
+  const cleanVars = Array.isArray(bodyVariables)
+    ? bodyVariables.map((value) => String(value ?? "").trim()).filter(Boolean)
+    : [];
+  const cleanButtonVar = String(buttonUrlVariable || "").trim();
+  const parts = [`Template ${cleanTemplateName}`];
+
+  if (cleanVars.length > 0) {
+    parts.push(cleanVars.join(" | "));
+  }
+  if (cleanButtonVar) {
+    parts.push(`Link: ${cleanButtonVar}`);
+  }
+
+  return parts.join("\n").trim();
+}
+
+async function sendClickSendSms({
+  to,
+  message,
+  source = "manual",
+  templateName = "",
+  waStatus = "",
+  waResponse = null
+}) {
+  const normalizedTo = normalizeRecipient(to);
+  const cleanMessage = String(message || "").trim();
+
+  if (!normalizedTo || !cleanMessage) {
+    return {
+      attempted: false,
+      status: "skipped_invalid_input",
+      reason: "missing_to_or_message"
+    };
+  }
+
+  const clickSendUsername = String(process.env.CLICKSEND_USERNAME || "").trim();
+  const clickSendApiKey = String(process.env.CLICKSEND_API_KEY || "").trim();
+  const clickSendFrom = String(process.env.CLICKSEND_FROM || "Linke").trim();
+
+  if (!clickSendUsername || !clickSendApiKey) {
+    return {
+      attempted: false,
+      status: "skipped_not_configured",
+      reason: "missing_clicksend_credentials"
+    };
+  }
+
+  try {
+    const endpoint = "https://rest.clicksend.com/v3/sms/send";
+    const basicToken = Buffer.from(`${clickSendUsername}:${clickSendApiKey}`).toString("base64");
+    const payload = {
+      messages: [
+        {
+          source: "javascript",
+          from: clickSendFrom,
+          body: cleanMessage,
+          to: normalizedTo
+        }
+      ]
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json().catch(() => ({}));
+
+    const supabaseWarning = await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "sms",
+        to: normalizedTo,
+        messageText: cleanMessage,
+        templateName,
+        status: response.ok ? "sent" : `failed_${response.status}`,
+        apiMessageId: String(responseBody?.data?.messages?.[0]?.message_id || ""),
+        payload: {
+          source,
+          waStatus,
+          waResponse,
+          clicksendResponse: responseBody
+        }
+      })
+    );
+
+    return {
+      attempted: true,
+      status: response.ok ? "sent" : `failed_${response.status}`,
+      source,
+      to: normalizedTo,
+      responseStatus: response.status,
+      responseBody,
+      _supabaseWarning: supabaseWarning || undefined
+    };
+  } catch (error) {
+    return {
+      attempted: true,
+      status: "failed_exception",
+      source,
+      to: normalizedTo,
+      error: error instanceof Error ? error.message : "Unknown error"
+    };
+  }
+}
+
+async function maybeSendAutomaticSmsFallback({
+  to,
+  message,
+  source,
+  templateName = "",
+  waStatus,
+  waResponse
+}) {
+  if (!isAutoSmsFallbackEnabled()) {
+    return {
+      attempted: false,
+      status: "skipped_auto_disabled",
+      reason: "AUTO_SMS_FALLBACK_ENABLED=false"
+    };
+  }
+
+  return sendClickSendSms({
+    to,
+    message,
+    source,
+    templateName,
+    waStatus,
+    waResponse
+  });
 }
 
 function notionPropName(name, fallback) {
@@ -734,6 +894,16 @@ app.post("/api/messages/send", async (req, res) => {
       })
     );
 
+    const smsFallback = !response.ok
+      ? await maybeSendAutomaticSmsFallback({
+          to,
+          message: text,
+          source: "wa_text_failure",
+          waStatus: `failed_${response.status}`,
+          waResponse: responseBody
+        })
+      : null;
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
@@ -741,6 +911,10 @@ app.post("/api/messages/send", async (req, res) => {
 
     if (supabaseWarning && typeof finalBody === "object" && finalBody !== null) {
       finalBody._supabaseWarning = supabaseWarning;
+    }
+
+    if (smsFallback && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._smsFallback = smsFallback;
     }
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
@@ -901,10 +1075,30 @@ app.post("/api/templates/send-return-to-sender", async (req, res) => {
       })
     );
 
+    const smsFallbackMessage = buildTemplateFallbackText({
+      templateName: "entrega_de_volta_ao_remetente",
+      bodyVariables: [customerName, shipmentCode, pickupDate]
+    });
+
+    const smsFallback = !response.ok
+      ? await maybeSendAutomaticSmsFallback({
+          to,
+          message: smsFallbackMessage,
+          source: "wa_template_failure",
+          templateName: "entrega_de_volta_ao_remetente",
+          waStatus: `failed_${response.status}`,
+          waResponse: responseBody
+        })
+      : null;
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
         : responseBody;
+
+    if (smsFallback && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._smsFallback = smsFallback;
+    }
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
@@ -1015,6 +1209,23 @@ app.post("/api/templates/send-generic", async (req, res) => {
       })
     );
 
+    const smsFallbackMessage = buildTemplateFallbackText({
+      templateName,
+      bodyVariables,
+      buttonUrlVariable
+    });
+
+    const smsFallback = !response.ok
+      ? await maybeSendAutomaticSmsFallback({
+          to,
+          message: smsFallbackMessage,
+          source: "wa_template_failure",
+          templateName,
+          waStatus: `failed_${response.status}`,
+          waResponse: responseBody
+        })
+      : null;
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
@@ -1024,10 +1235,60 @@ app.post("/api/templates/send-generic", async (req, res) => {
       finalBody._supabaseWarning = supabaseWarning;
     }
 
+    if (smsFallback && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._smsFallback = smsFallback;
+    }
+
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to send generic template message",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/sms/clicksend", async (req, res) => {
+  try {
+    const to = normalizeRecipient(req.body?.to || "");
+    const message = String(req.body?.message || "").trim();
+
+    if (!to || !message) {
+      return res.status(400).json({ error: "Fields 'to' and 'message' are required." });
+    }
+
+    const result = await sendClickSendSms({
+      to,
+      message,
+      source: "manual"
+    });
+
+    if (!result.attempted && result.status === "skipped_not_configured") {
+      return res.status(400).json({
+        error: "ClickSend is not configured",
+        details: "Missing CLICKSEND_USERNAME or CLICKSEND_API_KEY"
+      });
+    }
+
+    if (result.status === "failed_exception") {
+      return res.status(500).json({
+        error: "Failed to send SMS via ClickSend",
+        details: result.error || "Unknown error"
+      });
+    }
+
+    return res.status(result.status === "sent" ? 200 : result.responseStatus || 500).json({
+      ...(result.responseBody && typeof result.responseBody === "object" ? result.responseBody : {}),
+      _smsMeta: {
+        status: result.status,
+        source: result.source,
+        to: result.to
+      },
+      ...(result._supabaseWarning ? { _supabaseWarning: result._supabaseWarning } : {})
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to send SMS via ClickSend",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
@@ -1100,10 +1361,30 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
       })
     );
 
+    const smsFallbackMessage = buildTemplateFallbackText({
+      templateName,
+      bodyVariables: [customerName, storeName]
+    });
+
+    const smsFallback = !response.ok
+      ? await maybeSendAutomaticSmsFallback({
+          to,
+          message: smsFallbackMessage,
+          source: "wa_template_failure",
+          templateName,
+          waStatus: `failed_${response.status}`,
+          waResponse: responseBody
+        })
+      : null;
+
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
         ? { ...responseBody, _notionWarning: notionWarning }
         : responseBody;
+
+    if (smsFallback && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._smsFallback = smsFallback;
+    }
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {

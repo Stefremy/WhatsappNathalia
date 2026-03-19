@@ -537,6 +537,138 @@ p {
     #102228;
 }
 
+.sms-fallback-box {
+  border: 1px solid rgba(20, 43, 99, 0.22);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0f162d;
+}
+
+.sms-fallback-box header {
+  background: linear-gradient(110deg, #2c67ff, #1f49c9);
+  color: #f4f8ff;
+  padding: 0.62rem 0.74rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.sms-fallback-box header strong {
+  font-size: 0.9rem;
+}
+
+.sms-fallback-box header span {
+  font-size: 0.75rem;
+  opacity: 0.92;
+}
+
+.sms-fallback-thread {
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.5rem;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(128, 169, 255, 0.18), transparent 35%),
+    radial-gradient(circle at 80% 80%, rgba(128, 169, 255, 0.1), transparent 35%),
+    #121b36;
+}
+
+.sms-msg {
+  max-width: 88%;
+  border-radius: 10px;
+  padding: 0.55rem 0.62rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.sms-msg p {
+  margin: 0;
+  color: #eff4ff;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.sms-msg time {
+  justify-self: end;
+  font-size: 0.68rem;
+  color: rgba(239, 244, 255, 0.72);
+}
+
+.sms-msg.out {
+  justify-self: end;
+  background: #2558df;
+  border-top-right-radius: 4px;
+}
+
+.sms-fallback-form {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.72rem;
+  background: #0e152b;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sms-fallback-form input,
+.sms-fallback-form textarea {
+  border: 1px solid rgba(173, 198, 255, 0.35);
+  border-radius: 10px;
+  font: inherit;
+  color: #f2f6ff;
+  background: rgba(8, 17, 38, 0.78);
+  padding: 0.6rem 0.72rem;
+}
+
+.sms-fallback-form textarea {
+  resize: vertical;
+}
+
+.sms-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.btn-sms {
+  color: #fff;
+  background: linear-gradient(120deg, #2c67ff, #1f49c9);
+  box-shadow: 0 10px 24px rgba(44, 103, 255, 0.28);
+  border-color: rgba(175, 198, 255, 0.3);
+}
+
+.btn-sms:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.sms-fallback-actions .status {
+  color: #c3d2ff;
+}
+
+.sms-response {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.45rem;
+}
+
+.sms-response summary {
+  cursor: pointer;
+  color: #c3d2ff;
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.sms-response pre {
+  margin: 0.5rem 0 0;
+  overflow: auto;
+  background: rgba(6, 13, 30, 0.9);
+  color: #e6eeff;
+  border-radius: 10px;
+  padding: 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .template-history {
   display: grid;
   gap: 0.65rem;

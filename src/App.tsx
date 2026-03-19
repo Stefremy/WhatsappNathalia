@@ -47,6 +47,12 @@ const quickApps = [
     description: "Gestão de shipments e operação logística diária.",
     url: "https://portal.linke.pt/admin/shipments",
     icon: "https://portal.linke.pt/assets/img/logo/logo.svg"
+  },
+  {
+    name: "ClickSend SMS",
+    description: "Acesso rápido ao sistema ClickSend para envios SMS.",
+    url: "https://integrations.clicksend.com",
+    icon: "https://integrations.clicksend.com/_nuxt/sinch-clicksend-logo.6K63Np5E.svg"
   }
 ];
 
@@ -352,6 +358,11 @@ function App() {
   const [genericLoading, setGenericLoading] = useState(false);
   const [genericStatus, setGenericStatus] = useState("Inativo");
   const [genericResponse, setGenericResponse] = useState("Ainda não foi enviado nenhum template.");
+  const [smsTo, setSmsTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
+  const [smsText, setSmsText] = useState("");
+  const [smsLoading, setSmsLoading] = useState(false);
+  const [smsStatus, setSmsStatus] = useState("Inativo");
+  const [smsResponse, setSmsResponse] = useState("Ainda não foi enviado nenhum SMS.");
   const [templateHistory, setTemplateHistory] = useState<TemplateHistoryItem[]>(() => {
     try { return JSON.parse(localStorage.getItem("wa_template_history") || "[]") as TemplateHistoryItem[]; } catch { return []; }
   });
@@ -1569,6 +1580,37 @@ function App() {
     }
   }
 
+  async function sendSmsFallback() {
+    const to = digitsOnly(smsTo || genericTo);
+    const message = smsText.trim();
+
+    if (!to || !message) {
+      setSmsStatus("Faltam campos obrigatórios");
+      setSmsResponse("Preenche número e mensagem SMS.");
+      return;
+    }
+
+    setSmsLoading(true);
+    setSmsStatus("A enviar SMS...");
+
+    try {
+      const response = await fetch(apiUrl("/api/sms/clicksend"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, message })
+      });
+
+      const data = await parseResponse(response);
+      setSmsStatus(response.ok ? "SMS enviado ✓" : `Falhou (${response.status})`);
+      setSmsResponse(JSON.stringify(data, null, 2));
+    } catch {
+      setSmsStatus("Erro de rede");
+      setSmsResponse("Não foi possível contactar o backend SMS.");
+    } finally {
+      setSmsLoading(false);
+    }
+  }
+
   const radioStation = radioStations[radioCurrentIdx];
 
   if (!authUser) {
@@ -2259,6 +2301,47 @@ function App() {
             </div>
           </article>
 
+          <article className="sms-fallback-box">
+            <header>
+              <strong>Fallback SMS (ClickSend)</strong>
+              <span>Usar quando WhatsApp falhar</span>
+            </header>
+            <div className="sms-fallback-thread">
+              <article className="sms-msg out">
+                <p>{smsText.trim() || "Escreve aqui a mensagem SMS de fallback..."}</p>
+                <time>pré-visualização</time>
+              </article>
+            </div>
+            <div className="sms-fallback-form">
+              <input
+                value={smsTo}
+                onChange={(event) => setSmsTo(event.target.value)}
+                placeholder="Número SMS (E.164)"
+              />
+              <textarea
+                value={smsText}
+                onChange={(event) => setSmsText(event.target.value)}
+                rows={2}
+                placeholder="Mensagem SMS (fallback ClickSend)"
+              />
+              <div className="sms-fallback-actions">
+                <button
+                  type="button"
+                  className="btn btn-sms"
+                  onClick={sendSmsFallback}
+                  disabled={smsLoading || !smsText.trim() || !digitsOnly(smsTo || genericTo)}
+                >
+                  {smsLoading ? "A enviar SMS..." : "Enviar SMS fallback"}
+                </button>
+                <span className="status">Estado: {smsStatus}</span>
+              </div>
+              <details className="sms-response">
+                <summary>Resposta SMS</summary>
+                <pre>{smsResponse}</pre>
+              </details>
+            </div>
+          </article>
+
           {needsUrlButtonVariable ? (
             <label>
               Variável do Botão URL (obrigatória)
@@ -2311,27 +2394,6 @@ function App() {
             <pre>{genericResponse}</pre>
           </article>
         </div>
-
-        <section className="template-history">
-          <h3>Histórico de Templates Enviados</h3>
-          {templateHistory.length === 0 ? (
-            <p>Ainda não foram enviadas notificações de template.</p>
-          ) : (
-            <div className="template-history-list">
-              {templateHistory.map((item) => (
-                <article key={item.id} className="template-history-item">
-                  <header>
-                    <strong>{item.templateName}</strong>
-                    <span>{item.time}</span>
-                  </header>
-                  <p>Para: {item.to}</p>
-                  <p>{item.previewText}</p>
-                  <span className="status">Estado: {item.status}</span>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
 
         {scheduledItems.length > 0 ? (
           <section className="template-history">
