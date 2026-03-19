@@ -382,6 +382,28 @@ function titleText(text) {
   return [{ type: "text", text: { content: String(text ?? "") } }];
 }
 
+function humanizeUsername(username) {
+  return String(username || "")
+    .split("_")
+    .filter(Boolean)
+    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+    .join(" ");
+}
+
+function getWorkspaceAuthUsers() {
+  return [1, 2, 3]
+    .map((index) => ({
+      username: String(process.env[`AUTH_USER_${index}_USERNAME`] || "").trim(),
+      password: String(process.env[`AUTH_USER_${index}_PASSWORD`] || ""),
+      displayName: String(process.env[`AUTH_USER_${index}_DISPLAY_NAME`] || "").trim()
+    }))
+    .filter((user) => user.username && user.password)
+    .map((user) => ({
+      ...user,
+      displayName: user.displayName || humanizeUsername(user.username)
+    }));
+}
+
 async function safeNotionLog(logFn) {
   if (!notionEnabled) {
     return null;
@@ -1407,6 +1429,33 @@ app.get("/api/logs", async (req, res) => {
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+
+  if (!username || !password) {
+    return res.status(400).json({ error: "Missing username or password" });
+  }
+
+  const users = getWorkspaceAuthUsers();
+  if (users.length === 0) {
+    return res.status(500).json({ error: "No workspace users configured" });
+  }
+
+  const matched = users.find((user) => user.username === username && user.password === password);
+  if (!matched) {
+    return res.status(401).json({ error: "Credenciais inválidas" });
+  }
+
+  return res.json({
+    ok: true,
+    user: {
+      username: matched.username,
+      displayName: matched.displayName
+    }
+  });
 });
 
 app.get("/api/state", async (_req, res) => {

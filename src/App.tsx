@@ -131,6 +131,11 @@ type CalendarEvent = {
   time: string;
 };
 
+type AuthUser = {
+  username: string;
+  displayName: string;
+};
+
 function digitsOnly(value: string) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -138,6 +143,14 @@ function digitsOnly(value: string) {
 function contactDisplayName(phone: string) {
   const normalized = digitsOnly(phone);
   return normalized ? `Contacto ${normalized}` : "Contacto desconhecido";
+}
+
+function humanizeUsername(username: string) {
+  return String(username || "")
+    .split("_")
+    .filter(Boolean)
+    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+    .join(" ");
 }
 
 function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" }) {
@@ -241,6 +254,18 @@ function App() {
   const [wabaId, setWabaId] = useState(import.meta.env.VITE_WHATSAPP_BUSINESS_ACCOUNT_ID ?? "");
   const backendBaseUrl = (import.meta.env.VITE_BACKEND_BASE_URL?.trim() || "").replace(/\/$/, "");
   const apiUrl = (path: string) => (backendBaseUrl ? `${backendBaseUrl}${path}` : path);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    try {
+      const raw = localStorage.getItem("wa_auth_user");
+      return raw ? JSON.parse(raw) as AuthUser : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
 
   async function parseResponse(response: Response) {
     const contentType = response.headers.get("content-type") || "";
@@ -250,6 +275,52 @@ function App() {
 
     const text = await response.text();
     return { raw: text || "Empty response" };
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!loginUsername.trim() || !loginPassword) {
+      setLoginError("Introduz utilizador e password.");
+      return;
+    }
+
+    setLoginLoading(true);
+    setLoginError("");
+
+    try {
+      const response = await fetch(apiUrl("/api/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: loginUsername.trim(),
+          password: loginPassword
+        })
+      });
+
+      const data = await parseResponse(response);
+      if (!response.ok || !data?.user) {
+        setLoginError(String(data?.error || `Falha no login (${response.status})`));
+        return;
+      }
+
+      const nextUser: AuthUser = {
+        username: String(data.user.username || loginUsername.trim()),
+        displayName: String(data.user.displayName || humanizeUsername(loginUsername.trim()))
+      };
+      setAuthUser(nextUser);
+      try { localStorage.setItem("wa_auth_user", JSON.stringify(nextUser)); } catch {}
+      setLoginPassword("");
+    } catch {
+      setLoginError("Não foi possível ligar ao backend.");
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  function handleLogout() {
+    setAuthUser(null);
+    setLoginPassword("");
+    try { localStorage.removeItem("wa_auth_user"); } catch {}
   }
   const [toNumber, setToNumber] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
   const [messageText, setMessageText] = useState("Olá! Esta é uma mensagem enviada pelo workspace da equipa.");
@@ -1489,18 +1560,65 @@ function App() {
 
   const radioStation = radioStations[radioCurrentIdx];
 
+  if (!authUser) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-brand-row">
+            <img className="workspace-logo" src="https://portal.linke.pt/assets/img/logo/logo.svg" alt="Linke" />
+            <div>
+              <h1>Login do Workspace</h1>
+              <p>Entra com um dos perfis da equipa para aceder ao painel de operações WhatsApp.</p>
+            </div>
+          </div>
+
+          <form className="auth-form" onSubmit={handleLogin}>
+            <label>
+              Utilizador
+              <input
+                value={loginUsername}
+                onChange={(event) => setLoginUsername(event.target.value)}
+                placeholder="nathalia_ribeiro"
+                autoComplete="username"
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                placeholder="••••••••••"
+                autoComplete="current-password"
+              />
+            </label>
+
+            {loginError ? <p className="auth-error">{loginError}</p> : null}
+
+            <button className="btn btn-primary auth-submit" type="submit" disabled={loginLoading}>
+              {loginLoading ? "A entrar..." : "Entrar no workspace"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
     <div className="workspace-app-shell">
       <header className="workspace-topbar">
         <div className="workspace-brand">
-          <span className="workspace-logo">Linke</span>
+          <img className="workspace-logo" src="https://portal.linke.pt/assets/img/logo/logo.svg" alt="Linke" />
           <span className="workspace-brand-divider" aria-hidden="true" />
           <strong>Linke Ops Dashboard</strong>
         </div>
         <div className="workspace-user">
-          <span className="workspace-user-avatar">A</span>
-          <span>Ana Santos</span>
+          <span className="workspace-user-avatar">{authUser.displayName.charAt(0).toUpperCase()}</span>
+          <span>{authUser.displayName}</span>
+          <button type="button" className="workspace-logout" onClick={handleLogout}>
+            Sair
+          </button>
         </div>
       </header>
 
