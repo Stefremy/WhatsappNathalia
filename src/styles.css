@@ -436,6 +436,188 @@ p {
   gap: 1rem;
 }
 
+.tms-panel {
+  border: 1px solid rgba(14, 27, 57, 0.16);
+  border-radius: 14px;
+  padding: 0.9rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(245, 249, 252, 0.9));
+  display: grid;
+  gap: 0.8rem;
+}
+
+.tms-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.tms-panel-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+}
+
+.tms-kpis {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+}
+
+.tms-kpi-card {
+  border: 1px solid rgba(28, 61, 116, 0.14);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 0.6rem 0.7rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tms-kpi-card span {
+  font-size: 0.76rem;
+  color: #5d6880;
+}
+
+.tms-kpi-card strong {
+  font-size: 1.2rem;
+  color: #13315f;
+}
+
+.tms-kpi-card small {
+  color: #9b3341;
+  font-weight: 700;
+  min-height: 1em;
+}
+
+.tms-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 1.25fr 0.9fr;
+}
+
+.tms-block {
+  border: 1px solid rgba(14, 27, 57, 0.16);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.6rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tms-block h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tms-incidences-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.tms-incidence-details {
+  margin-top: 0.55rem;
+  border-top: 1px dashed rgba(19, 49, 95, 0.2);
+  padding-top: 0.55rem;
+}
+
+.tms-incidence-details h5 {
+  margin: 0 0 0.45rem;
+  font-size: 0.85rem;
+  color: #17345d;
+}
+
+.tms-table-wrap {
+  overflow: auto;
+}
+
+.tms-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+}
+
+.tms-table th,
+.tms-table td {
+  border-bottom: 1px solid rgba(19, 49, 95, 0.12);
+  padding: 0.42rem 0.5rem;
+  text-align: center;
+  font-size: 0.81rem;
+}
+
+.tms-table th:first-child,
+.tms-table td:first-child {
+  text-align: left;
+}
+
+.tms-table th {
+  background: #17345d;
+  color: #f3f8ff;
+}
+
+.tms-total-row td {
+  font-weight: 700;
+  background: #edf3ff;
+}
+
+.tms-pending-list {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 272px;
+  overflow: auto;
+}
+
+.tms-pending-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  border-radius: 9px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(19, 49, 95, 0.12);
+  background: #f7faff;
+  font-size: 0.82rem;
+}
+
+.tms-pending-item strong {
+  color: #17345d;
+}
+
+.tms-incidences-wrap {
+  overflow: auto;
+}
+
+.tms-incidences-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 620px;
+}
+
+.tms-incidences-table th,
+.tms-incidences-table td {
+  border-bottom: 1px solid rgba(19, 49, 95, 0.12);
+  padding: 0.42rem 0.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.tms-incidences-table th:first-child,
+.tms-incidences-table td:first-child {
+  text-align: left;
+}
+
+.tms-incidences-table th {
+  background: #17345d;
+  color: #f3f8ff;
+}
+
+.tms-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
 .tracker-header {
   display: flex;
   align-items: flex-start;
@@ -2775,6 +2957,10 @@ body {
 }
 
 @media (max-width: 900px) {
+  .tms-grid {
+    grid-template-columns: 1fr;
+  }
+
   .radio-volume input[type="range"] {
     width: 60px;
   }

@@ -137,6 +137,65 @@ type CalendarEvent = {
   time: string;
 };
 
+type TmsInfoBox = {
+  label: string;
+  value: string;
+  trend?: string;
+};
+
+type TmsServiceRow = {
+  service: string;
+  pending: number;
+  accepted: number;
+  pickup: number;
+  transport: number;
+  delivered: number;
+  incidence: number;
+  incidenceOngoing?: number;
+};
+
+type TmsPendingAcceptanceRow = {
+  customer: string;
+  shipments: number;
+};
+
+type TmsIncidenceRow = {
+  id: number;
+  name: string;
+  shipment: boolean;
+  pickup: boolean;
+  appVisible: boolean;
+  active: boolean;
+  sort: number;
+};
+
+type TmsDashboardData = {
+  meta?: {
+    fetchedAt?: string;
+    source?: string;
+  };
+  infoBoxes: TmsInfoBox[];
+  serviceStatus: {
+    rows: TmsServiceRow[];
+    totals?: Omit<TmsServiceRow, "service"> | null;
+    highlights?: Record<string, number>;
+  };
+  pendingAcceptance: TmsPendingAcceptanceRow[];
+  incidences: TmsIncidenceRow[];
+  incidenceShipments: Array<{
+    parcelId: string;
+    providerTrackingCode?: string;
+    service?: string;
+    sender: string;
+    recipient: string;
+    finalClientPhone: string;
+    status?: string;
+    incidence?: string;
+    hasCharge?: boolean;
+    chargeAmount?: string;
+  }>;
+};
+
 type AuthUser = {
   username: string;
   displayName: string;
@@ -404,6 +463,10 @@ function App() {
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
   const [trackerPageSize, setTrackerPageSize] = useState(15);
+  const [tmsDashboard, setTmsDashboard] = useState<TmsDashboardData | null>(null);
+  const [tmsLoading, setTmsLoading] = useState(false);
+  const [tmsError, setTmsError] = useState("");
+  const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
 
   // Feature 1: Contact book
   const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
@@ -1389,9 +1452,36 @@ function App() {
       });
   }
 
+  function loadTmsDashboard() {
+    setTmsLoading(true);
+    setTmsError("");
+
+    fetch(apiUrl("/api/tms/dashboard"))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok || !data?.data) {
+          throw new Error(String(data?.error || data?.details || `Falha TMS (${response.status})`));
+        }
+
+        setTmsDashboard(data.data as TmsDashboardData);
+      })
+      .catch((error) => {
+        setTmsError(error instanceof Error ? error.message : "Não foi possível carregar dados do TMS.");
+      })
+      .finally(() => {
+        setTmsLoading(false);
+      });
+  }
+
   useEffect(() => {
     loadSharedLogs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "tracker") {
+      loadTmsDashboard();
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -1771,27 +1861,27 @@ function App() {
       <div className="workspace-frame">
         <aside className="workspace-sidebar-nav">
           <nav className="workspace-nav">
-            <a href="#overview" className="workspace-nav-link active">
+            <a href="#overview" className="workspace-nav-link active" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="overview" /></span>
               <span>Overview</span>
             </a>
-            <a href="#api-console" className="workspace-nav-link">
+            <a href="#api-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="chat" /></span>
               <span>Chat Console</span>
             </a>
-            <a href="#logs-page" className="workspace-nav-link">
+            <a href="#logs-page" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="logs" /></span>
               <span>Message Logs</span>
             </a>
-            <a href="#media-console" className="workspace-nav-link">
+            <a href="#media-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="upload" /></span>
               <span>Media Upload</span>
             </a>
-            <a href="#generic-template-console" className="workspace-nav-link">
+            <a href="#generic-template-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
               <span>Template Notifications</span>
             </a>
-            <a href="#caderno-pessoal" className="workspace-nav-link">
+            <a href="#caderno-pessoal" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="notes" /></span>
               <span>Notes &amp; Calendar</span>
             </a>
@@ -2804,6 +2894,14 @@ function App() {
                   <button
                     type="button"
                     className="btn btn-secondary"
+                    onClick={loadTmsDashboard}
+                    disabled={tmsLoading}
+                  >
+                    {tmsLoading ? "A atualizar TMS..." : "Atualizar TMS"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
                     onClick={loadSharedLogs}
                     disabled={sharedLogsLoading}
                   >
@@ -2818,6 +2916,186 @@ function App() {
                   </button>
                 </div>
               </div>
+
+              <section className="tms-panel">
+                <header className="tms-panel-head">
+                  <div>
+                    <h3>Control Panel TMS</h3>
+                    <p>Estado atual dos serviços e envios pendentes de aceitação.</p>
+                  </div>
+                  <span className="status">
+                    {tmsDashboard?.meta?.fetchedAt
+                      ? `Atualizado: ${new Date(tmsDashboard.meta.fetchedAt).toLocaleString("pt-PT")}`
+                      : "Sem dados"}
+                  </span>
+                </header>
+
+                {tmsError ? <p className="status">{tmsError}</p> : null}
+
+                {tmsDashboard ? (
+                  <>
+                    <div className="tms-kpis">
+                      {tmsDashboard.infoBoxes.map((box) => (
+                        <article key={box.label} className="tms-kpi-card">
+                          <span>{box.label}</span>
+                          <strong>{box.value}</strong>
+                          <small>{box.trend || ""}</small>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="tms-grid">
+                      <article className="tms-block">
+                        <h4>Estado atual dos serviços</h4>
+                        <div className="tms-table-wrap">
+                          <table className="tms-table">
+                            <thead>
+                              <tr>
+                                <th>Serviço</th>
+                                <th>⏱</th>
+                                <th>✓</th>
+                                <th>🛒</th>
+                                <th>🚚</th>
+                                <th>✅</th>
+                                <th>⚠</th>
+                                <th>⚠ Ongoing</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tmsDashboard.serviceStatus.rows.map((row) => (
+                                <tr key={row.service}>
+                                  <td>{row.service}</td>
+                                  <td>{row.pending}</td>
+                                  <td>{row.accepted}</td>
+                                  <td>{row.pickup}</td>
+                                  <td>{row.transport}</td>
+                                  <td>{row.delivered}</td>
+                                  <td>{row.incidence}</td>
+                                  <td>{row.incidenceOngoing ?? row.incidence}</td>
+                                </tr>
+                              ))}
+                              {tmsDashboard.serviceStatus.totals ? (
+                                <tr className="tms-total-row">
+                                  <td>TOTAL</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.pending}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.accepted}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.pickup}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.transport}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.delivered}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.incidence}</td>
+                                  <td>{tmsDashboard.serviceStatus.totals.incidence}</td>
+                                </tr>
+                              ) : null}
+                            </tbody>
+                          </table>
+                        </div>
+                      </article>
+
+                      <article className="tms-block">
+                        <h4>Envios pendentes de aceitação</h4>
+                        <div className="tms-pending-list">
+                          {tmsDashboard.pendingAcceptance.map((row) => (
+                            <div key={`${row.customer}-${row.shipments}`} className="tms-pending-item">
+                              <span>{row.customer}</span>
+                              <strong>{row.shipments}</strong>
+                            </div>
+                          ))}
+                          {tmsDashboard.pendingAcceptance.length === 0 ? (
+                            <p className="tms-empty">Sem envios pendentes de aceitação.</p>
+                          ) : null}
+                        </div>
+                      </article>
+                    </div>
+
+                    <article className="tms-block">
+                      <div className="tms-incidences-head">
+                        <h4>Motivos de Incidência</h4>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setShowIncidenceDetails((open) => !open)}
+                        >
+                          {showIncidenceDetails ? "Ocultar detalhe ongoing" : "Ver detalhe ongoing"}
+                        </button>
+                      </div>
+                      {tmsDashboard.incidences.length === 0 ? (
+                        <p className="tms-empty">Sem incidências disponíveis.</p>
+                      ) : (
+                        <div className="tms-incidences-wrap">
+                          <table className="tms-incidences-table">
+                            <thead>
+                              <tr>
+                                <th>Incidência</th>
+                                <th>Envio</th>
+                                <th>Recolha</th>
+                                <th>Visível App</th>
+                                <th>Ativo</th>
+                                <th>Pos</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tmsDashboard.incidences.map((item) => (
+                                <tr key={`inc-${item.id}`}>
+                                  <td>{item.name}</td>
+                                  <td>{item.shipment ? "Sim" : "Não"}</td>
+                                  <td>{item.pickup ? "Sim" : "Não"}</td>
+                                  <td>{item.appVisible ? "Sim" : "Não"}</td>
+                                  <td>{item.active ? "Sim" : "Não"}</td>
+                                  <td>{item.sort}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {showIncidenceDetails ? (
+                        <div className="tms-incidence-details">
+                          <h5>Incidências Ongoing (envios em incidência)</h5>
+                          {tmsDashboard.incidenceShipments.length === 0 ? (
+                            <p className="tms-empty">Sem envios em incidência neste momento.</p>
+                          ) : (
+                            <div className="tms-incidences-wrap">
+                              <table className="tms-incidences-table">
+                                <thead>
+                                  <tr>
+                                    <th>Parcel ID</th>
+                                    <th>Tracking Number</th>
+                                    <th>Service</th>
+                                    <th>Sender</th>
+                                    <th>Destinatário</th>
+                                    <th>Final Client Phone</th>
+                                    <th>Cobrança</th>
+                                    <th>Status</th>
+                                    <th>Incidência</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {tmsDashboard.incidenceShipments.map((item, index) => (
+                                    <tr key={`${item.parcelId || "parcel"}-${index}`}>
+                                      <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
+                                      <td>{item.providerTrackingCode || "-"}</td>
+                                      <td>{item.service || "-"}</td>
+                                      <td>{item.sender || "-"}</td>
+                                      <td>{item.recipient || "-"}</td>
+                                      <td>{item.finalClientPhone || "-"}</td>
+                                      <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
+                                      <td>{item.status || "-"}</td>
+                                      <td>{item.incidence || "-"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </article>
+                  </>
+                ) : (
+                  <p className="tms-empty">{tmsLoading ? "A carregar painel TMS..." : "Sem dados do TMS."}</p>
+                )}
+              </section>
 
               {sharedLogsError ? <p className="status">{sharedLogsError}</p> : null}
 

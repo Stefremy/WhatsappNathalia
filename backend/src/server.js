@@ -387,6 +387,403 @@ function normalizeRecipient(input) {
   return String(input ?? "").replace(/\D/g, "");
 }
 
+function decodeHtmlEntities(input) {
+  return String(input || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+function stripHtml(input) {
+  return decodeHtmlEntities(String(input || "").replace(/<[^>]*>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeDatatableTextCell(input) {
+  const seen = new WeakSet();
+
+  function visit(value) {
+    if (value == null) return "";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return stripHtml(value);
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const normalized = visit(item);
+        if (normalized) return normalized;
+      }
+      return "";
+    }
+
+    if (typeof value === "object") {
+      if (seen.has(value)) return "";
+      seen.add(value);
+
+      const candidates = [
+        value.display,
+        value.label,
+        value.text,
+        value.name,
+        value.title,
+        value.value,
+        value.html
+      ];
+
+      for (const candidate of candidates) {
+        const normalized = visit(candidate);
+        if (normalized) return normalized;
+      }
+
+      for (const nested of Object.values(value)) {
+        const normalized = visit(nested);
+        if (normalized) return normalized;
+      }
+    }
+
+    return "";
+  }
+
+  return visit(input);
+}
+
+function splitSetCookieHeader(headerValue) {
+  if (!headerValue) return [];
+  return String(headerValue).split(/,(?=[^;,\s]+=)/g).map((cookie) => cookie.trim()).filter(Boolean);
+}
+
+function getSetCookieHeaders(response) {
+  const direct = typeof response?.headers?.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : null;
+
+  if (Array.isArray(direct) && direct.length > 0) {
+    return direct;
+  }
+
+  const single = response?.headers?.get?.("set-cookie") || "";
+  return splitSetCookieHeader(single);
+}
+
+function updateCookieJar(cookieJar, setCookieHeaders) {
+  const cookies = Array.isArray(setCookieHeaders)
+    ? setCookieHeaders
+    : splitSetCookieHeader(setCookieHeaders);
+
+  for (const cookie of cookies) {
+    const pair = cookie.split(";")[0] || "";
+    const eqIndex = pair.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const key = pair.slice(0, eqIndex).trim();
+    const value = pair.slice(eqIndex + 1).trim();
+    if (!key) continue;
+    cookieJar.set(key, value);
+  }
+}
+
+function cookieJarHeader(cookieJar) {
+  return Array.from(cookieJar.entries())
+    .map(([key, value]) => `${key}=${value}`)
+    .join("; ");
+}
+
+function extractFirstNumber(input, fallback = "0") {
+  const clean = stripHtml(input);
+  const match = clean.match(/-?\d[\d\.,]*/);
+  return match ? match[0] : fallback;
+}
+
+function parseTmsInfoBoxes(html) {
+  const boxes = [];
+  const boxRegex = /<span class="info-box-text">([\s\S]*?)<\/span>[\s\S]*?<span class="info-box-number">([\s\S]*?)<\/span>/g;
+  let match;
+
+  while ((match = boxRegex.exec(html)) !== null) {
+    const label = stripHtml(match[1]);
+    if (!label) continue;
+    const value = extractFirstNumber(match[2]);
+    const trendMatch = String(match[2]).match(/<small[^>]*>([\s\S]*?)<\/small>/i);
+    const trend = trendMatch ? stripHtml(trendMatch[1]) : "";
+    boxes.push({ label, value, trend });
+  }
+
+  return boxes;
+}
+
+function parseTmsServiceStatus(html) {
+  const blockMatch = html.match(/<div class="nicescroll"[\s\S]*?<\/table>\s*<\/div>/i);
+  if (!blockMatch) {
+    return { rows: [], totals: null, highlights: {} };
+  }
+
+  const block = blockMatch[0];
+  const rowRegex = /<tr>([\s\S]*?)<\/tr>/g;
+  const rows = [];
+  let rowMatch;
+
+  while ((rowMatch = rowRegex.exec(block)) !== null) {
+    const rowHtml = rowMatch[1];
+    const serviceMatch = rowHtml.match(/<span[^>]*>([\s\S]*?)<\/span>/i);
+    const service = serviceMatch ? stripHtml(serviceMatch[1]) : "";
+    if (!service) continue;
+
+    const values = [];
+    const valueRegex = /stats-link-counter">\s*([\d]+)\s*<\/a>/g;
+    let valueMatch;
+    while ((valueMatch = valueRegex.exec(rowHtml)) !== null) {
+      values.push(Number(valueMatch[1] || 0));
+    }
+    if (values.length < 6) continue;
+
+    rows.push({
+      service,
+      pending: values[0],
+      accepted: values[1],
+      pickup: values[2],
+      transport: values[3],
+      delivered: values[4],
+      incidence: values[5]
+    });
+  }
+
+  const totalMatch = html.match(/<td class="bg-gray bold">TOTAL<\/td>[\s\S]*?<\/tr>/i);
+  let totals = null;
+  if (totalMatch) {
+    const values = [];
+    const valueRegex = /stats-link-counter">\s*([\d]+)\s*<\/a>/g;
+    let valueMatch;
+    while ((valueMatch = valueRegex.exec(totalMatch[0])) !== null) {
+      values.push(Number(valueMatch[1] || 0));
+    }
+    if (values.length >= 6) {
+      totals = {
+        pending: values[0],
+        accepted: values[1],
+        pickup: values[2],
+        transport: values[3],
+        delivered: values[4],
+        incidence: values[5]
+      };
+    }
+  }
+
+  const highlights = {};
+  const highlightRegex = /stats-link-(accepted|pickup|transit|incidence)"><b>[\s\S]*?(\d+)\s*<\/b>/g;
+  let highlightMatch;
+  while ((highlightMatch = highlightRegex.exec(html)) !== null) {
+    highlights[highlightMatch[1]] = Number(highlightMatch[2] || 0);
+  }
+
+  return { rows, totals, highlights };
+}
+
+function parseTmsPendingAcceptance(html) {
+  const sectionMatch = html.match(/<th>Envios pendentes de aceitação<\/th>[\s\S]*?<\/tbody>/i);
+  if (!sectionMatch) return [];
+
+  const rows = [];
+  const rowRegex = /<tr>\s*<td>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/g;
+  let match;
+  while ((match = rowRegex.exec(sectionMatch[0])) !== null) {
+    const customer = stripHtml(match[1]);
+    const shipments = Number(extractFirstNumber(match[2], "0"));
+    if (!customer) continue;
+    rows.push({ customer, shipments });
+  }
+  return rows;
+}
+
+function parseIconBoolean(iconHtml) {
+  return /fa-check-circle|text-green/i.test(String(iconHtml || ""));
+}
+
+function parseTmsIncidencesDatatable(payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  return data.map((row) => ({
+    id: Number(row?.id || 0),
+    name: stripHtml(row?.name || ""),
+    shipment: parseIconBoolean(row?.is_shipment),
+    pickup: parseIconBoolean(row?.is_pickup),
+    appVisible: parseIconBoolean(row?.operator_visible),
+    active: parseIconBoolean(row?.is_active),
+    sort: Number(row?.sort || 0)
+  }));
+}
+
+function parseTmsIncidenceShipmentsDatatable(payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  return data.map((row) => {
+    const chargeAmountRaw = String(row?.charge_price || row?.cod || "").trim();
+    const chargeAmountNumber = Number.parseFloat(chargeAmountRaw.replace(",", "."));
+    const hasChargeByAmount = Number.isFinite(chargeAmountNumber) && chargeAmountNumber > 0;
+    const hasChargeByHtmlHint = /cobran[çc]a|€/i.test(String(row?.delivery_date || ""));
+    const hasCharge = hasChargeByAmount || hasChargeByHtmlHint;
+
+    return {
+      parcelId: String(row?.tracking_code || "").trim() || stripHtml(row?.id || ""),
+      providerTrackingCode: String(row?.provider_tracking_code || "").trim(),
+      service: normalizeDatatableTextCell(
+        row?.service ||
+        row?.service_name ||
+        row?.provider ||
+        row?.provider_name ||
+        row?.shipment_method ||
+        row?.method ||
+        row?.courier ||
+        row?.operator ||
+        row?.shipping_provider ||
+        row?.shipping_provider_name ||
+        row?.provider_code ||
+        row?.delivery_provider ||
+        row?.service_id ||
+        row?.webservice_method ||
+        ""
+      ),
+      sender: stripHtml(row?.sender_name || ""),
+      recipient: stripHtml(row?.recipient_name || ""),
+      finalClientPhone: String(row?.recipient_phone || "").trim(),
+      status: normalizeDatatableTextCell(row?.status || row?.status_id || ""),
+      incidence: normalizeDatatableTextCell(row?.last_incidence || ""),
+      hasCharge,
+      chargeAmount: hasChargeByAmount ? chargeAmountNumber.toFixed(2) : ""
+    };
+  });
+}
+
+async function fetchTmsDashboardData() {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const dashboardUrl = `${baseUrl}/admin`;
+  const dashboardRes = await fetch(dashboardUrl, {
+    headers: {
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    redirect: "manual"
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(dashboardRes));
+
+  if (!dashboardRes.ok) {
+    throw new Error(`TMS dashboard request failed with status ${dashboardRes.status}`);
+  }
+
+  const dashboardHtml = await dashboardRes.text();
+
+  let incidences = [];
+  try {
+    const incidencesEndpoint = `${baseUrl}/admin/tracking/incidences/datatable`;
+    const incidencesBody = new URLSearchParams();
+    incidencesBody.set("_token", csrfToken);
+    incidencesBody.set("draw", "1");
+    incidencesBody.set("start", "0");
+    incidencesBody.set("length", "100");
+
+    const incidencesRes = await fetch(incidencesEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/tracking/incidences`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: incidencesBody.toString(),
+      redirect: "manual"
+    });
+
+    if (incidencesRes.ok) {
+      const incidencesJson = await incidencesRes.json().catch(() => ({}));
+      incidences = parseTmsIncidencesDatatable(incidencesJson);
+    }
+  } catch {
+    incidences = [];
+  }
+
+  let incidenceShipments = [];
+  try {
+    const incidenceShipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+    const incidenceShipmentsBody = new URLSearchParams();
+    incidenceShipmentsBody.set("_token", csrfToken);
+    incidenceShipmentsBody.set("draw", "1");
+    incidenceShipmentsBody.set("start", "0");
+    incidenceShipmentsBody.set("length", "100");
+    incidenceShipmentsBody.set("status", "9");
+
+    const incidenceShipmentsRes = await fetch(incidenceShipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?status=9`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: incidenceShipmentsBody.toString(),
+      redirect: "manual"
+    });
+
+    if (incidenceShipmentsRes.ok) {
+      const incidenceShipmentsJson = await incidenceShipmentsRes.json().catch(() => ({}));
+      incidenceShipments = parseTmsIncidenceShipmentsDatatable(incidenceShipmentsJson);
+    }
+  } catch {
+    incidenceShipments = [];
+  }
+
+  return {
+    meta: {
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin`
+    },
+    infoBoxes: parseTmsInfoBoxes(dashboardHtml),
+    serviceStatus: parseTmsServiceStatus(dashboardHtml),
+    pendingAcceptance: parseTmsPendingAcceptance(dashboardHtml),
+    incidences,
+    incidenceShipments
+  };
+}
+
 function isAutoSmsFallbackEnabled() {
   const rawValue = String(process.env.AUTO_SMS_FALLBACK_ENABLED || "true").trim().toLowerCase();
   return !["0", "false", "no", "off"].includes(rawValue);
@@ -1707,6 +2104,18 @@ app.get("/api/logs", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch logs",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/dashboard", async (_req, res) => {
+  try {
+    const data = await fetchTmsDashboardData();
+    return res.json({ ok: true, data });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch TMS dashboard data",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
