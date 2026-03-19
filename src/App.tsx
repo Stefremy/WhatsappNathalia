@@ -230,6 +230,20 @@ function statusTone(status: string) {
   return "neutral";
 }
 
+function extractParcelCode(input: string) {
+  const text = String(input || "").toUpperCase();
+  const match = text.match(/\b([A-Z]{2}\d{8,}[A-Z]{2}|[A-Z]{2}\d{4,}[A-Z]{2}|TESTE)\b/);
+  return match?.[1] || "-";
+}
+
+function formatMessageType(channel?: string) {
+  const normalized = String(channel || "").toLowerCase();
+  if (normalized === "template") return "Template";
+  if (normalized === "sms") return "SMS";
+  if (normalized === "media") return "Media";
+  return "Text";
+}
+
 function extractBodyTemplateText(template: MetaTemplate | null) {
   if (!template?.components) {
     return "";
@@ -385,6 +399,11 @@ function App() {
   const [sharedLogs, setSharedLogs] = useState<SharedLogItem[]>([]);
   const [sharedLogsLoading, setSharedLogsLoading] = useState(false);
   const [sharedLogsError, setSharedLogsError] = useState("");
+  const [activeView, setActiveView] = useState<"workspace" | "tracker">("workspace");
+  const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status">("all");
+  const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
+  const [trackerPage, setTrackerPage] = useState(1);
+  const [trackerPageSize, setTrackerPageSize] = useState(15);
 
   // Feature 1: Contact book
   const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
@@ -1272,6 +1291,80 @@ function App() {
     });
   }, [displayedHistory, historyDate, historySearch]);
 
+  const trackerRows = useMemo(() => {
+    if (sharedLogs.length > 0) {
+      return sharedLogs.map((item) => {
+        const message = String(item.message_text || item.template_name || "[sem conteúdo]");
+        const status = String(item.status || "unknown");
+        return {
+          id: String(item.id),
+          clientName: String(item.contact_name || resolveContactName(String(item.to_number || ""), savedContacts) || "-"),
+          message,
+          clientPhone: String(item.to_number || "-"),
+          parcelId: extractParcelCode(message),
+          messageType: formatMessageType(item.channel),
+          dateSent: item.created_at ? new Date(item.created_at).toLocaleString("pt-PT") : "-",
+          smsClicksend: String(item.channel || "").toLowerCase() === "sms" ? "Yes" : "No",
+          status,
+          messageTitle: String(item.template_name || "WhatsApp Message")
+        };
+      });
+    }
+
+    return filteredHistory.map((item) => ({
+      id: String(item.id),
+      clientName: "-",
+      message: item.content,
+      clientPhone: item.to,
+      parcelId: extractParcelCode(item.content),
+      messageType: item.channel === "template" ? "Template" : "Text",
+      dateSent: item.time,
+      smsClicksend: item.channel === "sms" ? "Yes" : "No",
+      status: item.status,
+      messageTitle: item.channel === "template" ? "Whatsapp Template" : "WhatsApp Message"
+    }));
+  }, [filteredHistory, savedContacts, sharedLogs]);
+
+  const filteredTrackerRows = useMemo(() => {
+    const query = trackerSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return trackerRows;
+    }
+
+    return trackerRows.filter((row) => {
+      const fields = {
+        clientName: String(row.clientName || "").toLowerCase(),
+        clientPhone: String(row.clientPhone || "").toLowerCase(),
+        parcelId: String(row.parcelId || "").toLowerCase(),
+        messageTitle: String(row.messageTitle || "").toLowerCase(),
+        status: String(row.status || "").toLowerCase()
+      };
+
+      if (trackerSearchField === "all") {
+        return Object.values(fields).some((value) => value.includes(query));
+      }
+
+      return fields[trackerSearchField].includes(query);
+    });
+  }, [trackerRows, trackerSearchField, trackerSearchQuery]);
+
+  const trackerTotalPages = Math.max(1, Math.ceil(filteredTrackerRows.length / trackerPageSize));
+
+  const paginatedTrackerRows = useMemo(() => {
+    const start = (trackerPage - 1) * trackerPageSize;
+    return filteredTrackerRows.slice(start, start + trackerPageSize);
+  }, [filteredTrackerRows, trackerPage, trackerPageSize]);
+
+  useEffect(() => {
+    setTrackerPage(1);
+  }, [trackerSearchField, trackerSearchQuery, trackerPageSize]);
+
+  useEffect(() => {
+    if (trackerPage > trackerTotalPages) {
+      setTrackerPage(trackerTotalPages);
+    }
+  }, [trackerPage, trackerTotalPages]);
+
   function loadSharedLogs() {
     setSharedLogsLoading(true);
     setSharedLogsError("");
@@ -1702,11 +1795,23 @@ function App() {
               <span className="workspace-nav-icon"><SidebarIcon name="notes" /></span>
               <span>Notes &amp; Calendar</span>
             </a>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "tracker" ? " active" : ""}`}
+              onClick={() => {
+                setActiveView("tracker");
+                loadSharedLogs();
+              }}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="logs" /></span>
+              <span>Client Tracker</span>
+            </button>
           </nav>
         </aside>
 
         <main className="workspace-content">
-          <div className="page">
+          {activeView === "workspace" ? (
+            <div className="page">
       <header className="hero" id="overview">
         <div className="badge">www.linke.pt</div>
         <h1>Workspace da Equipa para Operações WhatsApp</h1>
@@ -2674,13 +2779,162 @@ function App() {
       </section>
 
       <section className="panel cta" id="contact">
-        <h2>Workspace pronto para o dia a dia da equipa?</h2>
-        <p>Organiza comunicação, notas e lembretes num só local.</p>
-        <a className="btn btn-primary" href="mailto:hello@linke.pt">
-          Contactar hello@linke.pt
-        </a>
+        <h2>Client Messages Tracker</h2>
+        <p>Abre uma vista clara em formato tabela com mensagens enviadas, estado e detalhes por cliente.</p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            setActiveView("tracker");
+            loadSharedLogs();
+          }}
+        >
+          Abrir Tracker Completo
+        </button>
       </section>
-          </div>
+            </div>
+          ) : (
+            <section className="panel tracker-page" id="client-tracker-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Client WhatsApp Messages Tracker</h2>
+                  <p>Vista estilo tabela para acompanhar mensagens, estado e dados operacionais.</p>
+                </div>
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={loadSharedLogs}
+                    disabled={sharedLogsLoading}
+                  >
+                    {sharedLogsLoading ? "A atualizar..." : "Atualizar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    Voltar ao Workspace
+                  </button>
+                </div>
+              </div>
+
+              {sharedLogsError ? <p className="status">{sharedLogsError}</p> : null}
+
+              <div className="tracker-table-wrap">
+                <div className="tracker-filters">
+                  <div className="tracker-filter-buttons" role="group" aria-label="Pesquisar por campo">
+                    {[
+                      { key: "all", label: "All" },
+                      { key: "parcelId", label: "Parcel ID" },
+                      { key: "clientPhone", label: "Phone" },
+                      { key: "clientName", label: "Client" },
+                      { key: "messageTitle", label: "Message Title" },
+                      { key: "status", label: "Status" }
+                    ].map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`tracker-filter-btn${trackerSearchField === option.key ? " active" : ""}`}
+                        onClick={() => setTrackerSearchField(option.key as typeof trackerSearchField)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    className="tracker-search-input"
+                    value={trackerSearchQuery}
+                    onChange={(event) => setTrackerSearchQuery(event.target.value)}
+                    placeholder={`Search by ${trackerSearchField === "all" ? "any field" : trackerSearchField}...`}
+                  />
+                </div>
+
+                <table className="tracker-table">
+                  <thead>
+                    <tr>
+                      <th>Client Name</th>
+                      <th>Client Phone</th>
+                      <th>Mensagem</th>
+                      <th>Parcel ID</th>
+                      <th>Message Type</th>
+                      <th>Date Sent</th>
+                      <th>sms Clicksend</th>
+                      <th>Status</th>
+                      <th>Message Title</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedTrackerRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="tracker-empty">Ainda não existem mensagens para mostrar.</td>
+                      </tr>
+                    ) : (
+                      paginatedTrackerRows.map((row) => (
+                        <tr key={`tracker-${row.id}`}>
+                          <td>{row.clientName}</td>
+                          <td>{row.clientPhone}</td>
+                          <td>{row.message}</td>
+                          <td>{row.parcelId}</td>
+                          <td>{row.messageType}</td>
+                          <td>{row.dateSent}</td>
+                          <td>{row.smsClicksend}</td>
+                          <td>
+                            <span className={`status sent-history-status sent-history-status-${statusTone(row.status)}`}>
+                              <span className="sent-history-dot" aria-hidden="true" />
+                              {row.status}
+                            </span>
+                          </td>
+                          <td>{row.messageTitle}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+
+                <div className="tracker-pagination">
+                  <div className="tracker-page-size">
+                    <span>Rows per page</span>
+                    <select
+                      value={trackerPageSize}
+                      onChange={(event) => setTrackerPageSize(Number(event.target.value) || 15)}
+                    >
+                      <option value={10}>10</option>
+                      <option value={15}>15</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </div>
+
+                  <span className="tracker-page-label">
+                    {filteredTrackerRows.length === 0
+                      ? "0 results"
+                      : `${(trackerPage - 1) * trackerPageSize + 1}-${Math.min(trackerPage * trackerPageSize, filteredTrackerRows.length)} of ${filteredTrackerRows.length}`}
+                  </span>
+
+                  <div className="tracker-page-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary tracker-page-btn"
+                      onClick={() => setTrackerPage((page) => Math.max(1, page - 1))}
+                      disabled={trackerPage <= 1}
+                    >
+                      Previous
+                    </button>
+                    <span>Page {trackerPage} / {trackerTotalPages}</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary tracker-page-btn"
+                      onClick={() => setTrackerPage((page) => Math.min(trackerTotalPages, page + 1))}
+                      disabled={trackerPage >= trackerTotalPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </main>
       </div>
     </div>

@@ -230,6 +230,15 @@ body {
   transform: translateX(2px);
 }
 
+.workspace-nav-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
 .workspace-content {
   padding: 1.4rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(239, 245, 240, 0.3));
@@ -420,6 +429,171 @@ p {
 
 .cta {
   justify-items: start;
+}
+
+.tracker-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.tracker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.tracker-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tracker-table-wrap {
+  border: 1px solid rgba(14, 27, 57, 0.22);
+  border-radius: 14px;
+  overflow: auto;
+  background: #0d1528;
+}
+
+.tracker-filters {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid rgba(142, 171, 230, 0.18);
+  background: #111c36;
+}
+
+.tracker-filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.tracker-filter-btn {
+  border: 1px solid rgba(142, 171, 230, 0.35);
+  border-radius: 999px;
+  background: transparent;
+  color: #c9d9ff;
+  padding: 0.25rem 0.65rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.tracker-filter-btn.active {
+  background: rgba(93, 132, 218, 0.28);
+  color: #f5f8ff;
+  border-color: rgba(150, 182, 255, 0.65);
+}
+
+.tracker-search-input {
+  border: 1px solid rgba(173, 198, 255, 0.35);
+  border-radius: 10px;
+  font: inherit;
+  color: #f2f6ff;
+  background: rgba(8, 17, 38, 0.78);
+  padding: 0.52rem 0.65rem;
+}
+
+.tracker-table {
+  width: max(100%, 1080px);
+  border-collapse: collapse;
+  color: #dbe7ff;
+}
+
+.tracker-table th,
+.tracker-table td {
+  padding: 0.62rem 0.7rem;
+  border-bottom: 1px solid rgba(142, 171, 230, 0.18);
+  text-align: left;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.tracker-table td:nth-child(3),
+.tracker-table td:nth-child(9) {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.tracker-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #14213f;
+  color: #f2f7ff;
+  font-weight: 700;
+}
+
+.tracker-table tbody tr:hover {
+  background: rgba(93, 132, 218, 0.17);
+}
+
+.tracker-empty {
+  text-align: center;
+  color: #b7cbf8;
+  padding: 1rem;
+}
+
+.tracker-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.65rem 0.75rem;
+  border-top: 1px solid rgba(142, 171, 230, 0.18);
+  background: #111c36;
+  color: #d5e3ff;
+}
+
+.tracker-page-size {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.tracker-page-size select {
+  border: 1px solid rgba(173, 198, 255, 0.35);
+  border-radius: 8px;
+  font: inherit;
+  color: #eff5ff;
+  background: rgba(8, 17, 38, 0.78);
+  padding: 0.2rem 0.4rem;
+}
+
+.tracker-page-label {
+  font-size: 0.8rem;
+}
+
+.tracker-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.tracker-page-btn {
+  background: linear-gradient(125deg, #2aaa64, #1f8f53);
+  color: #f4fff8;
+  border: 1px solid rgba(189, 255, 214, 0.38);
+  box-shadow: 0 8px 18px rgba(20, 92, 54, 0.32);
+  font-weight: 700;
+}
+
+.tracker-page-btn:hover:not(:disabled) {
+  background: linear-gradient(125deg, #35bb70, #24a15e);
+  transform: translateY(-1px);
+}
+
+.tracker-page-btn:disabled {
+  opacity: 0.5;
+  background: linear-gradient(125deg, #3f6d56, #335d49);
+  border-color: rgba(168, 197, 180, 0.28);
+  box-shadow: none;
 }
 
 .facts {
