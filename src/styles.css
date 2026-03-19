@@ -30,8 +30,8 @@ body {
 }
 
 .workspace-app-shell {
-  width: min(1160px, calc(100vw - 40px));
-  margin: 28px auto 0;
+  width: calc(100vw - 16px);
+  margin: 8px auto 0;
 }
 
 .workspace-topbar {
@@ -1947,8 +1947,8 @@ p {
 
 @media (max-width: 900px) {
   .workspace-app-shell {
-    width: min(100vw - 18px, 1160px);
-    margin-top: 10px;
+    width: calc(100vw - 8px);
+    margin-top: 4px;
   }
 
   .workspace-topbar {
