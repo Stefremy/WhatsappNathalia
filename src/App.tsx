@@ -1775,14 +1775,16 @@ function App() {
                     onChange={(e) => setNewContactName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveContact(); } }}
                   />
-                  <button type="button" className="wa-contact-book-save" onClick={saveContact}>Guardar</button>
+                  <button type="button" className="wa-contact-book-save" onClick={saveContact}>Guardar contacto</button>
                 </div>
                 {Object.keys(savedContacts).length > 0 ? (
                   <div className="wa-contact-book-list">
                     {Object.entries(savedContacts).map(([digits, name]) => (
                       <div key={digits} className="wa-contact-book-row">
-                        <span>{digits}</span>
-                        <strong>{name}</strong>
+                        <div className="wa-contact-book-meta">
+                          <strong>{name}</strong>
+                          <span>{digits}</span>
+                        </div>
                         <button type="button" className="wa-contact-book-del" onClick={() => removeContact(digits)}>×</button>
                       </div>
                     ))}
@@ -1929,7 +1931,7 @@ function App() {
                 />
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="btn btn-secondary team-reminder-create"
                   onClick={createReminder}
                   disabled={!activeContactPhone || !newReminderNote.trim() || !newReminderAt}
                 >

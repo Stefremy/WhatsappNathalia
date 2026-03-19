@@ -1036,9 +1036,28 @@ p {
 
 .team-reminder-grid {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
   gap: 0.5rem;
   align-items: center;
+}
+
+.team-reminder-create {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  width: 100%;
+  color: #f4fff9;
+  background: linear-gradient(120deg, #63bf82, #379d5c);
+  border-color: rgba(115, 216, 149, 0.24);
+  box-shadow: 0 8px 20px rgba(59, 157, 92, 0.2);
+  text-align: center;
+}
+
+.team-reminder-create:disabled {
+  color: rgba(244, 255, 249, 0.72);
+  background: rgba(99, 191, 130, 0.2);
+  border-color: rgba(115, 216, 149, 0.12);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .team-reminder-list {
@@ -1137,11 +1156,12 @@ p {
 
 .wa-contact-book-add {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.4rem;
 }
 
 .wa-contact-book-add input {
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(10, 24, 28, 0.7);
@@ -1152,6 +1172,7 @@ p {
 }
 
 .wa-contact-book-save {
+  grid-column: 1 / -1;
   border: 0;
   border-radius: 8px;
   background: #1f9c70;
@@ -1159,8 +1180,9 @@ p {
   font: inherit;
   font-size: 0.8rem;
   font-weight: 700;
-  padding: 0.42rem 0.65rem;
+  padding: 0.52rem 0.65rem;
   cursor: pointer;
+  width: 100%;
 }
 
 .wa-contact-book-list {
@@ -1172,7 +1194,7 @@ p {
 
 .wa-contact-book-row {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.45rem;
   align-items: center;
   font-size: 0.8rem;
@@ -1181,8 +1203,26 @@ p {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.wa-contact-book-meta {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
 .wa-contact-book-row strong {
   color: #e8f4ef;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wa-contact-book-meta span {
+  color: #9fb8ae;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wa-contact-book-del {
@@ -1192,7 +1232,7 @@ p {
   font-size: 1rem;
   cursor: pointer;
   line-height: 1;
-  padding: 0;
+  padding: 0.2rem;
 }
 
 /* ── Media attach ─────────────────────────────────────────────────── */
