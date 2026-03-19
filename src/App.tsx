@@ -1460,7 +1460,14 @@ function App() {
       .then(async (response) => {
         const data = await parseResponse(response);
         if (!response.ok || !data?.data) {
-          throw new Error(String(data?.error || data?.details || `Falha TMS (${response.status})`));
+          throw new Error(
+            String(
+              data?.details ||
+              data?.error ||
+              data?.raw ||
+              `Falha TMS (${response.status})`
+            )
+          );
         }
 
         setTmsDashboard(data.data as TmsDashboardData);
