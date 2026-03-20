@@ -365,9 +365,18 @@ function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function statusTone(status: string) {
+function statusTone(status: string, channelOrType?: string) {
   const normalized = String(status || "").toLowerCase();
-  if (normalized.includes("read") || normalized.includes("delivered") || normalized.includes("sent") || normalized.includes("accept")) {
+  const context = String(channelOrType || "").toLowerCase();
+  const isSmsContext = context.includes("sms") || context.includes("clicksend");
+
+  if (normalized.includes("sent") || normalized.includes("accept")) {
+    if (isSmsContext) {
+      return "sent";
+    }
+    return "ok";
+  }
+  if (normalized.includes("read") || normalized.includes("delivered")) {
     return "ok";
   }
   if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("reject") || normalized.includes("invalid") || normalized.includes("undeliver")) {
@@ -2956,7 +2965,7 @@ function App() {
                   </header>
                   <p>Para: {item.to}</p>
                   <p>{item.content}</p>
-                  <span className={`status sent-history-status sent-history-status-${statusTone(item.status)}`}>
+                  <span className={`status sent-history-status sent-history-status-${statusTone(item.status, item.channel)}`}>
                     <span className="sent-history-dot" aria-hidden="true" />
                     Estado: {item.status}
                   </span>
@@ -4048,7 +4057,7 @@ function App() {
                             </header>
                             <p>Para: {item.to}</p>
                             <p>{item.content}</p>
-                            <span className={`status sent-history-status sent-history-status-${statusTone(item.status)}`}>
+                            <span className={`status sent-history-status sent-history-status-${statusTone(item.status, item.channel)}`}>
                               <span className="sent-history-dot" aria-hidden="true" />
                               Estado: {item.status}
                             </span>
@@ -4122,7 +4131,7 @@ function App() {
                           <td>{row.dateSent}</td>
                           <td>{row.smsClicksend}</td>
                           <td>
-                            <span className={`status sent-history-status sent-history-status-${statusTone(row.status)}`}>
+                            <span className={`status sent-history-status sent-history-status-${statusTone(row.status, row.messageType)}`}>
                               <span className="sent-history-dot" aria-hidden="true" />
                               {row.status}
                             </span>

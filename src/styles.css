@@ -1287,6 +1287,15 @@ p {
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
 }
 
+.sent-history-status-sent {
+  color: #2563eb;
+}
+
+.sent-history-status-sent .sent-history-dot {
+  background: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.22);
+}
+
 .sent-history-status-err {
   color: #bf2f2f;
 }
