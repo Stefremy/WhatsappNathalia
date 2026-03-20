@@ -104,6 +104,10 @@ setInterval(processScheduledMessages, 15000);
 
 const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
 const notionEnabled = String(process.env.NOTION_ENABLED || "false").toLowerCase() === "true";
+const notionTrackerApiKey = String(process.env.NOTION_TRACKER_API_KEY || process.env.NOTION_API_KEY || "").trim();
+const notionTracker = notionTrackerApiKey ? new NotionClient({ auth: notionTrackerApiKey }) : null;
+const notionTrackerDatabaseId = String(process.env.NOTION_TRACKER_DATABASE_ID || "").trim();
+const notionTrackerEnabled = Boolean(notionTracker && notionTrackerDatabaseId);
 const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
 const supabaseServiceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const supabaseEnabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
@@ -1015,6 +1019,112 @@ async function safeNotionLog(logFn) {
   }
 }
 
+async function safeNotionTrackerLog(logFn) {
+  if (!notionTrackerEnabled || !notionTracker) {
+    return null;
+  }
+
+  try {
+    await logFn();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Notion tracker logging failed";
+  }
+}
+
+function trackerPropName(name, fallback) {
+  return process.env[name] || fallback;
+}
+
+function inferTrackerMessageType(templateName, contextType) {
+  const normalizedContext = String(contextType || "").trim().toLowerCase();
+  if (normalizedContext.includes("incident") || normalizedContext.includes("incid")) {
+    return "Incident";
+  }
+  if (normalizedContext.includes("pick")) {
+    return "Pick Up Point";
+  }
+
+  const normalizedTemplate = String(templateName || "").trim().toLowerCase();
+  if (normalizedTemplate === "order_pick_no_ctt") {
+    return "Incident";
+  }
+  if (normalizedTemplate === "order_pick_up_1") {
+    return "Pick Up Point";
+  }
+
+  return "";
+}
+
+async function createNotionTrackerRow({
+  to,
+  templateName,
+  bodyVariables,
+  status,
+  trackerContext,
+  rawResponse
+}) {
+  if (!notionTrackerEnabled || !notionTracker) {
+    return null;
+  }
+
+  const messageType = inferTrackerMessageType(templateName, trackerContext?.messageType);
+  if (!messageType) {
+    return null;
+  }
+
+  const propClientName = trackerPropName("NOTION_TRACKER_PROP_CLIENT_NAME", "Client Name");
+  const propMessage = trackerPropName("NOTION_TRACKER_PROP_MESSAGE", "Mensagem");
+  const propClientPhone = trackerPropName("NOTION_TRACKER_PROP_CLIENT_PHONE", "Client Phone");
+  const propParcelId = trackerPropName("NOTION_TRACKER_PROP_PARCEL_ID", "Parcel ID");
+  const propMessageType = trackerPropName("NOTION_TRACKER_PROP_MESSAGE_TYPE", "Message Type");
+  const propDateSent = trackerPropName("NOTION_TRACKER_PROP_DATE_SENT", "Date Sent");
+  const propSmsClicksend = trackerPropName("NOTION_TRACKER_PROP_SMS_CLICKSEND", "sms Clicksend");
+  const propStatus = trackerPropName("NOTION_TRACKER_PROP_STATUS", "Status");
+  const propMessageTitle = trackerPropName("NOTION_TRACKER_PROP_MESSAGE_TITLE", "Message Title");
+  const propResponseReceived = trackerPropName("NOTION_TRACKER_PROP_RESPONSE_RECEIVED", "Response Received");
+  const propFollowUpRequired = trackerPropName("NOTION_TRACKER_PROP_FOLLOW_UP_REQUIRED", "Follow-up Required");
+  const propReminderText = trackerPropName("NOTION_TRACKER_PROP_REMINDER_TEXT", "Reminder Text");
+  const propNotes = trackerPropName("NOTION_TRACKER_PROP_NOTES", "Notes");
+
+  const clientName = String(trackerContext?.clientName || bodyVariables?.[0] || "").trim();
+  const parcelId = String(trackerContext?.parcelId || bodyVariables?.[1] || "").trim();
+  const notes = String(trackerContext?.notes || "").trim();
+  const prettyDate = new Date().toLocaleDateString("pt-PT", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+
+  await notionTracker.pages.create({
+    parent: { database_id: notionTrackerDatabaseId },
+    properties: {
+      [propClientName]: { rich_text: richText(clientName) },
+      [propMessage]: { rich_text: richText(`Template ${templateName} | Vars: ${(bodyVariables || []).join(" | ")}`) },
+      [propClientPhone]: { phone_number: String(to || "").trim() || null },
+      [propParcelId]: { rich_text: richText(parcelId) },
+      [propMessageType]: { select: { name: messageType } },
+      [propDateSent]: { date: { start: new Date().toISOString() } },
+      [propSmsClicksend]: { rich_text: richText("No") },
+      [propStatus]: { status: { name: status && String(status).startsWith("failed_") ? "Failed" : "In Progress" } },
+      [propMessageTitle]: { title: richText("Whatsapp Template") },
+      [propResponseReceived]: { checkbox: false },
+      [propFollowUpRequired]: { checkbox: false },
+      [propReminderText]: { rich_text: richText("") },
+      [propNotes]: { rich_text: richText(notes) }
+    },
+    children: [
+      {
+        object: "block",
+        type: "paragraph",
+        paragraph: {
+          rich_text: richText(`Raw response: ${JSON.stringify(rawResponse ?? {})}`)
+        }
+      }
+    ]
+  });
+}
+
 async function safeSupabaseLog(logFn) {
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
     return null;
@@ -1563,6 +1673,14 @@ app.post("/api/templates/send-generic", async (req, res) => {
       .filter(Boolean);
 
     const buttonUrlVariable = String(req.body?.buttonUrlVariable || "").trim();
+    const trackerContext = req.body?.trackerContext && typeof req.body.trackerContext === "object"
+      ? {
+          clientName: String(req.body.trackerContext.clientName || "").trim(),
+          parcelId: String(req.body.trackerContext.parcelId || "").trim(),
+          messageType: String(req.body.trackerContext.messageType || "").trim(),
+          notes: String(req.body.trackerContext.notes || "").trim()
+        }
+      : null;
 
     if (!to || !templateName) {
       return res.status(400).json({
@@ -1634,6 +1752,17 @@ app.post("/api/templates/send-generic", async (req, res) => {
       })
     );
 
+    const notionTrackerWarning = await safeNotionTrackerLog(() =>
+      createNotionTrackerRow({
+        to,
+        templateName,
+        bodyVariables,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        trackerContext,
+        rawResponse: responseBody
+      })
+    );
+
     const supabaseWarning = await safeSupabaseLog(() =>
       createSupabaseLogRow({
         direction: "out",
@@ -1671,6 +1800,10 @@ app.post("/api/templates/send-generic", async (req, res) => {
 
     if (supabaseWarning && typeof finalBody === "object" && finalBody !== null) {
       finalBody._supabaseWarning = supabaseWarning;
+    }
+
+    if (notionTrackerWarning && typeof finalBody === "object" && finalBody !== null) {
+      finalBody._notionTrackerWarning = notionTrackerWarning;
     }
 
     if (smsFallback && typeof finalBody === "object" && finalBody !== null) {

@@ -147,6 +147,13 @@ type CalendarEvent = {
   time: string;
 };
 
+type GenericTemplateTrackerContext = {
+  clientName?: string;
+  parcelId?: string;
+  messageType?: string;
+  notes?: string;
+};
+
 type TmsInfoBox = {
   label: string;
   value: string;
@@ -505,6 +512,7 @@ function App() {
   const [genericLanguage, setGenericLanguage] = useState("pt_PT");
   const [genericBodyVars, setGenericBodyVars] = useState<Record<number, string>>({});
   const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
+  const [genericTrackerContext, setGenericTrackerContext] = useState<GenericTemplateTrackerContext | null>(null);
   const [genericLoading, setGenericLoading] = useState(false);
   const [genericStatus, setGenericStatus] = useState("Inativo");
   const [genericResponse, setGenericResponse] = useState("Ainda não foi enviado nenhum template.");
@@ -941,7 +949,13 @@ function App() {
     });
   }
 
-  function prefillPickupCttTemplate(phoneInput: string, finalClientNameInput: string, trackingInput: string) {
+  function prefillPickupCttTemplate(
+    phoneInput: string,
+    finalClientNameInput: string,
+    trackingInput: string,
+    messageTypeInput = "Pick Up Point",
+    notesInput = ""
+  ) {
     const phoneDigits = digitsOnly(phoneInput || "");
     const formattedPhone = phoneDigits.length === 9
       ? `+351${phoneDigits}`
@@ -961,6 +975,12 @@ function App() {
       3: "",
       4: ""
     }));
+    setGenericTrackerContext({
+      clientName: String(finalClientNameInput || "").trim(),
+      parcelId: String(trackingInput || "").trim(),
+      messageType: String(messageTypeInput || "").trim() || "Pick Up Point",
+      notes: String(notesInput || "").trim()
+    });
     setGenericStatus("Template pickup CTT pré-preenchido");
 
     window.setTimeout(() => {
@@ -1316,7 +1336,8 @@ function App() {
             to: phone,
             templateName: genericTemplateName,
             languageCode: genericLanguage,
-            bodyVariables: vars.length ? vars : previewBodyVars
+            bodyVariables: vars.length ? vars : previewBodyVars,
+            trackerContext: genericTrackerContext || undefined
           })
         });
         setBulkRows((prev) => [...prev, { phone, status: res.ok ? "sent ✓" : `failed_${res.status}` }]);
@@ -2064,7 +2085,8 @@ function App() {
           templateName: genericTemplateName,
           languageCode: genericLanguage,
           bodyVariables: variables,
-          buttonUrlVariable: needsUrlButtonVariable ? genericButtonUrlVariable.trim() : ""
+          buttonUrlVariable: needsUrlButtonVariable ? genericButtonUrlVariable.trim() : "",
+          trackerContext: genericTrackerContext || undefined
         })
       });
 
@@ -3433,6 +3455,7 @@ function App() {
                                       <th>Cobrança</th>
                                       <th>Status</th>
                                       <th>Incidência</th>
+                                      <th>Ação</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -3447,6 +3470,24 @@ function App() {
                                         <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
                                         <td>{item.status || "-"}</td>
                                         <td>{item.incidence || "-"}</td>
+                                        <td>
+                                          <button
+                                            type="button"
+                                            className="btn btn-secondary tms-mini-btn"
+                                            onClick={() =>
+                                              prefillPickupCttTemplate(
+                                                item.finalClientPhone || "",
+                                                item.recipient || "",
+                                                item.providerTrackingCode || item.parcelId || "",
+                                                "Incident",
+                                                item.incidence || ""
+                                              )
+                                            }
+                                            disabled={!digitsOnly(item.finalClientPhone || "")}
+                                          >
+                                            Preencher template
+                                          </button>
+                                        </td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -3551,7 +3592,9 @@ function App() {
                                                 prefillPickupCttTemplate(
                                                   item.finalClientPhone || "",
                                                   item.recipient || "",
-                                                  item.providerTrackingCode || item.parcelId || ""
+                                                  item.providerTrackingCode || item.parcelId || "",
+                                                  "Pick Up Point",
+                                                  item.incidence || ""
                                                 )
                                               }
                                             >
@@ -3820,7 +3863,7 @@ function App() {
                             <button
                               type="button"
                               className="btn btn-secondary tms-mini-btn"
-                              onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId)}
+                              onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId, row.messageType, row.message)}
                               disabled={!digitsOnly(row.clientPhone || "")}
                             >
                               Preencher template
