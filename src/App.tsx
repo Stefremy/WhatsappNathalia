@@ -61,6 +61,11 @@ const PUDO_ALLOWED_NOTIFICATION_TEMPLATES = new Set([
   "order_pick_up_1 (pt_PT)"
 ]);
 
+const PUDO_ALLOWED_NOTIFICATION_TEMPLATE_NAMES = new Set([
+  "order_pick_no_ctt",
+  "order_pick_up_1"
+]);
+
 type ConversationMessage = {
   id: string;
   direction: "in" | "out";
@@ -259,14 +264,22 @@ function isAllowedPudoNotificationTemplate(templateName?: string | null, languag
   const name = String(templateName || "").trim();
   if (!name) return false;
 
-  if (PUDO_ALLOWED_NOTIFICATION_TEMPLATES.has(name)) {
+  const normalizedName = name.toLowerCase();
+
+  // Some logs only store template name without language.
+  if (PUDO_ALLOWED_NOTIFICATION_TEMPLATE_NAMES.has(normalizedName)) {
+    return true;
+  }
+
+  const normalizedAllowedFull = Array.from(PUDO_ALLOWED_NOTIFICATION_TEMPLATES).map((item) => item.toLowerCase());
+  if (normalizedAllowedFull.includes(normalizedName)) {
     return true;
   }
 
   const language = String(languageCode || "").trim();
   if (!language) return false;
 
-  return PUDO_ALLOWED_NOTIFICATION_TEMPLATES.has(`${name} (${language})`);
+  return normalizedAllowedFull.includes(`${name} (${language})`.toLowerCase());
 }
 
 function contactDisplayName(phone: string) {
