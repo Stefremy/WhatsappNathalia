@@ -698,6 +698,12 @@ p {
   border-radius: 8px;
 }
 
+.tracker-pudo-actions {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: center;
+}
+
 .tms-pagination {
   margin-top: 0.55rem;
   display: flex;

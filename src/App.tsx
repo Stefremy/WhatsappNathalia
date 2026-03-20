@@ -573,6 +573,7 @@ function App() {
   // Feature 10: Media in composer
   const [composeMedia, setComposeMedia] = useState<File | null>(null);
   const [composeMediaLoading, setComposeMediaLoading] = useState(false);
+  const trackerTemplateToInputRef = useRef<HTMLInputElement | null>(null);
   // Radio player
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [radioPlaying, setRadioPlaying] = useState(false);
@@ -925,6 +926,38 @@ function App() {
 
       return changed ? next : prev;
     });
+  }
+
+  function prefillPickupCttTemplate(phoneInput: string, finalClientNameInput: string, trackingInput: string) {
+    const phoneDigits = digitsOnly(phoneInput || "");
+    const formattedPhone = phoneDigits.length === 9
+      ? `+351${phoneDigits}`
+      : phoneDigits.startsWith("351")
+        ? `+${phoneDigits}`
+        : phoneDigits
+          ? `+${phoneDigits}`
+          : "";
+
+    setGenericTemplateName("order_pick_up_1");
+    setGenericLanguage("pt_PT");
+    setGenericTo(formattedPhone);
+    setGenericBodyVars((prev) => ({
+      ...prev,
+      1: String(finalClientNameInput || "").trim(),
+      2: String(trackingInput || "").trim(),
+      3: "",
+      4: ""
+    }));
+    setGenericStatus("Template pickup CTT pré-preenchido");
+
+    window.setTimeout(() => {
+      const templateCard = document.getElementById("tracker-template-console");
+      if (templateCard) {
+        templateCard.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      trackerTemplateToInputRef.current?.focus();
+      trackerTemplateToInputRef.current?.select();
+    }, 80);
   }
 
   // Feature 1: Contact book
@@ -3497,13 +3530,28 @@ function App() {
                                           )}
                                         </td>
                                         <td>
-                                          <button
-                                            type="button"
-                                            className="btn btn-secondary tms-mini-btn"
-                                            onClick={() => togglePudoNotified(item)}
-                                          >
-                                            {notificationState?.notifiedAt ? "Desmarcar" : "Marcar notificado"}
-                                          </button>
+                                          <div className="tracker-pudo-actions">
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary tms-mini-btn"
+                                              onClick={() =>
+                                                prefillPickupCttTemplate(
+                                                  item.finalClientPhone || "",
+                                                  item.recipient || "",
+                                                  item.providerTrackingCode || item.parcelId || ""
+                                                )
+                                              }
+                                            >
+                                              Preencher template
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary tms-mini-btn"
+                                              onClick={() => togglePudoNotified(item)}
+                                            >
+                                              {notificationState?.notifiedAt ? "Desmarcar" : "Marcar notificado"}
+                                            </button>
+                                          </div>
                                         </td>
                                       </tr>
                                     );
@@ -3547,7 +3595,7 @@ function App() {
 
               <section className="tms-panel tracker-console-panel">
                 <div className="tracker-console-grid">
-                  <article className="tms-block tracker-console-card">
+                  <article id="tracker-template-console" className="tms-block tracker-console-card">
                     <div className="tracker-console-card-head">
                       <h4>Template</h4>
                       <button
@@ -3581,6 +3629,7 @@ function App() {
                       <label>
                         Número (E.164)
                         <input
+                          ref={trackerTemplateToInputRef}
                           value={genericTo}
                           onChange={(event) => setGenericTo(event.target.value)}
                           placeholder="+351912858229"
@@ -3729,12 +3778,13 @@ function App() {
                       <th>sms Clicksend</th>
                       <th>Status</th>
                       <th>Message Title</th>
+                      <th>Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {paginatedTrackerRows.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="tracker-empty">Ainda não existem mensagens para mostrar.</td>
+                        <td colSpan={10} className="tracker-empty">Ainda não existem mensagens para mostrar.</td>
                       </tr>
                     ) : (
                       paginatedTrackerRows.map((row) => (
@@ -3753,6 +3803,16 @@ function App() {
                             </span>
                           </td>
                           <td>{row.messageTitle}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn btn-secondary tms-mini-btn"
+                              onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId)}
+                              disabled={!digitsOnly(row.clientPhone || "")}
+                            >
+                              Preencher template
+                            </button>
+                          </td>
                         </tr>
                       ))
                     )}
