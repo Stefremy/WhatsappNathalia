@@ -1214,6 +1214,56 @@ p {
   margin: 0 0 0.7rem;
   font-size: 0.95rem;
 }
+
+.webhook-debug-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(244, 248, 245, 0.86);
+  padding: 0.75rem;
+  margin-bottom: 0.7rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.webhook-debug-panel h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.webhook-debug-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.webhook-debug-item {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 0.55rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.webhook-debug-item header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.webhook-debug-item header span {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.webhook-debug-item p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
 .sent-history-filters {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto auto;

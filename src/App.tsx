@@ -1847,6 +1847,52 @@ function App() {
     return sentHistory;
   }, [sentHistory, sharedLogs]);
 
+  const inboundWebhookSenders = useMemo(() => {
+    const inboundItems = sharedLogs
+      .filter((item) => String(item.direction || "").toLowerCase() === "in")
+      .filter((item) => String(item.channel || "").toLowerCase() === "chat")
+      .filter((item) => String(item.to_number || "").trim().length > 0)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const byPhone = new Map<string, {
+      phone: string;
+      name: string;
+      count: number;
+      lastAt: string;
+      lastText: string;
+    }>();
+
+    for (const item of inboundItems) {
+      const phone = digitsOnly(String(item.to_number || ""));
+      if (!phone) {
+        continue;
+      }
+
+      const createdAt = new Date(item.created_at);
+      const timeLabel = isNaN(createdAt.getTime())
+        ? String(item.created_at || "")
+        : createdAt.toLocaleString();
+      const lastText = String(item.message_text || "").trim();
+      const name = String(item.contact_name || "").trim() || resolveContactName(phone, savedContacts);
+
+      const existing = byPhone.get(phone);
+      if (!existing) {
+        byPhone.set(phone, {
+          phone,
+          name,
+          count: 1,
+          lastAt: timeLabel,
+          lastText
+        });
+        continue;
+      }
+
+      existing.count += 1;
+    }
+
+    return Array.from(byPhone.values());
+  }, [savedContacts, sharedLogs]);
+
   const filteredHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     return displayedHistory.filter((item) => {
@@ -2928,6 +2974,30 @@ function App() {
         </div>
 
         <section className="sent-history-panel">
+          <div className="webhook-debug-panel">
+            <h3>Debug webhook inbound (números recentes)</h3>
+            {sharedLogsLoading ? (
+              <p>A carregar sinais de inbound...</p>
+            ) : null}
+            {inboundWebhookSenders.length === 0 ? (
+              <p>Sem inbound webhook visível ainda. Se não aparecer, confirme no Meta Dashboard se o webhook recebe eventos de mensagens.</p>
+            ) : (
+              <div className="webhook-debug-list">
+                {inboundWebhookSenders.slice(0, 20).map((sender) => (
+                  <article key={`inbound-debug-${sender.phone}`} className="webhook-debug-item">
+                    <header>
+                      <strong>{sender.name}</strong>
+                      <span>{sender.lastAt}</span>
+                    </header>
+                    <p>Número: {sender.phone}</p>
+                    <p>Mensagens inbound: {sender.count}</p>
+                    <p>Última: {sender.lastText || "[sem texto]"}</p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="sent-history-filters">
             <input
               placeholder="Pesquisar por nome, número ou texto"
