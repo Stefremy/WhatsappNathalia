@@ -56,6 +56,11 @@ const quickApps = [
   }
 ];
 
+const PUDO_ALLOWED_NOTIFICATION_TEMPLATES = new Set([
+  "order_pick_no_ctt (en_US)",
+  "order_pick_up_1 (pt_PT)"
+]);
+
 type ConversationMessage = {
   id: string;
   direction: "in" | "out";
@@ -248,6 +253,20 @@ function getPudoShipmentKey(item: {
   const phone = normalizePhoneForPudoMatch(item.finalClientPhone || "");
   const recipient = String(item.recipient || "").trim().toLowerCase();
   return parcel || tracking || `${recipient}:${phone}`;
+}
+
+function isAllowedPudoNotificationTemplate(templateName?: string | null, languageCode?: string | null) {
+  const name = String(templateName || "").trim();
+  if (!name) return false;
+
+  if (PUDO_ALLOWED_NOTIFICATION_TEMPLATES.has(name)) {
+    return true;
+  }
+
+  const language = String(languageCode || "").trim();
+  if (!language) return false;
+
+  return PUDO_ALLOWED_NOTIFICATION_TEMPLATES.has(`${name} (${language})`);
 }
 
 function contactDisplayName(phone: string) {
@@ -804,7 +823,8 @@ function App() {
 
     const outgoingWhatsappLogs = sharedLogs
       .filter((item) => String(item.direction || "").toLowerCase() === "out")
-      .filter((item) => String(item.channel || "").toLowerCase() !== "sms")
+      .filter((item) => String(item.channel || "").toLowerCase() === "template")
+      .filter((item) => isAllowedPudoNotificationTemplate(item.template_name || ""))
       .map((item) => ({
         phone: normalizePhoneForPudoMatch(item.to_number || ""),
         createdAt: String(item.created_at || "")
@@ -1308,7 +1328,6 @@ function App() {
       });
       setStatusText(response.ok ? "Media enviada" : `Falhou (${response.status})`);
       if (response.ok) {
-        markPudoNotifiedByPhone(targetPhone);
         setComposeMedia(null);
       }
     } catch {
@@ -1861,7 +1880,6 @@ function App() {
       setStatusText(response.ok ? "Aceite pela API (entrega pendente)" : `Falhou (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
       if (response.ok) {
-        markPudoNotifiedByPhone(targetPhone);
         setMessageText("");
       }
     } catch (error) {
@@ -2008,7 +2026,7 @@ function App() {
       setGenericStatus(response.ok ? "Template aceite" : `Falhou (${response.status})`);
       setGenericResponse(JSON.stringify(data, null, 2));
 
-      if (response.ok) {
+      if (response.ok && isAllowedPudoNotificationTemplate(genericTemplateName, genericLanguage)) {
         markPudoNotifiedByPhone(genericTo);
       }
 
