@@ -1606,8 +1606,139 @@ function App() {
         );
       } catch {}
     });
+    evtSource.addEventListener("inbound", (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as {
+          messageId?: string;
+          from?: string;
+          contactName?: string;
+          text?: string;
+          status?: string;
+        };
+
+        const fromDigits = digitsOnly(String(data.from || "").trim());
+        if (!fromDigits) {
+          return;
+        }
+
+        const inboundApiId = String(data.messageId || "").trim();
+        const inboundText = String(data.text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+        const inboundTime = nowLabel();
+
+        setConversations((current) => {
+          const existing = current.find((item) => digitsOnly(item.phone) === fromDigits);
+
+          if (existing) {
+            if (inboundApiId && existing.messages.some((item) => item.apiMessageId === inboundApiId)) {
+              return current;
+            }
+
+            const nextMessage: ConversationMessage = {
+              id: `in-${inboundApiId || Date.now()}`,
+              direction: "in",
+              text: inboundText,
+              time: inboundTime,
+              apiMessageId: inboundApiId || undefined
+            };
+
+            return current
+              .map((item) =>
+                item.id !== existing.id
+                  ? item
+                  : {
+                      ...item,
+                      lastAt: inboundTime,
+                      unread: item.id === activeConversationId ? item.unread : item.unread + 1,
+                      messages: [...item.messages, nextMessage]
+                    }
+              )
+              .sort((a, b) => (a.id === existing.id ? -1 : b.id === existing.id ? 1 : 0));
+          }
+
+          const created: ConversationContact = {
+            id: `c-in-${Date.now()}`,
+            name: String(data.contactName || "").trim() || resolveContactName(fromDigits, savedContacts),
+            phone: fromDigits,
+            unread: activeConversationId ? 1 : 0,
+            lastAt: inboundTime,
+            messages: [
+              {
+                id: `in-${inboundApiId || Date.now()}`,
+                direction: "in",
+                text: inboundText,
+                time: inboundTime,
+                apiMessageId: inboundApiId || undefined
+              }
+            ]
+          };
+
+          return [created, ...current];
+        });
+      } catch {}
+    });
+    evtSource.addEventListener("bot_outbound", (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as {
+          to?: string;
+          text?: string;
+          messageId?: string;
+          status?: string;
+        };
+
+        const toDigits = digitsOnly(String(data.to || "").trim());
+        if (!toDigits) {
+          return;
+        }
+
+        const outboundApiId = String(data.messageId || "").trim();
+        const outboundText = String(data.text || "[mensagem bot]").trim() || "[mensagem bot]";
+        const outboundTime = nowLabel();
+
+        setConversations((current) => {
+          const existing = current.find((item) => digitsOnly(item.phone) === toDigits);
+
+          const nextMessage: ConversationMessage = {
+            id: `bot-${outboundApiId || Date.now()}`,
+            direction: "out",
+            text: outboundText,
+            time: outboundTime,
+            apiMessageId: outboundApiId || undefined,
+            deliveryStatus: "sent"
+          };
+
+          if (existing) {
+            if (outboundApiId && existing.messages.some((item) => item.apiMessageId === outboundApiId)) {
+              return current;
+            }
+
+            return current
+              .map((item) =>
+                item.id !== existing.id
+                  ? item
+                  : {
+                      ...item,
+                      lastAt: outboundTime,
+                      messages: [...item.messages, nextMessage]
+                    }
+              )
+              .sort((a, b) => (a.id === existing.id ? -1 : b.id === existing.id ? 1 : 0));
+          }
+
+          const created: ConversationContact = {
+            id: `c-bot-${Date.now()}`,
+            name: resolveContactName(toDigits, savedContacts),
+            phone: toDigits,
+            unread: 0,
+            lastAt: outboundTime,
+            messages: [nextMessage]
+          };
+
+          return [created, ...current];
+        });
+      } catch {}
+    });
     return () => evtSource.close();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeConversationId, apiUrl, savedContacts]);
 
   // Load scheduled items from backend on mount
   useEffect(() => {

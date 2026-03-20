@@ -108,6 +108,8 @@ const notionTrackerApiKey = String(process.env.NOTION_TRACKER_API_KEY || process
 const notionTracker = notionTrackerApiKey ? new NotionClient({ auth: notionTrackerApiKey }) : null;
 const notionTrackerDatabaseId = String(process.env.NOTION_TRACKER_DATABASE_ID || "").trim();
 const notionTrackerEnabled = Boolean(notionTracker && notionTrackerDatabaseId);
+const botpressWebhookRelayUrl = String(process.env.BOTPRESS_WEBHOOK_RELAY_URL || "").trim();
+const botpressApiKey = String(process.env.BOTPRESS_API_KEY || "").trim();
 const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
 const supabaseServiceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const supabaseEnabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
@@ -1193,6 +1195,165 @@ async function createSupabaseLogRow({
   }
 }
 
+async function findSupabaseLogByApiMessageId(messageId) {
+  const normalized = String(messageId || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (supabaseEnabled && supabase) {
+    const { data, error } = await supabase
+      .from("whatsapp_logs")
+      .select("id")
+      .eq("api_message_id", normalized)
+      .limit(1);
+
+    if (error) {
+      throw new Error(error.message || "Failed to query Supabase logs by message id");
+    }
+
+    return Array.isArray(data) && data.length > 0 ? data[0] : null;
+  }
+
+  if (pgEnabled && pgPool) {
+    const { rows } = await pgPool.query(
+      `select id from public.whatsapp_logs where api_message_id = $1 limit 1`,
+      [normalized]
+    );
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  }
+
+  return null;
+}
+
+async function updateSupabaseLogStatusByMessageId({ messageId, status, payload }) {
+  const normalizedMessageId = String(messageId || "").trim();
+  const normalizedStatus = String(status || "").trim();
+  if (!normalizedMessageId || !normalizedStatus) {
+    return;
+  }
+
+  const nextPayload = payload && typeof payload === "object" ? payload : {};
+
+  if (supabaseEnabled && supabase) {
+    const { error } = await supabase
+      .from("whatsapp_logs")
+      .update({
+        status: normalizedStatus,
+        payload: nextPayload
+      })
+      .eq("api_message_id", normalizedMessageId);
+
+    if (error) {
+      throw new Error(error.message || "Failed to update Supabase log status");
+    }
+    return;
+  }
+
+  if (pgEnabled && pgPool) {
+    await pgPool.query(
+      `update public.whatsapp_logs
+      set status = $2,
+          payload = coalesce(payload, '{}'::jsonb) || $3::jsonb
+      where api_message_id = $1`,
+      [normalizedMessageId, normalizedStatus, JSON.stringify(nextPayload)]
+    );
+  }
+}
+
+async function forwardWebhookToBotpress(payload) {
+  if (!botpressWebhookRelayUrl) {
+    return;
+  }
+
+  const headers = { "Content-Type": "application/json" };
+  if (botpressApiKey) {
+    // Some Botpress deployments validate Authorization and some use x-botpress-api-key.
+    headers.Authorization = `Bearer ${botpressApiKey}`;
+    headers["x-botpress-api-key"] = botpressApiKey;
+  }
+
+  try {
+    await fetch(botpressWebhookRelayUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch {
+    // Best effort relay; do not fail webhook handling.
+  }
+}
+
+function readBotpressTextPayload(input) {
+  if (!input || typeof input !== "object") {
+    return "";
+  }
+
+  const directText = String(input.text || input.message || input.content || "").trim();
+  if (directText) {
+    return directText;
+  }
+
+  const payloadText = String(input?.payload?.text || input?.payload?.message || "").trim();
+  if (payloadText) {
+    return payloadText;
+  }
+
+  const messages = Array.isArray(input?.messages) ? input.messages : [];
+  for (const message of messages) {
+    const text = String(message?.text || message?.message || message?.payload?.text || "").trim();
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function readBotpressRecipient(input) {
+  if (!input || typeof input !== "object") {
+    return "";
+  }
+
+  const candidates = [
+    input.to,
+    input.phone,
+    input.userPhone,
+    input.wa_id,
+    input?.recipient?.phone,
+    input?.recipient?.to,
+    input?.payload?.to,
+    input?.payload?.phone,
+    input?.conversation?.phone
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function isBotpressRequestAuthorized(req) {
+  if (!botpressApiKey) {
+    return true;
+  }
+
+  const authHeader = String(req.headers.authorization || "").trim();
+  const xApiKey = String(req.headers["x-botpress-api-key"] || "").trim();
+  const queryToken = String(req.query?.token || "").trim();
+
+  return (
+    authHeader === `Bearer ${botpressApiKey}` ||
+    xApiKey === botpressApiKey ||
+    queryToken === botpressApiKey
+  );
+}
+
 async function createNotionMessageRow({ to, text, status, messageId, rawResponse }) {
   if (!notionEnabled) {
     return null;
@@ -1270,13 +1431,43 @@ function inboundMessageText(message) {
 }
 
 async function logInboundMessage({ from, message, contact }) {
-  if (!notionEnabled) {
-    return null;
-  }
-
   const inboundMessageId = String(message?.id || "").trim();
   if (!inboundMessageId) {
     return null;
+  }
+
+  let existingSharedLog = null;
+  try {
+    existingSharedLog = await findSupabaseLogByApiMessageId(inboundMessageId);
+  } catch {
+    existingSharedLog = null;
+  }
+
+  if (!existingSharedLog) {
+    const contactName = String(contact?.profile?.name || "").trim();
+    const fromWaId = String(from || "").trim();
+    const summaryText = inboundMessageText(message);
+
+    await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "in",
+        channel: "chat",
+        to: fromWaId,
+        contactName,
+        messageText: summaryText,
+        status: "received",
+        apiMessageId: inboundMessageId,
+        payload: {
+          direction: "inbound",
+          contact,
+          message
+        }
+      })
+    );
+  }
+
+  if (!notionEnabled) {
+    return inboundMessageId;
   }
 
   const existing = await findRowByMessageId(inboundMessageId);
@@ -2077,7 +2268,7 @@ app.get("/api/templates", async (req, res) => {
   }
 });
 
-app.get("/webhook", (req, res) => {
+function handleWebhookVerify(req, res) {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -2087,11 +2278,15 @@ app.get("/webhook", (req, res) => {
   }
 
   return res.sendStatus(403);
-});
+}
 
-app.post("/webhook", async (req, res) => {
+app.get("/webhook", handleWebhookVerify);
+app.get("/api/webhook", handleWebhookVerify);
+
+async function handleWebhookEvent(req, res) {
   // Acknowledge immediately so Meta doesn't retry
   res.sendStatus(200);
+  void forwardWebhookToBotpress(req.body);
 
   try {
     const entry = req.body?.entry || [];
@@ -2111,6 +2306,14 @@ app.post("/webhook", async (req, res) => {
           // Always broadcast delivery ticks to SSE clients
           broadcastSSE("status", { messageId: String(messageId), status: String(status) });
 
+          await safeSupabaseLog(() =>
+            updateSupabaseLogStatusByMessageId({
+              messageId: String(messageId),
+              status: String(status),
+              payload: { statusEvent }
+            })
+          );
+
           if (notionEnabled) {
             await updateNotionMessageStatus({
               messageId: String(messageId),
@@ -2121,17 +2324,74 @@ app.post("/webhook", async (req, res) => {
         }
       }
 
-      if (notionEnabled) {
-        for (const inboundMessage of messages) {
-          const from = String(inboundMessage?.from || "").trim();
-          if (!from) continue;
-          const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
-          await logInboundMessage({ from, message: inboundMessage, contact });
-        }
+      for (const inboundMessage of messages) {
+        const from = String(inboundMessage?.from || "").trim();
+        if (!from) continue;
+        const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
+        const inboundMessageId = String(inboundMessage?.id || "").trim();
+        const summaryText = inboundMessageText(inboundMessage);
+
+        await logInboundMessage({ from, message: inboundMessage, contact });
+
+        broadcastSSE("inbound", {
+          messageId: inboundMessageId,
+          from,
+          contactName: String(contact?.profile?.name || "").trim(),
+          text: summaryText,
+          status: "received"
+        });
       }
     }
   } catch (_error) {
     // response already sent
+  }
+}
+
+app.post("/webhook", handleWebhookEvent);
+app.post("/api/webhook", handleWebhookEvent);
+
+app.post("/api/botpress/events", async (req, res) => {
+  try {
+    if (!isBotpressRequestAuthorized(req)) {
+      return res.status(401).json({ error: "Unauthorized Botpress event" });
+    }
+
+    const to = normalizeRecipient(readBotpressRecipient(req.body));
+    const text = readBotpressTextPayload(req.body);
+    const messageId = String(req.body?.messageId || req.body?.id || "").trim();
+
+    if (!to || !text) {
+      return res.status(400).json({ error: "Fields 'to' and 'text' are required in Botpress event payload" });
+    }
+
+    await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "chat",
+        to,
+        messageText: text,
+        status: "sent",
+        apiMessageId: messageId || null,
+        payload: {
+          source: "botpress",
+          event: req.body
+        }
+      })
+    );
+
+    broadcastSSE("bot_outbound", {
+      to,
+      text,
+      messageId: messageId || undefined,
+      status: "sent"
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to ingest Botpress event",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 });
 
