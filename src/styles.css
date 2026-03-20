@@ -436,6 +436,64 @@ p {
   gap: 1rem;
 }
 
+.tracker-console-panel {
+  gap: 0.9rem;
+}
+
+.tracker-console-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
+.tracker-console-card {
+  align-content: start;
+}
+
+.tracker-console-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tracker-console-card-head h4 {
+  margin: 0;
+}
+
+.tracker-template-chat-box {
+  margin-top: 0.2rem;
+}
+
+.tracker-template-form {
+  margin-top: 0.2rem;
+}
+
+.tracker-template-form .wa-send {
+  padding: 0.6rem 0.95rem;
+}
+
+.tracker-console-history .sent-history-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.2rem;
+  flex: 1;
+  min-height: 0;
+  height: calc(7 * 5.6rem);
+  max-height: calc(7 * 5.6rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.2rem;
+}
+
+.tracker-console-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .tms-panel {
   border: 1px solid rgba(14, 27, 57, 0.16);
   border-radius: 14px;
@@ -818,6 +876,12 @@ p {
   background: linear-gradient(125deg, #3f6d56, #335d49);
   border-color: rgba(168, 197, 180, 0.28);
   box-shadow: none;
+}
+
+@media (max-width: 980px) {
+  .tracker-console-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .facts {

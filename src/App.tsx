@@ -3545,6 +3545,147 @@ function App() {
                 )}
               </section>
 
+              <section className="tms-panel tracker-console-panel">
+                <div className="tracker-console-grid">
+                  <article className="tms-block tracker-console-card">
+                    <div className="tracker-console-card-head">
+                      <h4>Template</h4>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={fetchMetaTemplates}
+                        disabled={metaTemplatesLoading}
+                      >
+                        {metaTemplatesLoading ? "A carregar..." : "Atualizar templates"}
+                      </button>
+                    </div>
+
+                    <article className="template-chat-box tracker-template-chat-box">
+                      <header>
+                        <strong>{genericTemplateName || "Template"}</strong>
+                        <span>{genericLanguage || "pt_PT"}</span>
+                      </header>
+                      <div className="template-thread">
+                        <article className="wa-msg in">
+                          <p>{genericTo || "Número (E.164)"}</p>
+                          <time>{metaTemplatesStatus}</time>
+                        </article>
+                        <article className="wa-msg out">
+                          <p>{selectedTemplatePreview || selectedTemplateBody || "Sem texto no body do template selecionado"}</p>
+                          <time>{genericLoading ? "a enviar" : genericStatus}</time>
+                        </article>
+                      </div>
+                    </article>
+
+                    <form className="api-form tracker-template-form" onSubmit={sendGenericTemplate}>
+                      <label>
+                        Número (E.164)
+                        <input
+                          value={genericTo}
+                          onChange={(event) => setGenericTo(event.target.value)}
+                          placeholder="+351912858229"
+                        />
+                      </label>
+
+                      <label>
+                        Template
+                        <select
+                          value={genericTemplateName}
+                          onChange={(event) => {
+                            const chosen = metaTemplates.find((item) => item.name === event.target.value) || null;
+                            setGenericTemplateName(event.target.value);
+                            if (chosen?.language) {
+                              setGenericLanguage(chosen.language);
+                            }
+                          }}
+                        >
+                          {metaTemplates.length === 0 ? <option value="">Sem templates carregados</option> : null}
+                          {metaTemplates.map((template) => (
+                            <option key={template.id || template.name} value={template.name}>
+                              {template.name} ({template.language || "pt_PT"})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label>
+                        Idioma
+                        <input
+                          value={genericLanguage}
+                          onChange={(event) => setGenericLanguage(event.target.value)}
+                          placeholder="pt_PT"
+                        />
+                      </label>
+
+                      {requiredBodyVarCount > 0 ? (
+                        <div className="template-var-grid">
+                          {requiredBodyIndexes.map((index) => (
+                            <label key={index}>
+                              Variável {`{{${index}}}`}
+                              <input
+                                value={genericBodyVars[index] || ""}
+                                onChange={(event) =>
+                                  setGenericBodyVars((current) => ({
+                                    ...current,
+                                    [index]: event.target.value
+                                  }))
+                                }
+                                placeholder={`Valor para {{${index}}}`}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {needsUrlButtonVariable ? (
+                        <label>
+                          Variável do botão URL
+                          <input
+                            value={genericButtonUrlVariable}
+                            onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
+                            placeholder="variável dinâmica de URL"
+                          />
+                        </label>
+                      ) : null}
+
+                      <div className="api-actions">
+                        <button className="wa-send" type="submit" disabled={genericLoading}>
+                          {genericLoading ? "A enviar..." : "Enviar template"}
+                        </button>
+                        <span className={`wa-live-status ${genericLoading ? "busy" : ""}`}>
+                          {genericLoading ? "A enviar" : "Inativo"}
+                        </span>
+                      </div>
+                      <span className="status">{metaTemplatesStatus}</span>
+                    </form>
+                  </article>
+
+                  <article className="tms-block tracker-console-history">
+                    <h4>Histórico recente</h4>
+                    {displayedHistory.length === 0 ? (
+                      <p className="tms-empty">Sem histórico disponível.</p>
+                    ) : (
+                      <div className="sent-history-list">
+                        {displayedHistory.map((item) => (
+                          <article key={`tracker-console-history-${item.channel}-${item.id}`} className="sent-history-item">
+                            <header>
+                              <strong>{item.channel === "template" ? "Template" : "Mensagem"}</strong>
+                              <span>{item.time}</span>
+                            </header>
+                            <p>Para: {item.to}</p>
+                            <p>{item.content}</p>
+                            <span className={`status sent-history-status sent-history-status-${statusTone(item.status)}`}>
+                              <span className="sent-history-dot" aria-hidden="true" />
+                              Estado: {item.status}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                </div>
+              </section>
+
               {sharedLogsError ? <p className="status">{sharedLogsError}</p> : null}
 
               <div className="tracker-table-wrap">
