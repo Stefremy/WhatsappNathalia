@@ -653,6 +653,15 @@ function parseTmsIncidenceShipmentsDatatable(payload) {
   });
 }
 
+function parseTmsStatusFromLink(html, linkClassName, fallbackStatus = "") {
+  const escapedClass = String(linkClassName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`${escapedClass}[\\s\\S]*?href=\\"([^\\"]+)\\"`, "i");
+  const match = String(html || "").match(regex);
+  const href = match?.[1] || "";
+  const statusMatch = href.match(/[?&]status=([^&]+)/i);
+  return statusMatch?.[1] || fallbackStatus;
+}
+
 async function fetchTmsDashboardData() {
   const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
   if (!enabled) {
@@ -771,6 +780,37 @@ async function fetchTmsDashboardData() {
     incidenceShipments = [];
   }
 
+  let pudoShipments = [];
+  try {
+    const pickupStatus = parseTmsStatusFromLink(dashboardHtml, "stats-link-pickup", "4");
+    const pudoShipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+    const pudoShipmentsBody = new URLSearchParams();
+    pudoShipmentsBody.set("_token", csrfToken);
+    pudoShipmentsBody.set("draw", "1");
+    pudoShipmentsBody.set("start", "0");
+    pudoShipmentsBody.set("length", "100");
+    pudoShipmentsBody.set("status", pickupStatus);
+
+    const pudoShipmentsRes = await fetch(pudoShipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?status=${encodeURIComponent(pickupStatus)}`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: pudoShipmentsBody.toString(),
+      redirect: "manual"
+    });
+
+    if (pudoShipmentsRes.ok) {
+      const pudoShipmentsJson = await pudoShipmentsRes.json().catch(() => ({}));
+      pudoShipments = parseTmsIncidenceShipmentsDatatable(pudoShipmentsJson);
+    }
+  } catch {
+    pudoShipments = [];
+  }
+
   return {
     meta: {
       fetchedAt: new Date().toISOString(),
@@ -780,7 +820,8 @@ async function fetchTmsDashboardData() {
     serviceStatus: parseTmsServiceStatus(dashboardHtml),
     pendingAcceptance: parseTmsPendingAcceptance(dashboardHtml),
     incidences,
-    incidenceShipments
+    incidenceShipments,
+    pudoShipments
   };
 }
 

@@ -194,6 +194,18 @@ type TmsDashboardData = {
     hasCharge?: boolean;
     chargeAmount?: string;
   }>;
+  pudoShipments?: Array<{
+    parcelId: string;
+    providerTrackingCode?: string;
+    service?: string;
+    sender: string;
+    recipient: string;
+    finalClientPhone: string;
+    status?: string;
+    incidence?: string;
+    hasCharge?: boolean;
+    chargeAmount?: string;
+  }>;
 };
 
 type AuthUser = {
@@ -467,6 +479,7 @@ function App() {
   const [tmsLoading, setTmsLoading] = useState(false);
   const [tmsError, setTmsError] = useState("");
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
+  const [showPudoDetails, setShowPudoDetails] = useState(false);
 
   // Feature 1: Contact book
   const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
@@ -556,6 +569,11 @@ function App() {
   const selectedTemplateBody = useMemo(
     () => extractBodyTemplateText(selectedMetaTemplate),
     [selectedMetaTemplate]
+  );
+
+  const pudoShipments = useMemo(
+    () => (Array.isArray(tmsDashboard?.pudoShipments) ? tmsDashboard.pudoShipments : []),
+    [tmsDashboard]
   );
 
   const requiredBodyIndexes = useMemo(
@@ -1026,9 +1044,7 @@ function App() {
       const apiMsgId = String(data?.messages?.[0]?.id || "").trim();
       const targetPhone = digitsOnly(toNumber.trim());
       setConversations((current) => {
-        const existing = current.find(
-          (c) => c.id === activeConversationId || digitsOnly(c.phone) === targetPhone
-        );
+        const existing = current.find((c) => digitsOnly(c.phone) === targetPhone);
         const msg: ConversationMessage = {
           id: `m-${Date.now()}`,
           direction: "out",
@@ -1542,9 +1558,7 @@ function App() {
       let nextActiveConversationId = activeConversationId;
 
       setConversations((current) => {
-        const matchingById = current.find((item) => item.id === activeConversationId);
-        const matching =
-          matchingById || current.find((item) => digitsOnly(item.phone) === digitsOnly(targetPhone));
+        const matching = current.find((item) => digitsOnly(item.phone) === digitsOnly(targetPhone));
 
         const nextMessage: ConversationMessage = {
           id: `m-${Date.now()}`,
@@ -3017,13 +3031,22 @@ function App() {
                     <article className="tms-block">
                       <div className="tms-incidences-head">
                         <h4>Motivos de Incidência</h4>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => setShowIncidenceDetails((open) => !open)}
-                        >
-                          {showIncidenceDetails ? "Ocultar detalhe ongoing" : "Ver detalhe ongoing"}
-                        </button>
+                        <div className="tracker-filter-buttons" role="group" aria-label="Ver detalhes do tracker TMS">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setShowIncidenceDetails((open) => !open)}
+                          >
+                            {showIncidenceDetails ? "Ocultar detalhe incidência" : "Ver detalhe incidência"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setShowPudoDetails((open) => !open)}
+                          >
+                            {showPudoDetails ? "Ocultar detalhe PUDO" : "Ver detalhe PUDO"}
+                          </button>
+                        </div>
                       </div>
                       {tmsDashboard.incidences.length === 0 ? (
                         <p className="tms-empty">Sem incidências disponíveis.</p>
@@ -3080,6 +3103,48 @@ function App() {
                                 <tbody>
                                   {tmsDashboard.incidenceShipments.map((item, index) => (
                                     <tr key={`${item.parcelId || "parcel"}-${index}`}>
+                                      <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
+                                      <td>{item.providerTrackingCode || "-"}</td>
+                                      <td>{item.service || "-"}</td>
+                                      <td>{item.sender || "-"}</td>
+                                      <td>{item.recipient || "-"}</td>
+                                      <td>{item.finalClientPhone || "-"}</td>
+                                      <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
+                                      <td>{item.status || "-"}</td>
+                                      <td>{item.incidence || "-"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {showPudoDetails ? (
+                        <div className="tms-incidence-details">
+                          <h5>Parcels em Pickup Point (PUDO)</h5>
+                          {pudoShipments.length === 0 ? (
+                            <p className="tms-empty">Sem envios PUDO neste momento.</p>
+                          ) : (
+                            <div className="tms-incidences-wrap">
+                              <table className="tms-incidences-table">
+                                <thead>
+                                  <tr>
+                                    <th>Parcel ID</th>
+                                    <th>Tracking Number</th>
+                                    <th>Service</th>
+                                    <th>Sender</th>
+                                    <th>Destinatário</th>
+                                    <th>Final Client Phone</th>
+                                    <th>Cobrança</th>
+                                    <th>Status</th>
+                                    <th>Incidência</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {pudoShipments.map((item, index) => (
+                                    <tr key={`${item.parcelId || "parcel"}-pudo-${index}`}>
                                       <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
                                       <td>{item.providerTrackingCode || "-"}</td>
                                       <td>{item.service || "-"}</td>
