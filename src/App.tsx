@@ -72,6 +72,8 @@ type ConversationMessage = {
   text: string;
   time: string;
   apiMessageId?: string;
+  mediaType?: string;
+  mediaUrl?: string;
   deliveryStatus?: "sent" | "delivered" | "read" | "failed";
 };
 
@@ -138,6 +140,7 @@ type SharedLogItem = {
   template_name?: string | null;
   status?: string | null;
   api_message_id?: string | null;
+  payload?: Record<string, unknown> | null;
 };
 
 type CalendarEvent = {
@@ -408,6 +411,28 @@ function extractPlaceholderIndexes(input: string) {
   return [...new Set(matches.map((match) => Number(match[1])).filter(Number.isFinite))].sort(
     (a, b) => a - b
   );
+}
+
+function extractInboundMediaFromLog(log: SharedLogItem) {
+  const payload = log?.payload && typeof log.payload === "object" ? log.payload : null;
+  const message = payload && typeof payload.message === "object" ? payload.message as Record<string, unknown> : null;
+  if (!message) {
+    return { mediaType: "", mediaId: "" };
+  }
+
+  const mediaType = String(message.type || "").trim().toLowerCase();
+  if (!mediaType) {
+    return { mediaType: "", mediaId: "" };
+  }
+
+  const mediaNode = message[mediaType] && typeof message[mediaType] === "object"
+    ? message[mediaType] as Record<string, unknown>
+    : null;
+
+  return {
+    mediaType,
+    mediaId: String(mediaNode?.id || "").trim()
+  };
 }
 
 function templateNeedsUrlButtonVariable(template: MetaTemplate | null) {
@@ -1613,6 +1638,8 @@ function App() {
           from?: string;
           contactName?: string;
           text?: string;
+          mediaType?: string;
+          mediaId?: string;
           status?: string;
         };
 
@@ -1623,6 +1650,9 @@ function App() {
 
         const inboundApiId = String(data.messageId || "").trim();
         const inboundText = String(data.text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+        const inboundMediaType = String(data.mediaType || "").trim().toLowerCase();
+        const inboundMediaId = String(data.mediaId || "").trim();
+        const inboundMediaUrl = inboundMediaId ? apiUrl(`/api/media/${encodeURIComponent(inboundMediaId)}`) : "";
         const inboundTime = nowLabel();
 
         setConversations((current) => {
@@ -1638,7 +1668,9 @@ function App() {
               direction: "in",
               text: inboundText,
               time: inboundTime,
-              apiMessageId: inboundApiId || undefined
+              apiMessageId: inboundApiId || undefined,
+              mediaType: inboundMediaType || undefined,
+              mediaUrl: inboundMediaUrl || undefined
             };
 
             return current
@@ -1667,7 +1699,9 @@ function App() {
                 direction: "in",
                 text: inboundText,
                 time: inboundTime,
-                apiMessageId: inboundApiId || undefined
+                apiMessageId: inboundApiId || undefined,
+                mediaType: inboundMediaType || undefined,
+                mediaUrl: inboundMediaUrl || undefined
               }
             ]
           };
@@ -1957,24 +1991,116 @@ function App() {
     loadSharedLogs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep shared logs fresh in all views so inbound messages are not missed.
   useEffect(() => {
-    if (activeView === "tracker") {
-      loadTmsDashboard();
-    }
-  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (activeView !== "tracker") {
-      return;
-    }
-
     const intervalId = window.setInterval(() => {
       loadSharedLogs();
-    }, 45000);
+    }, 15000);
 
     return () => {
       window.clearInterval(intervalId);
     };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rehydrate inbound chat from shared logs for resilience when SSE reconnects.
+  useEffect(() => {
+    const inboundLogs = sharedLogs
+      .filter((item) => String(item.direction || "").toLowerCase() === "in")
+      .filter((item) => String(item.channel || "").toLowerCase() === "chat")
+      .filter((item) => String(item.to_number || "").trim().length > 0)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+    if (inboundLogs.length === 0) {
+      return;
+    }
+
+    setConversations((current) => {
+      let next = [...current];
+
+      for (const item of inboundLogs) {
+        const fromDigits = digitsOnly(String(item.to_number || ""));
+        if (!fromDigits) {
+          continue;
+        }
+
+        const apiMessageId = String(item.api_message_id || "").trim();
+        const text = String(item.message_text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+        const mediaInfo = extractInboundMediaFromLog(item);
+        const mediaUrl = mediaInfo.mediaId ? apiUrl(`/api/media/${encodeURIComponent(mediaInfo.mediaId)}`) : "";
+        const parsedTime = new Date(item.created_at);
+        const timeLabel = isNaN(parsedTime.getTime())
+          ? nowLabel()
+          : parsedTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        const existingIndex = next.findIndex((conversation) => digitsOnly(conversation.phone) === fromDigits);
+        if (existingIndex >= 0) {
+          const existing = next[existingIndex];
+          const alreadyExists = apiMessageId
+            ? existing.messages.some((message) => message.apiMessageId === apiMessageId)
+            : existing.messages.some(
+                (message) =>
+                  message.direction === "in" &&
+                  message.text === text &&
+                  message.time === timeLabel
+              );
+
+          if (alreadyExists) {
+            continue;
+          }
+
+          const updated = {
+            ...existing,
+            lastAt: timeLabel,
+            unread: existing.id === activeConversationId ? existing.unread : existing.unread + 1,
+            messages: [
+              ...existing.messages,
+              {
+                id: `in-log-${item.id}`,
+                direction: "in" as const,
+                text,
+                time: timeLabel,
+                apiMessageId: apiMessageId || undefined,
+                mediaType: mediaInfo.mediaType || undefined,
+                mediaUrl: mediaUrl || undefined
+              }
+            ]
+          };
+
+          next[existingIndex] = updated;
+          continue;
+        }
+
+        next = [
+          {
+            id: `c-log-${item.id}`,
+            name: String(item.contact_name || "").trim() || resolveContactName(fromDigits, savedContacts),
+            phone: fromDigits,
+            unread: activeConversationId ? 1 : 0,
+            lastAt: timeLabel,
+            messages: [
+              {
+                id: `in-log-${item.id}`,
+                direction: "in" as const,
+                text,
+                time: timeLabel,
+                apiMessageId: apiMessageId || undefined,
+                mediaType: mediaInfo.mediaType || undefined,
+                mediaUrl: mediaUrl || undefined
+              }
+            ]
+          },
+          ...next
+        ];
+      }
+
+      return next;
+    });
+  }, [activeConversationId, savedContacts, sharedLogs]);
+
+  useEffect(() => {
+    if (activeView === "tracker") {
+      loadTmsDashboard();
+    }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const endpoint = useMemo(() => {
@@ -2554,6 +2680,18 @@ function App() {
             <main className="wa-thread">
               {(activeConversation?.messages || []).map((message) => (
                 <article key={message.id} className={`wa-msg ${message.direction === "in" ? "in" : "out"}`}>
+                  {message.mediaUrl && (message.mediaType === "image" || message.mediaType === "sticker") ? (
+                    <img className="wa-msg-media" src={message.mediaUrl} alt={message.mediaType || "media"} loading="lazy" />
+                  ) : null}
+                  {message.mediaUrl && message.mediaType === "video" ? (
+                    <video className="wa-msg-media" src={message.mediaUrl} controls preload="metadata" />
+                  ) : null}
+                  {message.mediaUrl && message.mediaType === "audio" ? (
+                    <audio className="wa-msg-audio" src={message.mediaUrl} controls preload="metadata" />
+                  ) : null}
+                  {message.mediaUrl && message.mediaType === "document" ? (
+                    <a className="wa-msg-doc" href={message.mediaUrl} target="_blank" rel="noreferrer">Abrir documento</a>
+                  ) : null}
                   <p>{message.text}</p>
                   <time>
                     {message.time}

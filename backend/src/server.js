@@ -1427,7 +1427,25 @@ function inboundMessageText(message) {
     return "[document]";
   }
 
+  if (type === "sticker") {
+    return "[sticker]";
+  }
+
   return `[${type}]`;
+}
+
+function inboundMessageMediaInfo(message) {
+  const type = String(message?.type || "").trim().toLowerCase();
+  if (!type) {
+    return { mediaType: "", mediaId: "" };
+  }
+
+  const mediaNode = message?.[type] || null;
+  const mediaId = String(mediaNode?.id || "").trim();
+  return {
+    mediaType: type,
+    mediaId
+  };
 }
 
 async function logInboundMessage({ from, message, contact }) {
@@ -2330,6 +2348,7 @@ async function handleWebhookEvent(req, res) {
         const contact = contacts.find((item) => String(item?.wa_id || "") === from) || null;
         const inboundMessageId = String(inboundMessage?.id || "").trim();
         const summaryText = inboundMessageText(inboundMessage);
+        const mediaInfo = inboundMessageMediaInfo(inboundMessage);
 
         await logInboundMessage({ from, message: inboundMessage, contact });
 
@@ -2338,6 +2357,8 @@ async function handleWebhookEvent(req, res) {
           from,
           contactName: String(contact?.profile?.name || "").trim(),
           text: summaryText,
+          mediaType: mediaInfo.mediaType || undefined,
+          mediaId: mediaInfo.mediaId || undefined,
           status: "received"
         });
       }
@@ -2500,6 +2521,57 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
   }
 });
 
+app.get("/api/media/:mediaId", async (req, res) => {
+  try {
+    const mediaId = String(req.params?.mediaId || "").trim();
+    if (!mediaId) {
+      return res.status(400).json({ error: "Missing media id" });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    const metaResponse = await fetch(`https://graph.facebook.com/${apiVersion}/${encodeURIComponent(mediaId)}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const metaBody = await metaResponse.json().catch(() => ({}));
+    if (!metaResponse.ok || !metaBody?.url) {
+      return res.status(metaResponse.ok ? 404 : metaResponse.status).json({
+        error: "Failed to resolve media URL",
+        details: metaBody
+      });
+    }
+
+    const binaryResponse = await fetch(String(metaBody.url), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (!binaryResponse.ok) {
+      const details = await binaryResponse.text().catch(() => "");
+      return res.status(binaryResponse.status).json({ error: "Failed to fetch media binary", details });
+    }
+
+    const mimeType = String(binaryResponse.headers.get("content-type") || metaBody?.mime_type || "application/octet-stream");
+    const arrayBuffer = await binaryResponse.arrayBuffer();
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to proxy media",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/api/logs", async (req, res) => {
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
     return res.json({ data: [], warning: "supabase_not_configured" });
@@ -2514,7 +2586,7 @@ app.get("/api/logs", async (req, res) => {
     if (supabaseEnabled && supabase) {
       const { data, error } = await supabase
         .from("whatsapp_logs")
-        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id")
+        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
         .neq("channel", STATE_FALLBACK_CHANNEL)
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -2527,7 +2599,7 @@ app.get("/api/logs", async (req, res) => {
     }
 
     const { rows } = await pgPool.query(
-      `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id
+      `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
       from public.whatsapp_logs
       where channel is distinct from $2
       order by created_at desc
