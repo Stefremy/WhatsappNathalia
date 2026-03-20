@@ -613,6 +613,48 @@ p {
   color: #f3f8ff;
 }
 
+.tms-incidences-table tr.tms-row-overdue td {
+  background: #fff4f1;
+}
+
+.tms-notify-status {
+  font-weight: 600;
+  font-size: 0.77rem;
+}
+
+.tms-notify-status.ok {
+  color: #1f7a3a;
+}
+
+.tms-notify-status.pending {
+  color: #3f5577;
+}
+
+.tms-notify-status.overdue {
+  color: #a1331f;
+}
+
+.tms-mini-btn {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.74rem;
+  border-radius: 8px;
+}
+
+.tms-pagination {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tms-pagination span {
+  font-size: 0.8rem;
+  color: #17345d;
+  font-weight: 600;
+}
+
 .tms-empty {
   margin: 0;
   color: var(--muted);

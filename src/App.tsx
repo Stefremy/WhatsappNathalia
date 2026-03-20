@@ -208,6 +208,14 @@ type TmsDashboardData = {
   }>;
 };
 
+type PudoNotificationState = Record<
+  string,
+  {
+    firstSeenAt: string;
+    notifiedAt?: string;
+  }
+>;
+
 type AuthUser = {
   username: string;
   displayName: string;
@@ -215,6 +223,31 @@ type AuthUser = {
 
 function digitsOnly(value: string) {
   return String(value || "").replace(/\D/g, "");
+}
+
+function normalizePhoneForPudoMatch(value: string) {
+  const digits = digitsOnly(value);
+  if (!digits) return "";
+
+  const withoutInternationalPrefix = digits.startsWith("00") ? digits.slice(2) : digits;
+  if (withoutInternationalPrefix.length > 9) {
+    return withoutInternationalPrefix.slice(-9);
+  }
+
+  return withoutInternationalPrefix;
+}
+
+function getPudoShipmentKey(item: {
+  parcelId: string;
+  providerTrackingCode?: string;
+  finalClientPhone: string;
+  recipient: string;
+}) {
+  const parcel = String(item.parcelId || "").trim();
+  const tracking = String(item.providerTrackingCode || "").trim();
+  const phone = normalizePhoneForPudoMatch(item.finalClientPhone || "");
+  const recipient = String(item.recipient || "").trim().toLowerCase();
+  return parcel || tracking || `${recipient}:${phone}`;
 }
 
 function contactDisplayName(phone: string) {
@@ -478,8 +511,18 @@ function App() {
   const [tmsDashboard, setTmsDashboard] = useState<TmsDashboardData | null>(null);
   const [tmsLoading, setTmsLoading] = useState(false);
   const [tmsError, setTmsError] = useState("");
+  const [showIncidencesPanel, setShowIncidencesPanel] = useState(false);
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
   const [showPudoDetails, setShowPudoDetails] = useState(false);
+  const [incidenceDetailsPage, setIncidenceDetailsPage] = useState(1);
+  const [pudoDetailsPage, setPudoDetailsPage] = useState(1);
+  const [pudoNotifications, setPudoNotifications] = useState<PudoNotificationState>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_pudo_notifications") || "{}") as PudoNotificationState;
+    } catch {
+      return {};
+    }
+  });
 
   // Feature 1: Contact book
   const [savedContacts, setSavedContacts] = useState<Record<string, string>>(() => {
@@ -576,6 +619,46 @@ function App() {
     [tmsDashboard]
   );
 
+  const detailsPageSize = 25;
+
+  const incidenceShipments = useMemo(
+    () => (Array.isArray(tmsDashboard?.incidenceShipments) ? tmsDashboard.incidenceShipments : []),
+    [tmsDashboard]
+  );
+
+  const incidenceDetailsTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(incidenceShipments.length / detailsPageSize)),
+    [incidenceShipments.length]
+  );
+
+  const paginatedIncidenceShipments = useMemo(() => {
+    const start = (incidenceDetailsPage - 1) * detailsPageSize;
+    return incidenceShipments.slice(start, start + detailsPageSize);
+  }, [incidenceDetailsPage, incidenceShipments]);
+
+  const pudoDetailsTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(pudoShipments.length / detailsPageSize)),
+    [pudoShipments.length]
+  );
+
+  const paginatedPudoShipments = useMemo(() => {
+    const start = (pudoDetailsPage - 1) * detailsPageSize;
+    return pudoShipments.slice(start, start + detailsPageSize);
+  }, [pudoDetailsPage, pudoShipments]);
+
+  const pudoOverdueCount = useMemo(() => {
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    return pudoShipments.reduce((count, item) => {
+      const key = getPudoShipmentKey(item);
+      const status = pudoNotifications[key];
+      if (!status?.firstSeenAt || status.notifiedAt) return count;
+      const firstSeenTs = new Date(status.firstSeenAt).getTime();
+      if (!Number.isFinite(firstSeenTs)) return count;
+      return now - firstSeenTs >= oneDayMs ? count + 1 : count;
+    }, 0);
+  }, [pudoNotifications, pudoShipments]);
+
   const requiredBodyIndexes = useMemo(
     () => extractPlaceholderIndexes(selectedTemplateBody),
     [selectedTemplateBody]
@@ -665,9 +748,163 @@ function App() {
     });
   }, [requiredBodyIndexes]);
 
+  useEffect(() => {
+    setIncidenceDetailsPage(1);
+  }, [incidenceShipments.length, showIncidenceDetails]);
+
+  useEffect(() => {
+    if (incidenceDetailsPage > incidenceDetailsTotalPages) {
+      setIncidenceDetailsPage(incidenceDetailsTotalPages);
+    }
+  }, [incidenceDetailsPage, incidenceDetailsTotalPages]);
+
+  useEffect(() => {
+    setPudoDetailsPage(1);
+  }, [pudoShipments.length, showPudoDetails]);
+
+  useEffect(() => {
+    if (pudoDetailsPage > pudoDetailsTotalPages) {
+      setPudoDetailsPage(pudoDetailsTotalPages);
+    }
+  }, [pudoDetailsPage, pudoDetailsTotalPages]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("wa_pudo_notifications", JSON.stringify(pudoNotifications));
+    } catch {}
+  }, [pudoNotifications]);
+
+  useEffect(() => {
+    if (pudoShipments.length === 0) {
+      return;
+    }
+
+    setPudoNotifications((prev) => {
+      const nowIso = new Date().toISOString();
+      let changed = false;
+      const next: PudoNotificationState = { ...prev };
+
+      for (const item of pudoShipments) {
+        const key = getPudoShipmentKey(item);
+        if (!key) continue;
+        if (!next[key]) {
+          next[key] = { firstSeenAt: nowIso };
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [pudoShipments]);
+
+  useEffect(() => {
+    if (pudoShipments.length === 0 || sharedLogs.length === 0) {
+      return;
+    }
+
+    const outgoingWhatsappLogs = sharedLogs
+      .filter((item) => String(item.direction || "").toLowerCase() === "out")
+      .filter((item) => String(item.channel || "").toLowerCase() !== "sms")
+      .map((item) => ({
+        phone: normalizePhoneForPudoMatch(item.to_number || ""),
+        createdAt: String(item.created_at || "")
+      }))
+      .filter((item) => item.phone.length > 0 && item.createdAt.length > 0);
+
+    if (outgoingWhatsappLogs.length === 0) {
+      return;
+    }
+
+    setPudoNotifications((prev) => {
+      let changed = false;
+      const next: PudoNotificationState = { ...prev };
+
+      for (const item of pudoShipments) {
+        const phone = normalizePhoneForPudoMatch(item.finalClientPhone || "");
+        if (!phone) continue;
+
+        const key = getPudoShipmentKey(item);
+        if (!key) continue;
+
+        const existing = next[key] || { firstSeenAt: new Date().toISOString() };
+        if (existing.notifiedAt) continue;
+
+        const firstSeenTs = new Date(existing.firstSeenAt).getTime();
+        const matchingLog = outgoingWhatsappLogs
+          .filter((entry) => entry.phone === phone)
+          .find((entry) => {
+            const sentTs = new Date(entry.createdAt).getTime();
+            return Number.isFinite(sentTs) && (!Number.isFinite(firstSeenTs) || sentTs >= firstSeenTs);
+          });
+
+        if (!matchingLog) continue;
+
+        next[key] = {
+          ...existing,
+          notifiedAt: matchingLog.createdAt
+        };
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [pudoShipments, sharedLogs]);
+
   function addEmoji(emoji: string) {
     setMessageText((current) => `${current}${emoji}`);
     setEmojiOpen(false);
+  }
+
+  function togglePudoNotified(item: {
+    parcelId: string;
+    providerTrackingCode?: string;
+    finalClientPhone: string;
+    recipient: string;
+  }) {
+    const key = getPudoShipmentKey(item);
+    if (!key) return;
+
+    setPudoNotifications((prev) => {
+      const existing = prev[key] || { firstSeenAt: new Date().toISOString() };
+      const nextStatus = existing.notifiedAt
+        ? { firstSeenAt: existing.firstSeenAt }
+        : { ...existing, notifiedAt: new Date().toISOString() };
+
+      return {
+        ...prev,
+        [key]: nextStatus
+      };
+    });
+  }
+
+  function markPudoNotifiedByPhone(phoneInput: string, notifiedAtIso?: string) {
+    const phone = normalizePhoneForPudoMatch(phoneInput || "");
+    if (!phone) return;
+
+    setPudoNotifications((prev) => {
+      const nowIso = notifiedAtIso || new Date().toISOString();
+      let changed = false;
+      const next: PudoNotificationState = { ...prev };
+
+      for (const item of pudoShipments) {
+        if (normalizePhoneForPudoMatch(item.finalClientPhone || "") !== phone) continue;
+
+        const key = getPudoShipmentKey(item);
+        if (!key) continue;
+
+        const existing = next[key] || { firstSeenAt: nowIso };
+        if (existing.notifiedAt) continue;
+
+        next[key] = {
+          ...existing,
+          firstSeenAt: existing.firstSeenAt || nowIso,
+          notifiedAt: nowIso
+        };
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
   }
 
   // Feature 1: Contact book
@@ -1070,7 +1307,10 @@ function App() {
         return [created, ...current];
       });
       setStatusText(response.ok ? "Media enviada" : `Falhou (${response.status})`);
-      if (response.ok) setComposeMedia(null);
+      if (response.ok) {
+        markPudoNotifiedByPhone(targetPhone);
+        setComposeMedia(null);
+      }
     } catch {
       setStatusText("Falha no envio de media");
     } finally {
@@ -1506,6 +1746,20 @@ function App() {
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (activeView !== "tracker") {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadSharedLogs();
+    }, 45000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
     const cleanPhoneId = phoneNumberId.trim() || "configured in backend";
@@ -1607,6 +1861,7 @@ function App() {
       setStatusText(response.ok ? "Aceite pela API (entrega pendente)" : `Falhou (${response.status})`);
       setResponseText(JSON.stringify(data, null, 2));
       if (response.ok) {
+        markPudoNotifiedByPhone(targetPhone);
         setMessageText("");
       }
     } catch (error) {
@@ -1752,6 +2007,10 @@ function App() {
       const data = await response.json();
       setGenericStatus(response.ok ? "Template aceite" : `Falhou (${response.status})`);
       setGenericResponse(JSON.stringify(data, null, 2));
+
+      if (response.ok) {
+        markPudoNotifiedByPhone(genericTo);
+      }
 
       setTemplateHistory((current) => [
         {
@@ -3030,135 +3289,234 @@ function App() {
 
                     <article className="tms-block">
                       <div className="tms-incidences-head">
-                        <h4>Motivos de Incidência</h4>
-                        <div className="tracker-filter-buttons" role="group" aria-label="Ver detalhes do tracker TMS">
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={() => setShowIncidenceDetails((open) => !open)}
-                          >
-                            {showIncidenceDetails ? "Ocultar detalhe incidência" : "Ver detalhe incidência"}
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={() => setShowPudoDetails((open) => !open)}
-                          >
-                            {showPudoDetails ? "Ocultar detalhe PUDO" : "Ver detalhe PUDO"}
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setShowIncidencesPanel((open) => !open)}
+                        >
+                          {showIncidencesPanel ? "Ocultar motivos de incidência" : "Ver motivos de incidência"}
+                        </button>
                       </div>
-                      {tmsDashboard.incidences.length === 0 ? (
-                        <p className="tms-empty">Sem incidências disponíveis.</p>
-                      ) : (
-                        <div className="tms-incidences-wrap">
-                          <table className="tms-incidences-table">
-                            <thead>
-                              <tr>
-                                <th>Incidência</th>
-                                <th>Envio</th>
-                                <th>Recolha</th>
-                                <th>Visível App</th>
-                                <th>Ativo</th>
-                                <th>Pos</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {tmsDashboard.incidences.map((item) => (
-                                <tr key={`inc-${item.id}`}>
-                                  <td>{item.name}</td>
-                                  <td>{item.shipment ? "Sim" : "Não"}</td>
-                                  <td>{item.pickup ? "Sim" : "Não"}</td>
-                                  <td>{item.appVisible ? "Sim" : "Não"}</td>
-                                  <td>{item.active ? "Sim" : "Não"}</td>
-                                  <td>{item.sort}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {showIncidenceDetails ? (
-                        <div className="tms-incidence-details">
-                          <h5>Incidências Ongoing (envios em incidência)</h5>
-                          {tmsDashboard.incidenceShipments.length === 0 ? (
-                            <p className="tms-empty">Sem envios em incidência neste momento.</p>
+                      <div className="tracker-filter-buttons" role="group" aria-label="Ver detalhes do tracker TMS">
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setShowIncidenceDetails((open) => !open)}
+                        >
+                          {showIncidenceDetails ? "Ocultar detalhe incidência" : "Ver detalhe incidência"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setShowPudoDetails((open) => !open)}
+                        >
+                          {showPudoDetails ? "Ocultar detalhe PUDO" : "Ver detalhe PUDO"}
+                        </button>
+                      </div>
+                      {showIncidencesPanel ? (
+                        <>
+                          {tmsDashboard.incidences.length === 0 ? (
+                            <p className="tms-empty">Sem incidências disponíveis.</p>
                           ) : (
                             <div className="tms-incidences-wrap">
                               <table className="tms-incidences-table">
                                 <thead>
                                   <tr>
-                                    <th>Parcel ID</th>
-                                    <th>Tracking Number</th>
-                                    <th>Service</th>
-                                    <th>Sender</th>
-                                    <th>Destinatário</th>
-                                    <th>Final Client Phone</th>
-                                    <th>Cobrança</th>
-                                    <th>Status</th>
                                     <th>Incidência</th>
+                                    <th>Envio</th>
+                                    <th>Recolha</th>
+                                    <th>Visível App</th>
+                                    <th>Ativo</th>
+                                    <th>Pos</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {tmsDashboard.incidenceShipments.map((item, index) => (
-                                    <tr key={`${item.parcelId || "parcel"}-${index}`}>
-                                      <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
-                                      <td>{item.providerTrackingCode || "-"}</td>
-                                      <td>{item.service || "-"}</td>
-                                      <td>{item.sender || "-"}</td>
-                                      <td>{item.recipient || "-"}</td>
-                                      <td>{item.finalClientPhone || "-"}</td>
-                                      <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
-                                      <td>{item.status || "-"}</td>
-                                      <td>{item.incidence || "-"}</td>
+                                  {tmsDashboard.incidences.map((item) => (
+                                    <tr key={`inc-${item.id}`}>
+                                      <td>{item.name}</td>
+                                      <td>{item.shipment ? "Sim" : "Não"}</td>
+                                      <td>{item.pickup ? "Sim" : "Não"}</td>
+                                      <td>{item.appVisible ? "Sim" : "Não"}</td>
+                                      <td>{item.active ? "Sim" : "Não"}</td>
+                                      <td>{item.sort}</td>
                                     </tr>
                                   ))}
                                 </tbody>
                               </table>
                             </div>
                           )}
+
+                        </>
+                      ) : null}
+
+                      {showIncidenceDetails ? (
+                        <div className="tms-incidence-details">
+                          <h5>Incidências Ongoing (envios em incidência)</h5>
+                          {incidenceShipments.length === 0 ? (
+                            <p className="tms-empty">Sem envios em incidência neste momento.</p>
+                          ) : (
+                            <>
+                              <div className="tms-incidences-wrap">
+                                <table className="tms-incidences-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Parcel ID</th>
+                                      <th>Tracking Number</th>
+                                      <th>Service</th>
+                                      <th>Sender</th>
+                                      <th>Destinatário</th>
+                                      <th>Final Client Phone</th>
+                                      <th>Cobrança</th>
+                                      <th>Status</th>
+                                      <th>Incidência</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {paginatedIncidenceShipments.map((item, index) => (
+                                      <tr key={`${item.parcelId || "parcel"}-${incidenceDetailsPage}-${index}`}>
+                                        <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
+                                        <td>{item.providerTrackingCode || "-"}</td>
+                                        <td>{item.service || "-"}</td>
+                                        <td>{item.sender || "-"}</td>
+                                        <td>{item.recipient || "-"}</td>
+                                        <td>{item.finalClientPhone || "-"}</td>
+                                        <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
+                                        <td>{item.status || "-"}</td>
+                                        <td>{item.incidence || "-"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {incidenceDetailsTotalPages > 1 ? (
+                                <div className="tms-pagination">
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary tms-mini-btn"
+                                    onClick={() => setIncidenceDetailsPage((page) => Math.max(1, page - 1))}
+                                    disabled={incidenceDetailsPage <= 1}
+                                  >
+                                    Anterior
+                                  </button>
+                                  <span>
+                                    Página {incidenceDetailsPage} de {incidenceDetailsTotalPages}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary tms-mini-btn"
+                                    onClick={() => setIncidenceDetailsPage((page) => Math.min(incidenceDetailsTotalPages, page + 1))}
+                                    disabled={incidenceDetailsPage >= incidenceDetailsTotalPages}
+                                  >
+                                    Seguinte
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
                         </div>
                       ) : null}
 
                       {showPudoDetails ? (
                         <div className="tms-incidence-details">
-                          <h5>Parcels em Pickup Point (PUDO)</h5>
+                          <h5>
+                            Parcels em Pickup Point (PUDO)
+                            {pudoOverdueCount > 0 ? ` - ${pudoOverdueCount} pendente(s) > 24h` : ""}
+                          </h5>
                           {pudoShipments.length === 0 ? (
                             <p className="tms-empty">Sem envios PUDO neste momento.</p>
                           ) : (
-                            <div className="tms-incidences-wrap">
-                              <table className="tms-incidences-table">
-                                <thead>
-                                  <tr>
-                                    <th>Parcel ID</th>
-                                    <th>Tracking Number</th>
-                                    <th>Service</th>
-                                    <th>Sender</th>
-                                    <th>Destinatário</th>
-                                    <th>Final Client Phone</th>
-                                    <th>Cobrança</th>
-                                    <th>Status</th>
-                                    <th>Incidência</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {pudoShipments.map((item, index) => (
-                                    <tr key={`${item.parcelId || "parcel"}-pudo-${index}`}>
-                                      <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
-                                      <td>{item.providerTrackingCode || "-"}</td>
-                                      <td>{item.service || "-"}</td>
-                                      <td>{item.sender || "-"}</td>
-                                      <td>{item.recipient || "-"}</td>
-                                      <td>{item.finalClientPhone || "-"}</td>
-                                      <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
-                                      <td>{item.status || "-"}</td>
-                                      <td>{item.incidence || "-"}</td>
+                            <>
+                              <div className="tms-incidences-wrap">
+                                <table className="tms-incidences-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Parcel ID</th>
+                                      <th>Tracking Number</th>
+                                      <th>Service</th>
+                                      <th>Sender</th>
+                                      <th>Destinatário</th>
+                                      <th>Final Client Phone</th>
+                                      <th>Cobrança</th>
+                                      <th>Status</th>
+                                      <th>Incidência</th>
+                                      <th>Notificação</th>
+                                      <th>Ação</th>
                                     </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                                  </thead>
+                                  <tbody>
+                                  {paginatedPudoShipments.map((item, index) => {
+                                    const key = getPudoShipmentKey(item);
+                                    const notificationState = pudoNotifications[key];
+                                    const firstSeenTs = new Date(notificationState?.firstSeenAt || "").getTime();
+                                    const overdue =
+                                      !notificationState?.notifiedAt &&
+                                      Number.isFinite(firstSeenTs) &&
+                                      Date.now() - firstSeenTs >= 24 * 60 * 60 * 1000;
+
+                                    return (
+                                      <tr
+                                        key={`${item.parcelId || "parcel"}-pudo-${pudoDetailsPage}-${index}`}
+                                        className={overdue ? "tms-row-overdue" : ""}
+                                      >
+                                        <td>{item.parcelId || item.providerTrackingCode || "-"}</td>
+                                        <td>{item.providerTrackingCode || "-"}</td>
+                                        <td>{item.service || "-"}</td>
+                                        <td>{item.sender || "-"}</td>
+                                        <td>{item.recipient || "-"}</td>
+                                        <td>{item.finalClientPhone || "-"}</td>
+                                        <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
+                                        <td>{item.status || "-"}</td>
+                                        <td>{item.incidence || "-"}</td>
+                                        <td>
+                                          {notificationState?.notifiedAt ? (
+                                            <span className="tms-notify-status ok">
+                                              Notificado {new Date(notificationState.notifiedAt).toLocaleString("pt-PT")}
+                                            </span>
+                                          ) : overdue ? (
+                                            <span className="tms-notify-status overdue">Pendente &gt; 24h</span>
+                                          ) : (
+                                            <span className="tms-notify-status pending">Pendente</span>
+                                          )}
+                                        </td>
+                                        <td>
+                                          <button
+                                            type="button"
+                                            className="btn btn-secondary tms-mini-btn"
+                                            onClick={() => togglePudoNotified(item)}
+                                          >
+                                            {notificationState?.notifiedAt ? "Desmarcar" : "Marcar notificado"}
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {pudoDetailsTotalPages > 1 ? (
+                                <div className="tms-pagination">
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary tms-mini-btn"
+                                    onClick={() => setPudoDetailsPage((page) => Math.max(1, page - 1))}
+                                    disabled={pudoDetailsPage <= 1}
+                                  >
+                                    Anterior
+                                  </button>
+                                  <span>
+                                    Página {pudoDetailsPage} de {pudoDetailsTotalPages}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary tms-mini-btn"
+                                    onClick={() => setPudoDetailsPage((page) => Math.min(pudoDetailsTotalPages, page + 1))}
+                                    disabled={pudoDetailsPage >= pudoDetailsTotalPages}
+                                  >
+                                    Seguinte
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
                           )}
                         </div>
                       ) : null}
