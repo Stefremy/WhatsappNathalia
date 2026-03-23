@@ -764,6 +764,11 @@ p {
   background: #0d1528;
 }
 
+.delivered-scroll-wrap {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
 .tracker-filters {
   display: grid;
   gap: 0.6rem;

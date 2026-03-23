@@ -113,6 +113,11 @@ const notionConsumiveis = notionConsumiveisApiKey ? new NotionClient({ auth: not
 const notionConsumiveisDatabaseId = String(process.env.NOTION_CONSUMIVEIS_DATABASE_ID || "").trim();
 const notionConsumiveisPageId = String(process.env.NOTION_CONSUMIVEIS_PAGE_ID || "").trim();
 const notionConsumiveisEnabled = Boolean(notionConsumiveis && (notionConsumiveisDatabaseId || notionConsumiveisPageId));
+const notionFeedbackApiKey = String(process.env.NOTION_FEEDBACK_API_KEY || "").trim();
+const notionFeedback = notionFeedbackApiKey ? new NotionClient({ auth: notionFeedbackApiKey }) : null;
+const notionFeedbackDatabaseId = String(process.env.NOTION_FEEDBACK_DATABASE_ID || "").trim();
+const notionFeedbackPageId = String(process.env.NOTION_FEEDBACK_PAGE_ID || "").trim();
+const notionFeedbackEnabled = Boolean(notionFeedback && (notionFeedbackDatabaseId || notionFeedbackPageId));
 const botpressWebhookRelayUrl = String(process.env.BOTPRESS_WEBHOOK_RELAY_URL || "").trim();
 const botpressApiKey = String(process.env.BOTPRESS_API_KEY || "").trim();
 const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
@@ -656,12 +661,125 @@ function parseTmsIncidenceShipmentsDatatable(payload) {
       sender: stripHtml(row?.sender_name || ""),
       recipient: stripHtml(row?.recipient_name || ""),
       finalClientPhone: String(row?.recipient_phone || "").trim(),
+      pickupDate: normalizeDatatableTextCell(
+        row?.pickup_date ||
+        row?.collection_date ||
+        row?.recolha_date ||
+        row?.date_pickup ||
+        row?.pickup_at ||
+        row?.collected_at ||
+        row?.created_at ||
+        ""
+      ),
+      deliveryDate: normalizeDatatableTextCell(row?.delivery_date || row?.delivery_at || ""),
       status: normalizeDatatableTextCell(row?.status || row?.status_id || ""),
       incidence: normalizeDatatableTextCell(row?.last_incidence || ""),
       hasCharge,
       chargeAmount: hasChargeByAmount ? chargeAmountNumber.toFixed(2) : ""
     };
   });
+}
+
+async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchDeliveredDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+    requestBody.set("status", "5");
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=5`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS delivered shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  // Datatable comes oldest -> newest; compute an offset from the end so page 1 is newest first.
+  const probePayload = await fetchDeliveredDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPage = Math.min(safePage, totalPages);
+  const sourceStart = Math.max(0, total - (boundedPage * safeLimit));
+  const sourceEndExclusive = Math.max(0, total - ((boundedPage - 1) * safeLimit));
+  const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+
+  const payload = await fetchDeliveredDatatablePage(boundedPage, sourceStart, sourceLength);
+  const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
+
+  return {
+    rows,
+    meta: {
+      page: boundedPage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin/shipments?filter=1&status=5`
+    }
+  };
 }
 
 function parseTmsStatusFromLink(html, linkClassName, fallbackStatus = "") {
@@ -1202,6 +1320,56 @@ async function resolveConsumiveisDatabaseIdFromPage() {
   const blocks = Array.isArray(children?.results) ? children.results : [];
   const childDatabase = blocks.find((block) => String(block?.type || "") === "child_database");
   return childDatabase?.id ? String(childDatabase.id) : "";
+}
+
+async function queryFeedbackRows(databaseId, limit) {
+  const dbInfo = await notionFeedback.databases.retrieve({ database_id: databaseId });
+  const columns = Object.keys(dbInfo?.properties || {});
+
+  let hasMore = true;
+  let nextCursor = undefined;
+  const rows = [];
+
+  while (hasMore && rows.length < limit) {
+    const pageSize = Math.min(100, limit - rows.length);
+    const query = {
+      database_id: databaseId,
+      page_size: pageSize,
+      sorts: [{ timestamp: "last_edited_time", direction: "descending" }]
+    };
+
+    if (nextCursor) {
+      query.start_cursor = nextCursor;
+    }
+
+    const response = await notionFeedback.databases.query(query);
+    const results = Array.isArray(response?.results) ? response.results : [];
+    rows.push(...results.map((page) => normalizeConsumiveisRow(page, columns)));
+
+    hasMore = Boolean(response?.has_more);
+    nextCursor = response?.next_cursor || undefined;
+  }
+
+  return { rows, hasMore, columns };
+}
+
+async function resolveFeedbackDatabaseIdFromPage() {
+  if (!notionFeedback || !notionFeedbackPageId) {
+    return "";
+  }
+
+  try {
+    const children = await notionFeedback.blocks.children.list({
+      block_id: notionFeedbackPageId,
+      page_size: 100
+    });
+
+    const blocks = Array.isArray(children?.results) ? children.results : [];
+    const childDatabase = blocks.find((block) => String(block?.type || "") === "child_database");
+    return childDatabase?.id ? String(childDatabase.id) : "";
+  } catch {
+    return "";
+  }
 }
 
 function parseBooleanLike(value) {
@@ -1993,6 +2161,73 @@ app.get("/api/consumiveis", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch consumiveis from Notion.",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/feedback-tracker", async (req, res) => {
+  if (!notionFeedbackEnabled || !notionFeedback) {
+    return res.status(503).json({
+      error: "Feedback Tracker Notion integration is not configured.",
+      details: "Set NOTION_FEEDBACK_API_KEY and NOTION_FEEDBACK_DATABASE_ID or NOTION_FEEDBACK_PAGE_ID"
+    });
+  }
+
+  try {
+    const requestedLimit = Number(req.query.limit || 100);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(200, Math.floor(requestedLimit)))
+      : 100;
+
+    const pageDerivedDatabaseId = await resolveFeedbackDatabaseIdFromPage();
+    let resolvedDatabaseId = notionFeedbackDatabaseId || pageDerivedDatabaseId;
+    let pageFallbackUsed = !notionFeedbackDatabaseId && Boolean(pageDerivedDatabaseId);
+
+    if (!resolvedDatabaseId) {
+      return res.status(404).json({
+        error: "Could not resolve feedback tracker database from page.",
+        details: "Ensure NOTION_FEEDBACK_DATABASE_ID is valid or page contains a child database and is shared with integration."
+      });
+    }
+
+    let rows = [];
+    let hasMore = false;
+    let columns = [];
+
+    try {
+      const result = await queryFeedbackRows(resolvedDatabaseId, limit);
+      rows = result.rows;
+      hasMore = result.hasMore;
+      columns = result.columns;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+
+      if (canFallbackToPageDb && /could not find database with id/i.test(message)) {
+        resolvedDatabaseId = pageDerivedDatabaseId;
+        pageFallbackUsed = true;
+        const fallbackResult = await queryFeedbackRows(resolvedDatabaseId, limit);
+        rows = fallbackResult.rows;
+        hasMore = fallbackResult.hasMore;
+        columns = fallbackResult.columns;
+      } else {
+        throw error;
+      }
+    }
+
+    return res.json({
+      data: rows,
+      meta: {
+        fetchedAt: new Date().toISOString(),
+        count: rows.length,
+        hasMore,
+        columns
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch feedback tracker from Notion.",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
@@ -3097,6 +3332,25 @@ app.get("/api/tms/dashboard", async (_req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch TMS dashboard data",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/delivered", async (req, res) => {
+  try {
+    const requestedPage = Number(req.query?.page || 1);
+    const requestedLimit = Number(req.query?.limit || 250);
+
+    const data = await fetchTmsDeliveredShipmentsData({
+      page: requestedPage,
+      limit: requestedLimit
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch delivered TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
