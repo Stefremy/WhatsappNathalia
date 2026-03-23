@@ -7,22 +7,6 @@ const docsFacts = [
   { label: "Auth", value: "Bearer token" }
 ];
 
-type RadioStation = {
-  name: string;
-  genre: string;
-  url: string;
-  emoji: string;
-};
-
-const radioStations: RadioStation[] = [
-  { name: "Antena 1", genre: "Cultura · Notícias", url: "https://streaming.rtp.pt/live/a1/a1", emoji: "📻" },
-  { name: "Antena 3", genre: "Rock · Alternativo", url: "https://streaming.rtp.pt/live/a3/a3", emoji: "🎸" },
-  { name: "Antena 2", genre: "Música Clássica", url: "https://streaming.rtp.pt/live/a2/a2", emoji: "🎻" },
-  { name: "TSF", genre: "Notícias · Debates", url: "https://icecast.tsf.pt/tsf-128k", emoji: "📰" },
-  { name: "Rádio Comercial", genre: "Pop · Hits", url: "https://mcr.iosys.pt/live/comercial", emoji: "🌟" },
-  { name: "RFM", genre: "Pop · Dance", url: "https://mcr.iosys.pt/live/rfm", emoji: "🎵" },
-];
-
 const quickApps = [
   {
     name: "Tracking Linke",
@@ -141,6 +125,12 @@ type SharedLogItem = {
   status?: string | null;
   api_message_id?: string | null;
   payload?: Record<string, unknown> | null;
+};
+
+type ConsumivelItem = {
+  id: string;
+  fields: Record<string, string>;
+  url?: string;
 };
 
 type CalendarEvent = {
@@ -537,6 +527,8 @@ function App() {
   const [responseText, setResponseText] = useState("Ainda não foi enviado nenhum pedido.");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaConsoleExpanded, setMediaConsoleExpanded] = useState(false);
+  const [templateConsoleExpanded, setTemplateConsoleExpanded] = useState(false);
   const [mediaStatusText, setMediaStatusText] = useState("Inativo");
   const [mediaResponseText, setMediaResponseText] = useState("Ainda não foi enviado nenhum ficheiro.");
   const [genericTo, setGenericTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
@@ -577,7 +569,22 @@ function App() {
   const [sharedLogs, setSharedLogs] = useState<SharedLogItem[]>([]);
   const [sharedLogsLoading, setSharedLogsLoading] = useState(false);
   const [sharedLogsError, setSharedLogsError] = useState("");
-  const [activeView, setActiveView] = useState<"workspace" | "tracker">("workspace");
+  const [consumiveisRows, setConsumiveisRows] = useState<ConsumivelItem[]>([]);
+  const [consumiveisColumns, setConsumiveisColumns] = useState<string[]>([]);
+  const [consumiveisLoading, setConsumiveisLoading] = useState(false);
+  const [consumiveisSaving, setConsumiveisSaving] = useState(false);
+  const [consumiveisError, setConsumiveisError] = useState("");
+  const [consumiveisForm, setConsumiveisForm] = useState({
+    clientName: "",
+    dateSent: "",
+    tabela: "",
+    tipoCliente: "",
+    texto: "",
+    texto1: "",
+    text: "",
+    texto2: ""
+  });
+  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "consumiveis">("workspace");
   const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status">("all");
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
@@ -629,17 +636,8 @@ function App() {
   const [composeMedia, setComposeMedia] = useState<File | null>(null);
   const [composeMediaLoading, setComposeMediaLoading] = useState(false);
   const trackerTemplateToInputRef = useRef<HTMLInputElement | null>(null);
-  // Radio player
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [radioPlaying, setRadioPlaying] = useState(false);
-  const [radioLoading, setRadioLoading] = useState(false);
-  const [radioError, setRadioError] = useState(false);
-  const [radioCurrentIdx, setRadioCurrentIdx] = useState(0);
-  const [radioVolume, setRadioVolume] = useState(() => {
-    try { return parseFloat(localStorage.getItem("wa_radio_volume") || "0.7"); } catch { return 0.7; }
-  });
-  const [radioDrawerOpen, setRadioDrawerOpen] = useState(false);
-  const [radioCustomUrl, setRadioCustomUrl] = useState("");
+  const sharedLogsInFlightRef = useRef(false);
+  const sharedLogsSignatureRef = useRef("");
 
   const [contactNotes, setContactNotes] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem("wa_contact_notes") || "{}"); } catch { return {}; }
@@ -1078,100 +1076,11 @@ function App() {
     setNewReminderAt("");
   }
 
-  // Radio: build stream URL through backend proxy (only for custom URLs)
-  function proxyStreamUrl(sourceUrl: string) {
-    if (!backendBaseUrl) return sourceUrl;
-    return `${backendBaseUrl}/api/radio/proxy?url=${encodeURIComponent(sourceUrl)}`;
-  }
-
-  // Built-in stations play directly in browser (they have CORS headers).
-  // Proxy is only used for custom user-supplied URLs where CORS is unknown.
-  function resolvedStreamUrl(idx: number) {
-    return radioStations[idx].url;
-  }
-
-  // Radio player controls
-  function radioToggle() {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (radioPlaying) {
-      audio.pause();
-      setRadioPlaying(false);
-    } else {
-      setRadioError(false);
-      setRadioLoading(true);
-      audio.src = resolvedStreamUrl(radioCurrentIdx);
-      audio.load();
-      audio.play().catch(() => {
-        setRadioLoading(false);
-        setRadioError(true);
-        setRadioPlaying(false);
-      });
-    }
-  }
-
-  function radioChangeStation(idx: number) {
-    const audio = audioRef.current;
-    if (!audio) return;
-    setRadioCurrentIdx(idx);
-    setRadioError(false);
-    if (radioPlaying) {
-      audio.pause();
-      setRadioLoading(true);
-      audio.src = resolvedStreamUrl(idx);
-      audio.load();
-      audio.play().catch(() => {
-        setRadioLoading(false);
-        setRadioError(true);
-        setRadioPlaying(false);
-      });
-    }
-  }
-
-  function radioPlayCustomUrl() {
-    const trimmed = radioCustomUrl.trim();
-    if (!trimmed || !/^https?:\/\//i.test(trimmed)) return;
-    const audio = audioRef.current;
-    if (!audio) return;
-    setRadioError(false);
-    setRadioLoading(true);
-    audio.src = proxyStreamUrl(trimmed);
-    audio.load();
-    audio.play().catch(() => { setRadioLoading(false); setRadioError(true); setRadioPlaying(false); });
-    setRadioDrawerOpen(false);
-  }
-
-  function radioNext() {
-    radioChangeStation((radioCurrentIdx + 1) % radioStations.length);
-  }
-
-  function radioPrev() {
-    radioChangeStation((radioCurrentIdx - 1 + radioStations.length) % radioStations.length);
-  }
-
   function completeReminder(reminderId: string) {
     setTeamReminders((prev) =>
       prev.map((item) => (item.id === reminderId ? { ...item, done: true } : item))
     );
   }
-
-  // Radio: init audio element once
-  useEffect(() => {
-    const audio = new Audio();
-    audio.volume = radioVolume;
-    audio.addEventListener("playing", () => { setRadioLoading(false); setRadioPlaying(true); });
-    audio.addEventListener("waiting", () => setRadioLoading(true));
-    audio.addEventListener("pause", () => { setRadioPlaying(false); setRadioLoading(false); });
-    audio.addEventListener("error", () => { setRadioError(true); setRadioLoading(false); setRadioPlaying(false); });
-    audioRef.current = audio;
-    return () => { audio.pause(); audioRef.current = null; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Radio: sync volume
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = radioVolume;
-    try { localStorage.setItem("wa_radio_volume", String(radioVolume)); } catch {}
-  }, [radioVolume]);
 
   // Caderno pessoal
   function addNote() {
@@ -1990,27 +1899,48 @@ function App() {
     }
   }, [trackerPage, trackerTotalPages]);
 
-  function loadSharedLogs() {
-    setSharedLogsLoading(true);
+  function buildSharedLogsSignature(rows: SharedLogItem[]) {
+    return rows
+      .map((item) => `${item.id}:${item.created_at}:${item.status || ""}:${item.api_message_id || ""}`)
+      .join("|");
+  }
+
+  function loadSharedLogs(options?: { silent?: boolean }) {
+    const silent = options?.silent === true;
+
+    if (silent && sharedLogsInFlightRef.current) {
+      return;
+    }
+
+    if (!silent) {
+      setSharedLogsLoading(true);
+    }
     setSharedLogsError("");
+    sharedLogsInFlightRef.current = true;
 
     fetch(apiUrl("/api/logs?limit=300"))
       .then((response) => response.json())
       .then((data) => {
-        if (Array.isArray(data?.data)) {
-          setSharedLogs(data.data as SharedLogItem[]);
-          if (data?.warning === "supabase_not_configured") {
-            setSharedLogsError("Supabase ainda não está configurado no backend. A mostrar histórico local.");
-          }
-        } else {
-          setSharedLogs([]);
+        const rows = Array.isArray(data?.data) ? (data.data as SharedLogItem[]) : [];
+        const nextSignature = buildSharedLogsSignature(rows);
+
+        if (nextSignature !== sharedLogsSignatureRef.current) {
+          sharedLogsSignatureRef.current = nextSignature;
+          setSharedLogs(rows);
+        }
+
+        if (data?.warning === "supabase_not_configured") {
+          setSharedLogsError("Supabase ainda não está configurado no backend. A mostrar histórico local.");
         }
       })
       .catch(() => {
         setSharedLogsError("Não foi possível carregar histórico partilhado. A mostrar histórico local.");
       })
       .finally(() => {
-        setSharedLogsLoading(false);
+        sharedLogsInFlightRef.current = false;
+        if (!silent) {
+          setSharedLogsLoading(false);
+        }
       });
   }
 
@@ -2042,6 +1972,109 @@ function App() {
       });
   }
 
+  function loadConsumiveis() {
+    setConsumiveisLoading(true);
+    setConsumiveisError("");
+
+    fetch(apiUrl("/api/consumiveis?limit=100"))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha Consumiveis (${response.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const columns: string[] = Array.isArray(data?.meta?.columns)
+          ? (data.meta.columns as unknown[])
+              .map((column) => String(column || ""))
+              .filter((column) => column.trim().length > 0)
+          : [];
+
+        const preferredConsumiveisOrder = [
+          "Client Name",
+          "Date Sent",
+          "Date Sent ",
+          "Date Sent  ",
+          "Date Sent   ",
+          "Date Sent     ",
+          "Tabela",
+          "Tipo de Cliente",
+          "Texto",
+          "Texto 1",
+          "Text",
+          "Texto 2"
+        ];
+
+        const orderedColumns = [
+          ...preferredConsumiveisOrder.filter((column) => columns.includes(column)),
+          ...columns.filter((column) => !preferredConsumiveisOrder.includes(column))
+        ];
+
+        setConsumiveisColumns(orderedColumns);
+        setConsumiveisRows(
+          rows.map((row: Record<string, unknown>) => ({
+            id: String(row.id || ""),
+            fields: row.fields && typeof row.fields === "object"
+              ? Object.fromEntries(
+                  Object.entries(row.fields as Record<string, unknown>).map(([key, value]) => [
+                    String(key || ""),
+                    String(value || "-")
+                  ])
+                )
+              : {},
+            url: String(row.url || "") || undefined
+          }))
+        );
+      })
+      .catch((error) => {
+        setConsumiveisError(error instanceof Error ? error.message : "Não foi possível carregar consumiveis.");
+      })
+      .finally(() => {
+        setConsumiveisLoading(false);
+      });
+  }
+
+  async function createConsumivelEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!consumiveisForm.clientName.trim()) {
+      setConsumiveisError("Client Name é obrigatório.");
+      return;
+    }
+
+    setConsumiveisSaving(true);
+    setConsumiveisError("");
+
+    try {
+      const response = await fetch(apiUrl("/api/consumiveis"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(consumiveisForm)
+      });
+
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(String(data?.details || data?.error || `Falha Consumiveis (${response.status})`));
+      }
+
+      setConsumiveisForm((current) => ({
+        ...current,
+        clientName: "",
+        tabela: "",
+        tipoCliente: "",
+        texto: "",
+        texto1: "",
+        text: "",
+        texto2: ""
+      }));
+      loadConsumiveis();
+    } catch (error) {
+      setConsumiveisError(error instanceof Error ? error.message : "Não foi possível criar registo de consumiveis.");
+    } finally {
+      setConsumiveisSaving(false);
+    }
+  }
+
   useEffect(() => {
     loadSharedLogs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2049,7 +2082,7 @@ function App() {
   // Keep shared logs fresh in all views so inbound messages are not missed.
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      loadSharedLogs();
+      loadSharedLogs({ silent: true });
     }, 15000);
 
     return () => {
@@ -2155,6 +2188,12 @@ function App() {
   useEffect(() => {
     if (activeView === "tracker") {
       loadTmsDashboard();
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "consumiveis" && consumiveisRows.length === 0 && !consumiveisLoading) {
+      loadConsumiveis();
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2472,8 +2511,6 @@ function App() {
     }
   }
 
-  const radioStation = radioStations[radioCurrentIdx];
-
   if (!authUser) {
     return (
       <div className="auth-screen">
@@ -2563,6 +2600,14 @@ function App() {
               <span className="workspace-nav-icon"><SidebarIcon name="notes" /></span>
               <span>Notes &amp; Calendar</span>
             </a>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "consumiveis" ? " active" : ""}`}
+              onClick={() => setActiveView("consumiveis")}
+            >
+              <span className="workspace-nav-icon">📦</span>
+              <span>Consumiveis</span>
+            </button>
             <button
               type="button"
               className={`workspace-nav-link workspace-nav-button${activeView === "tracker" ? " active" : ""}`}
@@ -2965,7 +3010,7 @@ function App() {
           <button
             type="button"
             className="btn btn-secondary"
-            onClick={loadSharedLogs}
+            onClick={() => loadSharedLogs()}
             disabled={sharedLogsLoading}
           >
             {sharedLogsLoading ? "A atualizar..." : "Atualizar logs"}
@@ -3047,53 +3092,83 @@ function App() {
       </section>
 
       <section className="panel" id="media-console">
-        <h2>Consola de Upload de Media</h2>
-        <p>
-          Baseado na documentação oficial: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/media</strong>
-          com multipart form-data. Este endpoint devolve um <strong>id</strong> de media para usar
-          em mensagens de media.
-        </p>
-
-        <form className="api-form" onSubmit={uploadMedia}>
-          <label>
-            Selecionar Ficheiro de Media
-            <input
-              type="file"
-              onChange={(event) => setMediaFile(event.target.files?.[0] || null)}
-              accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.webp"
-            />
-          </label>
-
-          <div className="api-actions">
-            <button className="btn btn-primary" type="submit" disabled={mediaLoading}>
-              {mediaLoading ? "A carregar..." : "Carregar media"}
-            </button>
-            <span className="status">Estado: {mediaStatusText}</span>
-          </div>
-        </form>
-
-        <div className="code-grid">
-          <article className="card code-block">
-            <h3>Endpoint Graph (Upload)</h3>
-            <pre>{`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Relay Backend</h3>
-            <pre>{apiUrl("/api/media/upload")}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Exemplo cURL</h3>
-            <pre>{mediaCurlCommand}</pre>
-          </article>
-          <article className="card code-block">
-            <h3>Resposta do Upload</h3>
-            <pre>{mediaResponseText}</pre>
-          </article>
+        <div className="api-actions">
+          <h2>Consola de Upload de Media</h2>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setMediaConsoleExpanded((current) => !current)}
+          >
+            {mediaConsoleExpanded ? "Recolher secção" : "Expandir secção"}
+          </button>
         </div>
+
+        {mediaConsoleExpanded ? (
+          <>
+            <p>
+              Baseado na documentação oficial: <strong>POST /{`{Version}`}/{`{Phone-Number-ID}`}/media</strong>
+              com multipart form-data. Este endpoint devolve um <strong>id</strong> de media para usar
+              em mensagens de media.
+            </p>
+
+            <form className="api-form" onSubmit={uploadMedia}>
+              <label>
+                Selecionar Ficheiro de Media
+                <input
+                  type="file"
+                  onChange={(event) => setMediaFile(event.target.files?.[0] || null)}
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt,.webp"
+                />
+              </label>
+
+              <div className="api-actions">
+                <button className="btn btn-primary" type="submit" disabled={mediaLoading}>
+                  {mediaLoading ? "A carregar..." : "Carregar media"}
+                </button>
+                <span className="status">Estado: {mediaStatusText}</span>
+              </div>
+            </form>
+
+            <div className="code-grid">
+              <article className="card code-block">
+                <h3>Endpoint Graph (Upload)</h3>
+                <pre>{`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`}</pre>
+              </article>
+              <article className="card code-block">
+                <h3>Relay Backend</h3>
+                <pre>{apiUrl("/api/media/upload")}</pre>
+              </article>
+              <article className="card code-block">
+                <h3>Exemplo cURL</h3>
+                <pre>{mediaCurlCommand}</pre>
+              </article>
+              <article className="card code-block">
+                <h3>Resposta do Upload</h3>
+                <pre>{mediaResponseText}</pre>
+              </article>
+            </div>
+          </>
+        ) : (
+          <p className="status">Secção recolhida para manter o workspace mais leve.</p>
+        )}
       </section>
 
       <section className="panel" id="generic-template-console">
-        <h2>Notificações por Template</h2>
+        <div className="api-actions">
+          <h2>Notificações por Template</h2>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setTemplateConsoleExpanded((current) => !current)}
+          >
+            {templateConsoleExpanded ? "Recolher secção" : "Expandir secção"}
+          </button>
+        </div>
+
+        {!templateConsoleExpanded ? (
+          <p className="status">Secção recolhida para manter o workspace mais leve.</p>
+        ) : (
+          <>
         <p>
           Escolhe um template aprovado da tua conta Meta, preenche variáveis, pré-visualiza
           a mensagem e envia a notificação.
@@ -3365,6 +3440,8 @@ function App() {
             ) : null}
           </div>
         </details>
+          </>
+        )}
       </section>
 
       <section className="panel caderno-panel" id="caderno-pessoal">
@@ -3597,7 +3674,7 @@ function App() {
         </button>
       </section>
             </div>
-          ) : (
+          ) : activeView === "tracker" ? (
             <section className="panel tracker-page" id="client-tracker-page">
               <div className="tracker-header">
                 <div>
@@ -3616,7 +3693,7 @@ function App() {
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={loadSharedLogs}
+                    onClick={() => loadSharedLogs()}
                     disabled={sharedLogsLoading}
                   >
                     {sharedLogsLoading ? "A atualizar..." : "Atualizar"}
@@ -4265,80 +4342,150 @@ function App() {
                 </div>
               </div>
             </section>
+          ) : (
+            <section className="panel tracker-page" id="consumiveis-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Consumiveis</h2>
+                  <p>Vista dedicada com sincronização Notion e criação de novos registos.</p>
+                </div>
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={loadConsumiveis}
+                    disabled={consumiveisLoading || consumiveisSaving}
+                  >
+                    {consumiveisLoading ? "A atualizar..." : "Atualizar consumiveis"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    Voltar ao Workspace
+                  </button>
+                </div>
+              </div>
+
+              <section className="panel">
+                <h3>Novo Registo</h3>
+                <form className="api-form" onSubmit={createConsumivelEntry}>
+                  <div className="template-var-grid">
+                    <label>
+                      Client Name
+                      <input
+                        value={consumiveisForm.clientName}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, clientName: event.target.value }))}
+                        placeholder="Nome do cliente"
+                      />
+                    </label>
+                    <label>
+                      Date Sent
+                      <input
+                        type="date"
+                        value={consumiveisForm.dateSent}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, dateSent: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Tabela
+                      <input
+                        value={consumiveisForm.tabela}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, tabela: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Tipo de Cliente
+                      <input
+                        value={consumiveisForm.tipoCliente}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, tipoCliente: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Texto
+                      <input
+                        value={consumiveisForm.texto}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, texto: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Texto 1
+                      <input
+                        value={consumiveisForm.texto1}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, texto1: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Text
+                      <input
+                        value={consumiveisForm.text}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, text: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      Texto 2
+                      <input
+                        value={consumiveisForm.texto2}
+                        onChange={(event) => setConsumiveisForm((current) => ({ ...current, texto2: event.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="api-actions">
+                    <button className="btn btn-primary" type="submit" disabled={consumiveisSaving}>
+                      {consumiveisSaving ? "A guardar..." : "Adicionar registo"}
+                    </button>
+                    <span className="status">{consumiveisRows.length} registos</span>
+                  </div>
+                </form>
+              </section>
+
+              {consumiveisError ? <p className="status">{consumiveisError}</p> : null}
+
+              <div className="tracker-table-wrap">
+                <table className="tracker-table consumiveis-table">
+                  <thead>
+                    <tr>
+                      {(consumiveisColumns.length > 0 ? consumiveisColumns : ["Item"]).map((column) => (
+                        <th key={`cons-col-${column}`}>{column}</th>
+                      ))}
+                      <th>Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {consumiveisRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={(consumiveisColumns.length > 0 ? consumiveisColumns.length : 1) + 1} className="tracker-empty">
+                          {consumiveisLoading ? "A carregar consumiveis..." : "Sem dados de consumiveis para mostrar."}
+                        </td>
+                      </tr>
+                    ) : (
+                      consumiveisRows.map((row) => (
+                        <tr key={row.id}>
+                          {(consumiveisColumns.length > 0 ? consumiveisColumns : ["Item"]).map((column) => (
+                            <td key={`cons-cell-${row.id}-${column}`}>{row.fields[column] || "-"}</td>
+                          ))}
+                          <td>
+                            {row.url ? (
+                              <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
+                                Ver no Notion
+                              </a>
+                            ) : (
+                              <span className="status">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           )}
         </main>
       </div>
     </div>
 
-    {/* ── Sticky Radio Bar ── */}
-    <div className={`radio-bar${radioDrawerOpen ? " radio-bar--open" : ""}`}>
-      {radioDrawerOpen && (
-        <div className="radio-drawer">
-          <p className="radio-drawer-titulo">Escolher Estação</p>
-          {radioStations.map((station, idx) => (
-            <button
-              key={station.url}
-              type="button"
-              className={`radio-station-item${idx === radioCurrentIdx ? " ativo" : ""}`}
-              onClick={() => { radioChangeStation(idx); setRadioDrawerOpen(false); }}
-            >
-              <span className="radio-station-emoji">{station.emoji}</span>
-              <span className="radio-station-info">
-                <strong>{station.name}</strong>
-                <small>{station.genre}</small>
-              </span>
-              {idx === radioCurrentIdx && radioPlaying && <span className="radio-equalizer">▶</span>}
-            </button>
-          ))}
-          <div className="radio-custom-url">
-            <input
-              type="url"
-              placeholder="URL de stream personalizado (https://...)" 
-              value={radioCustomUrl}
-              onChange={(e) => setRadioCustomUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && radioPlayCustomUrl()}
-            />
-            <button type="button" onClick={radioPlayCustomUrl} title="Ouvir URL">▶</button>
-          </div>
-        </div>
-      )}
-
-      <div className="radio-controls">
-        <button type="button" className="radio-btn radio-btn-sm" onClick={radioPrev} title="Anterior">⏮</button>
-
-        <button
-          type="button"
-          className={`radio-btn radio-btn-play${radioLoading ? " loading" : ""}`}
-          onClick={radioToggle}
-          title={radioPlaying ? "Pausar" : "Ouvir"}
-        >
-          {radioLoading ? "⏳" : radioPlaying ? "⏸" : "▶"}
-        </button>
-
-        <button type="button" className="radio-btn radio-btn-sm" onClick={radioNext} title="Próxima">⏭</button>
-
-        <div className="radio-info" onClick={() => setRadioDrawerOpen((o) => !o)}>
-          <span className="radio-emoji">{radioStation.emoji}</span>
-          <span className="radio-text">
-            <strong>{radioStation.name}</strong>
-            <small>{radioError ? "Erro – tenta outra estação" : radioPlaying ? "● AO VIVO" : radioStation.genre}</small>
-          </span>
-          <span className="radio-caret">{radioDrawerOpen ? "▾" : "▸"}</span>
-        </div>
-
-        <label className="radio-volume" title="Volume">
-          🔊
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.02}
-            value={radioVolume}
-            onChange={(e) => setRadioVolume(parseFloat(e.target.value))}
-          />
-        </label>
-      </div>
-    </div>
     </>
   );
 }

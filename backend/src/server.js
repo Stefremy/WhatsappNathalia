@@ -108,6 +108,11 @@ const notionTrackerApiKey = String(process.env.NOTION_TRACKER_API_KEY || process
 const notionTracker = notionTrackerApiKey ? new NotionClient({ auth: notionTrackerApiKey }) : null;
 const notionTrackerDatabaseId = String(process.env.NOTION_TRACKER_DATABASE_ID || "").trim();
 const notionTrackerEnabled = Boolean(notionTracker && notionTrackerDatabaseId);
+const notionConsumiveisApiKey = String(process.env.NOTION_CONSUMIVEIS_API_KEY || process.env.NOTION_API_KEY || "").trim();
+const notionConsumiveis = notionConsumiveisApiKey ? new NotionClient({ auth: notionConsumiveisApiKey }) : null;
+const notionConsumiveisDatabaseId = String(process.env.NOTION_CONSUMIVEIS_DATABASE_ID || "").trim();
+const notionConsumiveisPageId = String(process.env.NOTION_CONSUMIVEIS_PAGE_ID || "").trim();
+const notionConsumiveisEnabled = Boolean(notionConsumiveis && (notionConsumiveisDatabaseId || notionConsumiveisPageId));
 const botpressWebhookRelayUrl = String(process.env.BOTPRESS_WEBHOOK_RELAY_URL || "").trim();
 const botpressApiKey = String(process.env.BOTPRESS_API_KEY || "").trim();
 const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
@@ -986,6 +991,337 @@ function titleText(text) {
   return [{ type: "text", text: { content: String(text ?? "") } }];
 }
 
+function normalizeNotionFieldName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+function pickNotionPropertyName(properties, aliases, allowedTypes = []) {
+  const entries = Object.entries(properties || {});
+  if (!entries.length) return "";
+
+  const normalizedAliases = aliases.map((alias) => normalizeNotionFieldName(alias));
+
+  for (const [name, prop] of entries) {
+    const propType = String(prop?.type || "");
+    if (allowedTypes.length > 0 && !allowedTypes.includes(propType)) continue;
+    const normalizedName = normalizeNotionFieldName(name);
+    if (normalizedAliases.some((alias) => normalizedName.includes(alias))) {
+      return name;
+    }
+  }
+
+  return "";
+}
+
+function notionPropertyToText(property) {
+  if (!property || typeof property !== "object") {
+    return "";
+  }
+
+  const type = String(property.type || "");
+
+  if (type === "title") {
+    return (property.title || []).map((item) => item?.plain_text || "").join("").trim();
+  }
+
+  if (type === "rich_text") {
+    return (property.rich_text || []).map((item) => item?.plain_text || "").join("").trim();
+  }
+
+  if (type === "number") {
+    return property.number === null || property.number === undefined ? "" : String(property.number);
+  }
+
+  if (type === "select") {
+    return String(property.select?.name || "").trim();
+  }
+
+  if (type === "status") {
+    return String(property.status?.name || "").trim();
+  }
+
+  if (type === "date") {
+    return String(property.date?.start || "").trim();
+  }
+
+  if (type === "checkbox") {
+    return property.checkbox ? "Yes" : "No";
+  }
+
+  if (type === "phone_number") {
+    return String(property.phone_number || "").trim();
+  }
+
+  if (type === "email") {
+    return String(property.email || "").trim();
+  }
+
+  if (type === "url") {
+    return String(property.url || "").trim();
+  }
+
+  if (type === "multi_select") {
+    return (property.multi_select || []).map((item) => item?.name || "").filter(Boolean).join(", ");
+  }
+
+  if (type === "formula") {
+    const formula = property.formula || {};
+    if (formula.type === "string") return String(formula.string || "").trim();
+    if (formula.type === "number") return formula.number === null || formula.number === undefined ? "" : String(formula.number);
+    if (formula.type === "boolean") return formula.boolean ? "Yes" : "No";
+    if (formula.type === "date") return String(formula.date?.start || "").trim();
+  }
+
+  return "";
+}
+
+function firstNotionTitleText(properties) {
+  const entries = Object.entries(properties || {});
+  for (const [, prop] of entries) {
+    if (String(prop?.type || "") === "title") {
+      const value = notionPropertyToText(prop);
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function normalizeConsumiveisRow(page, columns = []) {
+  const properties = page?.properties && typeof page.properties === "object" ? page.properties : {};
+
+  const nameProp = pickNotionPropertyName(
+    properties,
+    ["name", "nome", "produto", "item", "consumivel", "consumivel", "descricao", "descricao"],
+    ["title", "rich_text"]
+  );
+  const clientProp = pickNotionPropertyName(
+    properties,
+    ["cliente", "client", "destinatario", "recipient", "company", "empresa"],
+    ["title", "rich_text", "select", "status", "phone_number", "email"]
+  );
+  const quantityProp = pickNotionPropertyName(
+    properties,
+    ["quantidade", "qtd", "qty", "amount", "units", "unidades"],
+    ["number", "rich_text", "formula", "rollup", "title"]
+  );
+  const statusProp = pickNotionPropertyName(
+    properties,
+    ["status", "estado", "situacao", "situacao"],
+    ["status", "select", "checkbox", "formula", "rich_text", "title"]
+  );
+  const dateProp = pickNotionPropertyName(
+    properties,
+    ["data", "date", "envio", "sent", "entrega", "created"],
+    ["date", "created_time", "last_edited_time", "formula", "rich_text", "title"]
+  );
+  const notesProp = pickNotionPropertyName(
+    properties,
+    ["nota", "notes", "observ", "comment", "coment"],
+    ["rich_text", "title", "formula"]
+  );
+
+  const name = notionPropertyToText(properties[nameProp]) || firstNotionTitleText(properties) || "-";
+  const client = notionPropertyToText(properties[clientProp]) || "-";
+  const quantity = notionPropertyToText(properties[quantityProp]) || "-";
+  const status = notionPropertyToText(properties[statusProp]) || "-";
+  const dateRaw = notionPropertyToText(properties[dateProp]) || page?.created_time || "";
+  const date = dateRaw ? new Date(dateRaw).toLocaleString("pt-PT") : "-";
+  const notes = notionPropertyToText(properties[notesProp]) || "-";
+
+  const fields = {};
+  const propertyEntries = Object.entries(properties || {});
+  for (const [propertyName, propertyValue] of propertyEntries) {
+    const textValue = notionPropertyToText(propertyValue);
+    fields[propertyName] = textValue || "-";
+  }
+
+  for (const column of columns) {
+    if (!Object.prototype.hasOwnProperty.call(fields, column)) {
+      fields[column] = "-";
+    }
+  }
+
+  return {
+    id: String(page?.id || ""),
+    name,
+    client,
+    quantity,
+    status,
+    date,
+    notes,
+    fields,
+    url: String(page?.url || ""),
+    lastEditedAt: String(page?.last_edited_time || "")
+  };
+}
+
+async function queryConsumiveisRows(databaseId, limit) {
+  const dbInfo = await notionConsumiveis.databases.retrieve({ database_id: databaseId });
+  const columns = Object.keys(dbInfo?.properties || {});
+
+  let hasMore = true;
+  let nextCursor = undefined;
+  const rows = [];
+
+  while (hasMore && rows.length < limit) {
+    const pageSize = Math.min(100, limit - rows.length);
+    const query = {
+      database_id: databaseId,
+      page_size: pageSize,
+      sorts: [{ timestamp: "last_edited_time", direction: "descending" }]
+    };
+
+    if (nextCursor) {
+      query.start_cursor = nextCursor;
+    }
+
+    const response = await notionConsumiveis.databases.query(query);
+    const results = Array.isArray(response?.results) ? response.results : [];
+    rows.push(...results.map((page) => normalizeConsumiveisRow(page, columns)));
+
+    hasMore = Boolean(response?.has_more);
+    nextCursor = response?.next_cursor || undefined;
+  }
+
+  return { rows, hasMore, columns };
+}
+
+async function resolveConsumiveisDatabaseIdFromPage() {
+  if (!notionConsumiveis || !notionConsumiveisPageId) {
+    return "";
+  }
+
+  const children = await notionConsumiveis.blocks.children.list({
+    block_id: notionConsumiveisPageId,
+    page_size: 100
+  });
+
+  const blocks = Array.isArray(children?.results) ? children.results : [];
+  const childDatabase = blocks.find((block) => String(block?.type || "") === "child_database");
+  return childDatabase?.id ? String(childDatabase.id) : "";
+}
+
+function parseBooleanLike(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["1", "true", "yes", "sim", "on"].includes(normalized);
+}
+
+function normalizeConsumiveisCreateInput(rawInput) {
+  const input = rawInput && typeof rawInput === "object" ? rawInput : {};
+  return {
+    clientName: String(input.clientName || "").trim(),
+    dateSent: String(input.dateSent || "").trim(),
+    tabela: String(input.tabela || "").trim(),
+    tipoCliente: String(input.tipoCliente || "").trim(),
+    texto: String(input.texto || "").trim(),
+    texto1: String(input.texto1 || "").trim(),
+    text: String(input.text || "").trim(),
+    texto2: String(input.texto2 || "").trim()
+  };
+}
+
+function buildConsumiveisCreateProperties(databaseProperties, input) {
+  const properties = {};
+
+  const clientNameProp = pickNotionPropertyName(databaseProperties, ["client name", "cliente", "nome", "name"], ["title", "rich_text"]);
+  const tabelaProp = pickNotionPropertyName(databaseProperties, ["tabela", "table"], ["rich_text", "title", "select", "status"]);
+  const tipoClienteProp = pickNotionPropertyName(databaseProperties, ["tipo de cliente", "tipo cliente", "tipo", "cliente tipo"], ["rich_text", "title", "select", "status"]);
+  const textoProp = pickNotionPropertyName(databaseProperties, ["texto"], ["rich_text", "title"]);
+  const texto1Prop = pickNotionPropertyName(databaseProperties, ["texto 1"], ["rich_text", "title"]);
+  const textProp = pickNotionPropertyName(databaseProperties, ["text"], ["rich_text", "title"]);
+  const texto2Prop = pickNotionPropertyName(databaseProperties, ["texto 2"], ["rich_text", "title"]);
+  const dateSentProps = Object.entries(databaseProperties)
+    .filter(([name, prop]) => {
+      const normalizedName = normalizeNotionFieldName(name);
+      const propType = String(prop?.type || "");
+      return normalizedName.startsWith("date sent") && propType === "date";
+    })
+    .map(([name]) => name);
+
+  const dateSentValue = input.dateSent || new Date().toISOString().slice(0, 10);
+
+  const assignValue = (propName, value) => {
+    if (!propName || !databaseProperties[propName]) {
+      return;
+    }
+
+    const propType = String(databaseProperties[propName]?.type || "");
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return;
+    }
+
+    const cleanValue = String(value).trim();
+
+    if (propType === "title") {
+      properties[propName] = { title: titleText(cleanValue) };
+      return;
+    }
+    if (propType === "rich_text") {
+      properties[propName] = { rich_text: richText(cleanValue) };
+      return;
+    }
+    if (propType === "date") {
+      properties[propName] = { date: { start: cleanValue } };
+      return;
+    }
+    if (propType === "number") {
+      const parsed = Number(cleanValue);
+      if (Number.isFinite(parsed)) properties[propName] = { number: parsed };
+      return;
+    }
+    if (propType === "select") {
+      properties[propName] = { select: { name: cleanValue } };
+      return;
+    }
+    if (propType === "status") {
+      properties[propName] = { status: { name: cleanValue } };
+      return;
+    }
+    if (propType === "checkbox") {
+      properties[propName] = { checkbox: parseBooleanLike(cleanValue) };
+      return;
+    }
+    if (propType === "email") {
+      properties[propName] = { email: cleanValue };
+      return;
+    }
+    if (propType === "url") {
+      properties[propName] = { url: cleanValue };
+      return;
+    }
+    if (propType === "phone_number") {
+      properties[propName] = { phone_number: cleanValue };
+      return;
+    }
+    if (propType === "multi_select") {
+      const names = cleanValue
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((name) => ({ name }));
+      if (names.length > 0) {
+        properties[propName] = { multi_select: names };
+      }
+    }
+  };
+
+  assignValue(clientNameProp, input.clientName);
+  assignValue(tabelaProp, input.tabela);
+  assignValue(tipoClienteProp, input.tipoCliente);
+  assignValue(textoProp, input.texto);
+  assignValue(texto1Prop, input.texto1);
+  assignValue(textProp, input.text);
+  assignValue(texto2Prop, input.texto2);
+  for (const propName of dateSentProps) {
+    assignValue(propName, dateSentValue);
+  }
+
+  return properties;
+}
+
 function humanizeUsername(username) {
   return String(username || "")
     .split("_")
@@ -1593,6 +1929,145 @@ app.get("/", (_req, res) => {
     message: "API is running",
     health: "/health"
   });
+});
+
+app.get("/api/consumiveis", async (req, res) => {
+  if (!notionConsumiveisEnabled || !notionConsumiveis) {
+    return res.status(503).json({
+      error: "Consumiveis Notion integration is not configured.",
+      details: "Set NOTION_CONSUMIVEIS_API_KEY and NOTION_CONSUMIVEIS_DATABASE_ID or NOTION_CONSUMIVEIS_PAGE_ID"
+    });
+  }
+
+  try {
+    const requestedLimit = Number(req.query.limit || 100);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(200, Math.floor(requestedLimit)))
+      : 100;
+
+      const pageDerivedDatabaseId = await resolveConsumiveisDatabaseIdFromPage();
+      let resolvedDatabaseId = notionConsumiveisDatabaseId || pageDerivedDatabaseId;
+      let pageFallbackUsed = !notionConsumiveisDatabaseId && Boolean(pageDerivedDatabaseId);
+
+    if (!resolvedDatabaseId) {
+      return res.status(404).json({
+        error: "Could not resolve consumiveis database from page.",
+        details: "Ensure NOTION_CONSUMIVEIS_DATABASE_ID is valid or page contains a child database and is shared with integration."
+      });
+    }
+
+    let rows = [];
+    let hasMore = false;
+    let columns = [];
+
+    try {
+      const result = await queryConsumiveisRows(resolvedDatabaseId, limit);
+      rows = result.rows;
+      hasMore = result.hasMore;
+      columns = result.columns;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+
+      if (!(canFallbackToPageDb && /could not find database with id/i.test(message))) {
+        throw error;
+      }
+
+      resolvedDatabaseId = pageDerivedDatabaseId;
+      pageFallbackUsed = true;
+      const fallbackResult = await queryConsumiveisRows(resolvedDatabaseId, limit);
+      rows = fallbackResult.rows;
+      hasMore = fallbackResult.hasMore;
+      columns = fallbackResult.columns;
+    }
+
+    return res.json({
+      data: rows,
+      meta: {
+        fetchedAt: new Date().toISOString(),
+        count: rows.length,
+        hasMore,
+        columns
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch consumiveis from Notion.",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/consumiveis", async (req, res) => {
+  if (!notionConsumiveisEnabled || !notionConsumiveis) {
+    return res.status(503).json({
+      error: "Consumiveis Notion integration is not configured.",
+      details: "Set NOTION_CONSUMIVEIS_API_KEY and NOTION_CONSUMIVEIS_DATABASE_ID or NOTION_CONSUMIVEIS_PAGE_ID"
+    });
+  }
+
+  try {
+    const input = normalizeConsumiveisCreateInput(req.body);
+    if (!input.clientName) {
+      return res.status(400).json({ error: "Field 'clientName' is required." });
+    }
+
+    const pageDerivedDatabaseId = await resolveConsumiveisDatabaseIdFromPage();
+    let resolvedDatabaseId = notionConsumiveisDatabaseId || pageDerivedDatabaseId;
+    let pageFallbackUsed = !notionConsumiveisDatabaseId && Boolean(pageDerivedDatabaseId);
+
+    if (!resolvedDatabaseId) {
+      return res.status(404).json({
+        error: "Could not resolve consumiveis database from page.",
+        details: "Ensure NOTION_CONSUMIVEIS_DATABASE_ID is valid or page contains a child database and is shared with integration."
+      });
+    }
+
+    let databaseInfo;
+    try {
+      databaseInfo = await notionConsumiveis.databases.retrieve({ database_id: resolvedDatabaseId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+
+      if (!(canFallbackToPageDb && /could not find database with id/i.test(message))) {
+        throw error;
+      }
+
+      resolvedDatabaseId = pageDerivedDatabaseId;
+      pageFallbackUsed = true;
+      databaseInfo = await notionConsumiveis.databases.retrieve({ database_id: resolvedDatabaseId });
+    }
+
+    const databaseProperties = databaseInfo?.properties || {};
+    const notionProperties = buildConsumiveisCreateProperties(databaseProperties, input);
+
+    if (!Object.keys(notionProperties).length) {
+      return res.status(400).json({
+        error: "No writable properties matched the consumiveis database schema.",
+        details: "Check property names and property types in Notion database."
+      });
+    }
+
+    const created = await notionConsumiveis.pages.create({
+      parent: { database_id: resolvedDatabaseId },
+      properties: notionProperties
+    });
+
+    const columns = Object.keys(databaseProperties);
+    return res.status(201).json({
+      data: normalizeConsumiveisRow(created, columns),
+      meta: {
+        createdAt: new Date().toISOString(),
+        databaseId: resolvedDatabaseId
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to create consumiveis row in Notion.",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 });
 
 app.post("/api/messages/send", async (req, res) => {
