@@ -282,6 +282,11 @@ function isAllowedPudoNotificationTemplate(templateName?: string | null, languag
   return normalizedAllowedFull.includes(`${name} (${language})`.toLowerCase());
 }
 
+function isPudoTrackerContext(context?: GenericTemplateTrackerContext | null) {
+  const messageType = String(context?.messageType || "").trim().toLowerCase();
+  return messageType.includes("pick") || messageType.includes("pudo");
+}
+
 function contactDisplayName(phone: string) {
   const normalized = digitsOnly(phone);
   return normalized ? `Contacto ${normalized}` : "Contacto desconhecido";
@@ -2445,8 +2450,12 @@ function App() {
       setGenericStatus(response.ok ? "Template aceite" : `Falhou (${response.status})`);
       setGenericResponse(JSON.stringify(data, null, 2));
 
-      if (response.ok && isAllowedPudoNotificationTemplate(genericTemplateName, genericLanguage)) {
-        markPudoNotifiedByPhone(genericTo);
+      if (
+        response.ok &&
+        (isAllowedPudoNotificationTemplate(genericTemplateName, genericLanguage) ||
+          isPudoTrackerContext(genericTrackerContext))
+      ) {
+        markPudoNotifiedByPhone(genericTo, new Date().toISOString());
       }
 
       setTemplateHistory((current) => [
