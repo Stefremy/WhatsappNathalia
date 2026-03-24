@@ -1763,23 +1763,62 @@ async function createNotionTrackerRow({
     year: "numeric"
   });
 
+  const trackerProperties = {
+    [propClientName]: { rich_text: richText(clientName) },
+    [propMessage]: { rich_text: richText(`Template ${templateName} | Vars: ${(bodyVariables || []).join(" | ")}`) },
+    [propClientPhone]: { phone_number: String(to || "").trim() || null },
+    [propParcelId]: { rich_text: richText(parcelId) },
+    [propMessageType]: { select: { name: messageType } },
+    [propDateSent]: { date: { start: new Date().toISOString() } },
+    [propSmsClicksend]: { rich_text: richText("No") },
+    [propStatus]: { status: { name: status && String(status).startsWith("failed_") ? "Failed" : "In Progress" } },
+    [propMessageTitle]: { title: richText("Whatsapp Template") },
+    [propResponseReceived]: { checkbox: false },
+    [propFollowUpRequired]: { checkbox: false },
+    [propReminderText]: { rich_text: richText("") },
+    [propNotes]: { rich_text: richText(notes) }
+  };
+
+  // Avoid duplicate tracker entries for the same pickup parcel: update existing row when possible.
+  if (parcelId) {
+    try {
+      const existing = await notionTracker.databases.query({
+        database_id: notionTrackerDatabaseId,
+        filter: {
+          and: [
+            {
+              property: propParcelId,
+              rich_text: {
+                equals: parcelId
+              }
+            },
+            {
+              property: propMessageType,
+              select: {
+                equals: messageType
+              }
+            }
+          ]
+        },
+        page_size: 1
+      });
+
+      const existingPageId = existing?.results?.[0]?.id;
+      if (existingPageId) {
+        await notionTracker.pages.update({
+          page_id: existingPageId,
+          properties: trackerProperties
+        });
+        return;
+      }
+    } catch {
+      // If lookup/update fails due to schema mismatch, fallback to create flow below.
+    }
+  }
+
   await notionTracker.pages.create({
     parent: { database_id: notionTrackerDatabaseId },
-    properties: {
-      [propClientName]: { rich_text: richText(clientName) },
-      [propMessage]: { rich_text: richText(`Template ${templateName} | Vars: ${(bodyVariables || []).join(" | ")}`) },
-      [propClientPhone]: { phone_number: String(to || "").trim() || null },
-      [propParcelId]: { rich_text: richText(parcelId) },
-      [propMessageType]: { select: { name: messageType } },
-      [propDateSent]: { date: { start: new Date().toISOString() } },
-      [propSmsClicksend]: { rich_text: richText("No") },
-      [propStatus]: { status: { name: status && String(status).startsWith("failed_") ? "Failed" : "In Progress" } },
-      [propMessageTitle]: { title: richText("Whatsapp Template") },
-      [propResponseReceived]: { checkbox: false },
-      [propFollowUpRequired]: { checkbox: false },
-      [propReminderText]: { rich_text: richText("") },
-      [propNotes]: { rich_text: richText(notes) }
-    },
+    properties: trackerProperties,
     children: [
       {
         object: "block",
