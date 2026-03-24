@@ -799,7 +799,7 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "consumiveis" | "feedback">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "consumiveis" | "feedback">("workspace");
   const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status">("all");
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
@@ -2260,6 +2260,55 @@ function App() {
 
     return sentHistory;
   }, [sentHistory, sharedLogs]);
+
+  const templatePerformanceRows = useMemo(() => {
+    const templateLogs = sharedLogs
+      .filter((item) => String(item.direction || "").toLowerCase() === "out")
+      .filter((item) => String(item.channel || "").toLowerCase() === "template");
+
+    const byTemplate = new Map<string, {
+      templateName: string;
+      total: number;
+      delivered: number;
+      read: number;
+      failed: number;
+    }>();
+
+    for (const item of templateLogs) {
+      const templateName = String(item.template_name || "Template sem nome").trim() || "Template sem nome";
+      const status = String(item.status || "").trim().toLowerCase();
+
+      const current = byTemplate.get(templateName) || {
+        templateName,
+        total: 0,
+        delivered: 0,
+        read: 0,
+        failed: 0
+      };
+
+      current.total += 1;
+      if (status === "read") current.read += 1;
+      if (status === "delivered") current.delivered += 1;
+      if (status.includes("fail") || status.includes("error")) current.failed += 1;
+
+      byTemplate.set(templateName, current);
+    }
+
+    return Array.from(byTemplate.values()).sort((a, b) => b.total - a.total);
+  }, [sharedLogs]);
+
+  const templatePerformanceTotals = useMemo(() => {
+    return templatePerformanceRows.reduce(
+      (acc, row) => {
+        acc.total += row.total;
+        acc.delivered += row.delivered;
+        acc.read += row.read;
+        acc.failed += row.failed;
+        return acc;
+      },
+      { total: 0, delivered: 0, read: 0, failed: 0 }
+    );
+  }, [templatePerformanceRows]);
 
   const inboundWebhookSenders = useMemo(() => {
     const inboundItems = sharedLogs
@@ -3865,6 +3914,17 @@ function App() {
             >
               <span className="workspace-nav-icon"><SidebarIcon name="logs" /></span>
               <span>Client Tracker</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "analytics" ? " active" : ""}`}
+              onClick={() => {
+                setActiveView("analytics");
+                loadSharedLogs();
+              }}
+            >
+              <span className="workspace-nav-icon">📊</span>
+              <span>Data &amp; Analytics</span>
             </button>
             <button
               type="button"
@@ -5719,6 +5779,99 @@ function App() {
                     </button>
                   </div>
                 </div>
+              </div>
+            </section>
+          ) : activeView === "analytics" ? (
+            <section className="panel tracker-page" id="analytics-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Template Performance Dashboard</h2>
+                  <p>Delivered vs Read vs Failed por tipo de template para perceber o que está realmente a funcionar.</p>
+                </div>
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => loadSharedLogs()}
+                  >
+                    Atualizar métricas
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    Voltar ao Workspace
+                  </button>
+                </div>
+              </div>
+
+              <div className="facts wa-facts">
+                <div className="fact">
+                  <span>Templates analisados</span>
+                  <strong>{templatePerformanceRows.length}</strong>
+                </div>
+                <div className="fact">
+                  <span>Total de envios</span>
+                  <strong>{templatePerformanceTotals.total}</strong>
+                </div>
+                <div className="fact">
+                  <span>Delivered</span>
+                  <strong>{templatePerformanceTotals.delivered}</strong>
+                </div>
+                <div className="fact">
+                  <span>Read</span>
+                  <strong>{templatePerformanceTotals.read}</strong>
+                </div>
+                <div className="fact">
+                  <span>Failed</span>
+                  <strong>{templatePerformanceTotals.failed}</strong>
+                </div>
+              </div>
+
+              <div className="tracker-table-wrap">
+                <table className="tracker-table">
+                  <thead>
+                    <tr>
+                      <th>Template Type</th>
+                      <th>Total</th>
+                      <th>Delivered</th>
+                      <th>Read</th>
+                      <th>Failed</th>
+                      <th>Delivered %</th>
+                      <th>Read %</th>
+                      <th>Failed %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {templatePerformanceRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="tracker-empty">
+                          Sem dados de templates nos logs partilhados.
+                        </td>
+                      </tr>
+                    ) : (
+                      templatePerformanceRows.map((row) => {
+                        const deliveredRate = row.total > 0 ? ((row.delivered / row.total) * 100).toFixed(1) : "0.0";
+                        const readRate = row.total > 0 ? ((row.read / row.total) * 100).toFixed(1) : "0.0";
+                        const failedRate = row.total > 0 ? ((row.failed / row.total) * 100).toFixed(1) : "0.0";
+
+                        return (
+                          <tr key={`template-performance-${row.templateName}`}>
+                            <td>{row.templateName}</td>
+                            <td>{row.total}</td>
+                            <td>{row.delivered}</td>
+                            <td>{row.read}</td>
+                            <td>{row.failed}</td>
+                            <td>{deliveredRate}%</td>
+                            <td>{readRate}%</td>
+                            <td>{failedRate}%</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </section>
           ) : activeView === "consumiveis" ? (
