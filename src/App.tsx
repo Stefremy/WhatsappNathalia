@@ -64,6 +64,7 @@ const FEEDBACK_COLUMNS_ORDER = [
   "Feedback URL",
   "Customer Satisfaction",
   "whatsapp subject",
+  "WhatsApp Follow-up SMS",
   "Referência",
   "WhatsApp Template"
 ];
@@ -72,7 +73,8 @@ const FEEDBACK_COLUMN_ALIASES: Record<string, string[]> = {
   "Cod. Serviço": ["Cod. Servi�o", "Cod. Servico"],
   "Destinatário": ["Destinat�rio"],
   "Contacto Destinatário": ["Contacto Destinat�rio"],
-  "Referência": ["Refer�ncia"]
+  "Referência": ["Refer�ncia"],
+  "WhatsApp Follow-up SMS": ["whatsapp follow-up sms", "whatsapp follow up sms", "follow-up sms", "follow up sms"]
 };
 
 type ConversationMessage = {
@@ -768,6 +770,14 @@ function App() {
   const [feedbackCreateLink, setFeedbackCreateLink] = useState("");
   const [feedbackCreateLoading, setFeedbackCreateLoading] = useState(false);
   const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
+  const [deliveredSendingKey, setDeliveredSendingKey] = useState("");
+  const [deliveredSentKeys, setDeliveredSentKeys] = useState<Record<string, true>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_delivered_sent_keys") || "{}") as Record<string, true>;
+    } catch {
+      return {};
+    }
+  });
   const [consumiveisForm, setConsumiveisForm] = useState({
     clientName: "",
     dateSent: "",
@@ -1915,6 +1925,10 @@ function App() {
     try { localStorage.setItem("wa_calendar_events", JSON.stringify(calendarEvents)); } catch {}
   }, [calendarEvents]);
 
+  useEffect(() => {
+    try { localStorage.setItem("wa_delivered_sent_keys", JSON.stringify(deliveredSentKeys)); } catch {}
+  }, [deliveredSentKeys]);
+
   // SSE – delivery status ticks & scheduled_sent events
   useEffect(() => {
     const url = apiUrl("/api/events");
@@ -3004,7 +3018,7 @@ function App() {
     if (!targetTo || !targetTemplateName) {
       setGenericStatus("Faltam campos obrigatórios");
       setGenericResponse("Número de destino e nome do template são obrigatórios.");
-      return;
+      return { ok: false, status: 400, error: "missing_required_fields" };
     }
 
     if (missingIndexes.length > 0) {
@@ -3012,20 +3026,20 @@ function App() {
       setGenericResponse(
         `Preenche as variáveis obrigatórias dos índices: ${missingIndexes.join(", ")}.`
       );
-      return;
+      return { ok: false, status: 400, error: "missing_template_variables" };
     }
 
     if (targetNeedsUrlButtonVariable && !targetButtonUrlVariable) {
       setGenericStatus("Falta variável do botão URL");
       setGenericResponse("Este template inclui um botão URL dinâmico e precisa dessa variável.");
-      return;
+      return { ok: false, status: 400, error: "missing_button_url_variable" };
     }
 
     // Feature 4: Schedule mode
     if (allowSchedule && useSchedule) {
       if (!scheduleAt) {
         setGenericStatus("Seleciona data/hora para agendar");
-        return;
+        return { ok: false, status: 400, error: "missing_schedule_at" };
       }
       try {
         const response = await fetch(apiUrl("/api/messages/schedule"), {
@@ -3048,10 +3062,19 @@ function App() {
         } else {
           setGenericStatus(`Falha no agendamento: ${data?.error || response.status}`);
         }
+        return {
+          ok: response.ok,
+          status: response.status,
+          data,
+          to: targetTo,
+          templateName: targetTemplateName,
+          languageCode: targetLanguageCode,
+          bodyVariables: variables
+        };
       } catch {
         setGenericStatus("Falha no pedido de agendamento");
+        return { ok: false, status: 0, error: "schedule_request_failed" };
       }
-      return;
     }
 
     setGenericLoading(true);
@@ -3098,6 +3121,16 @@ function App() {
         },
         ...current
       ]);
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        data,
+        to: targetTo,
+        templateName: targetTemplateName,
+        languageCode: targetLanguageCode,
+        bodyVariables: variables
+      };
     } catch (error) {
       setGenericStatus("Erro de rede");
       setGenericResponse(error instanceof Error ? error.message : "Erro desconhecido");
@@ -3113,6 +3146,16 @@ function App() {
         },
         ...current
       ]);
+
+      return {
+        ok: false,
+        status: 0,
+        error: error instanceof Error ? error.message : "network_error",
+        to: targetTo,
+        templateName: targetTemplateName,
+        languageCode: targetLanguageCode,
+        bodyVariables: variables
+      };
     } finally {
       setGenericLoading(false);
     }
@@ -3124,7 +3167,7 @@ function App() {
   }
 
   async function sendFeedbackSurveyNow() {
-    await executeGenericTemplateSend({
+    const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
       overrides: {
         templateName: feedbackTemplateName,
@@ -3135,16 +3178,39 @@ function App() {
         bodyVariables: feedbackPreviewBodyVars
       }
     });
-  }
 
-  async function sendDeliveredFeedbackSurvey(row: TmsDeliveredShipment) {
-    const targetTo = digitsOnly(row.finalClientPhone || "");
-    if (!targetTo) {
-      setGenericStatus("Número inválido");
-      setGenericResponse("O campo Final Client Phone desta linha está vazio ou inválido.");
+    if (!sendResult?.ok) return;
+
+    const sentVars = Array.isArray(sendResult.bodyVariables) ? sendResult.bodyVariables : [];
+    const feedbackUrl = String(
+      feedbackNeedsUrlButtonVariable
+        ? genericButtonUrlVariable
+        : sentVars[2] || genericButtonUrlVariable
+    ).trim();
+
+    if (!feedbackUrl) {
+      setFeedbackLookupStatus("Template enviado, mas sem Feedback URL para marcar Follow-up SMS no Notion.");
       return;
     }
 
+    try {
+      await createFeedbackFollowUpEntry({
+        shopName: String(sentVars[1] || feedbackStoreLookup || "Feedback Survey").trim(),
+        feedbackUrl,
+        referencia: String(sentVars[0] || "Template Feedback Survey").trim(),
+        whatsappTemplate: String(sendResult.templateName || feedbackTemplateName || "").trim()
+      });
+      setFeedbackLookupStatus("Template enviado e Follow-up SMS marcado como enviado no Notion.");
+    } catch (error) {
+      setFeedbackLookupStatus(
+        error instanceof Error
+          ? `Template enviado, mas falhou ao marcar Follow-up SMS no Notion: ${error.message}`
+          : "Template enviado, mas falhou ao marcar Follow-up SMS no Notion."
+      );
+    }
+  }
+
+  function resolveDeliveredFeedbackMatch(row: TmsDeliveredShipment) {
     const sender = String(row.sender || "").trim();
     const recipient = String(row.recipient || "").trim();
     const senderNeedle = normalizeLookupToken(sender);
@@ -3167,8 +3233,7 @@ function App() {
     });
 
     if (candidates.length === 0) {
-      setFeedbackLookupStatus(`Sem link de feedback no Notion para sender: ${sender || "-"}.`);
-      return;
+      return null;
     }
 
     const best = [...candidates].sort((a, b) => {
@@ -3182,9 +3247,68 @@ function App() {
 
     const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
     if (!matchedLink) {
-      setFeedbackLookupStatus(`Match encontrado para ${sender || "-"}, mas sem Feedback URL.`);
+      return null;
+    }
+
+    return {
+      sender,
+      recipient,
+      matchedLink
+    };
+  }
+
+  async function createFeedbackFollowUpEntry({
+    shopName,
+    feedbackUrl,
+    referencia,
+    whatsappTemplate
+  }: {
+    shopName: string;
+    feedbackUrl: string;
+    referencia: string;
+    whatsappTemplate: string;
+  }) {
+    const response = await fetch(apiUrl("/api/feedback-tracker"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shopName,
+        feedbackUrl,
+        referencia,
+        whatsappTemplate,
+        status: "enviado",
+        whatsappFollowUpSms: "enviado"
+      })
+    });
+
+    const data = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
+    }
+
+    loadFeedbackTracker();
+    return data;
+  }
+
+  async function sendDeliveredFeedbackSurvey(row: TmsDeliveredShipment) {
+    const rowKey = `${row.parcelId || ""}|${row.providerTrackingCode || ""}|${row.finalClientPhone || ""}`;
+    setDeliveredSendingKey(rowKey);
+
+    try {
+    const targetTo = digitsOnly(row.finalClientPhone || "");
+    if (!targetTo) {
+      setGenericStatus("Número inválido");
+      setGenericResponse("O campo Final Client Phone desta linha está vazio ou inválido.");
       return;
     }
+
+    const resolved = resolveDeliveredFeedbackMatch(row);
+    if (!resolved) {
+      setFeedbackLookupStatus(`Sem link de feedback no Notion para sender: ${row.sender || "-"}.`);
+      return;
+    }
+
+    const { sender, recipient, matchedLink } = resolved;
 
     const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
     const varsLength = Math.max(3, requiredMax, feedbackPreviewBodyVars.length);
@@ -3205,7 +3329,7 @@ function App() {
     }
 
     setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
-    await executeGenericTemplateSend({
+    const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
       overrides: {
         to: targetTo,
@@ -3218,6 +3342,32 @@ function App() {
         needsUrlButtonVariable: feedbackNeedsUrlButtonVariable
       }
     });
+
+    if (!sendResult?.ok) return;
+
+    setDeliveredSentKeys((current) => ({
+      ...current,
+      [rowKey]: true
+    }));
+
+    try {
+      await createFeedbackFollowUpEntry({
+        shopName: sender || recipient || "Cliente",
+        feedbackUrl: matchedLink,
+        referencia: String(row.providerTrackingCode || row.parcelId || "Template Feedback Survey").trim(),
+        whatsappTemplate: feedbackTemplateName
+      });
+      setFeedbackLookupStatus(`Template enviado para ${sender || "-"} e marcado como enviado no Notion.`);
+    } catch (error) {
+      setFeedbackLookupStatus(
+        error instanceof Error
+          ? `Template enviado, mas falhou ao marcar Follow-up SMS: ${error.message}`
+          : "Template enviado, mas falhou ao marcar Follow-up SMS no Notion."
+      );
+    }
+    } finally {
+      setDeliveredSendingKey("");
+    }
   }
 
   function autofillFeedbackLinkByStore() {
@@ -5570,16 +5720,25 @@ function App() {
                         sortedDeliveredRows.map((row, index) => (
                           <tr key={`delivered-${row.parcelId || row.providerTrackingCode || index}-${index}`}>
                             <td>
-                              <button
-                                type="button"
-                                className="btn btn-secondary tms-mini-btn"
-                                onClick={() => {
-                                  void sendDeliveredFeedbackSurvey(row);
-                                }}
-                                disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading}
-                              >
-                                Enviar
-                              </button>
+                              {(() => {
+                                const actionKey = `${row.parcelId || ""}|${row.providerTrackingCode || ""}|${row.finalClientPhone || ""}`;
+                                const isSending = deliveredSendingKey === actionKey;
+                                const isSent = Boolean(deliveredSentKeys[actionKey]);
+                                return (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className={`btn btn-secondary tms-mini-btn ${isSending ? "is-sending" : ""} ${isSent ? "is-sent" : ""}`}
+                                      onClick={() => {
+                                        void sendDeliveredFeedbackSurvey(row);
+                                      }}
+                                      disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading || isSending || isSent}
+                                    >
+                                      {isSending ? "A enviar..." : isSent ? "Enviado" : "Enviar"}
+                                    </button>
+                                  </>
+                                );
+                              })()}
                             </td>
                             <td>{row.parcelId || "-"}</td>
                             <td>{row.providerTrackingCode || "-"}</td>

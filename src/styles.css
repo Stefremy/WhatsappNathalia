@@ -717,6 +717,53 @@ p {
   color: #07210d;
 }
 
+.tracker-table .tms-mini-btn.is-sending,
+.consumiveis-table .tms-mini-btn.is-sending {
+  position: relative;
+  padding-right: 1.45rem;
+  animation: tms-btn-pulse 820ms ease-in-out infinite;
+}
+
+.tracker-table .tms-mini-btn.is-sent,
+.consumiveis-table .tms-mini-btn.is-sent,
+.tracker-table .tms-mini-btn.is-sent:hover,
+.tracker-table .tms-mini-btn.is-sent:focus-visible,
+.consumiveis-table .tms-mini-btn.is-sent:hover,
+.consumiveis-table .tms-mini-btn.is-sent:focus-visible {
+  color: #4f565d;
+  background: linear-gradient(135deg, #eef1f4, #dfe4ea);
+  border-color: #c9d0d8;
+  box-shadow: 0 0 0 1px rgba(192, 200, 210, 0.35), 0 6px 12px rgba(129, 141, 154, 0.15);
+}
+
+.tracker-table .tms-mini-btn.is-sending::after,
+.consumiveis-table .tms-mini-btn.is-sending::after {
+  content: "";
+  position: absolute;
+  right: 0.48rem;
+  top: 50%;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: -0.275rem;
+  border-radius: 999px;
+  background: rgba(5, 24, 8, 0.8);
+}
+
+@keyframes tms-btn-pulse {
+  0% {
+    transform: translateY(0);
+    filter: saturate(1);
+  }
+  50% {
+    transform: translateY(-1px);
+    filter: saturate(1.18);
+  }
+  100% {
+    transform: translateY(0);
+    filter: saturate(1);
+  }
+}
+
 .tracker-pudo-actions {
   display: grid;
   gap: 0.35rem;

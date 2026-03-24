@@ -400,7 +400,17 @@ function requiredEnv(name) {
 }
 
 function normalizeRecipient(input) {
-  return String(input ?? "").replace(/\D/g, "");
+  const digits = String(input ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+
+  const withoutInternationalPrefix = digits.startsWith("00") ? digits.slice(2) : digits;
+
+  // PT fallback: local mobile number (9 digits) -> prepend country code.
+  if (withoutInternationalPrefix.length === 9 && withoutInternationalPrefix.startsWith("9")) {
+    return `351${withoutInternationalPrefix}`;
+  }
+
+  return withoutInternationalPrefix;
 }
 
 function decodeHtmlEntities(input) {
@@ -1397,7 +1407,17 @@ function normalizeFeedbackCreateInput(rawInput) {
     shopName: String(input.shopName || input.clientName || "").trim(),
     feedbackUrl: String(input.feedbackUrl || input.link || "").trim(),
     referencia: String(input.referencia || input.reference || "").trim(),
-    whatsappTemplate: String(input.whatsappTemplate || input.template || "").trim()
+    whatsappTemplate: String(input.whatsappTemplate || input.template || "").trim(),
+    codServico: String(input.codServico || input.codServ || input.serviceCode || "").trim(),
+    destinatario: String(input.destinatario || input.recipient || "").trim(),
+    contactoDestinatario: String(input.contactoDestinatario || input.contacto || input.phone || "").trim(),
+    trkSecundario: String(input.trkSecundario || input.trk || input.tracking || "").trim(),
+    dataEntrega: String(input.dataEntrega || input.deliveryDate || "").trim(),
+    sentDate: String(input.sentDate || input.dateSent || "").trim(),
+    status: String(input.status || input.estado || "").trim(),
+    whatsappFollowUpSms: String(
+      input.whatsappFollowUpSms || input.whatsapp_follow_up_sms || input.followUpSms || ""
+    ).trim()
   };
 }
 
@@ -1424,6 +1444,51 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
     ["whatsapp template", "template whatsapp", "template"],
     ["rich_text", "title", "select", "status"]
   );
+  const codServicoProp = pickNotionPropertyName(
+    databaseProperties,
+    ["cod. serviço", "cod. servico", "cod serviço", "cod servico", "service code"],
+    ["rich_text", "title", "select", "status", "number"]
+  );
+  const destinatarioProp = pickNotionPropertyName(
+    databaseProperties,
+    ["destinatário", "destinatario", "recipient"],
+    ["rich_text", "title", "select", "status"]
+  );
+  const contactoDestinatarioProp = pickNotionPropertyName(
+    databaseProperties,
+    ["contacto destinatário", "contacto destinatario", "contacto", "phone", "client phone"],
+    ["phone_number", "rich_text", "title", "select", "status"]
+  );
+  const trkSecundarioProp = pickNotionPropertyName(
+    databaseProperties,
+    ["trk secundário", "trk secundario", "trk", "tracking", "tracking number"],
+    ["rich_text", "title", "select", "status"]
+  );
+  const dataEntregaProp = pickNotionPropertyName(
+    databaseProperties,
+    ["data entrega", "delivery date", "entrega"],
+    ["date", "rich_text", "title"]
+  );
+  const sentDateProp = pickNotionPropertyName(
+    databaseProperties,
+    ["sent date", "date sent", "data envio", "data de envio"],
+    ["date", "rich_text", "title"]
+  );
+  const statusProp = pickNotionPropertyName(
+    databaseProperties,
+    ["status", "estado", "situacao", "situação"],
+    ["status", "select", "rich_text", "title"]
+  );
+  const whatsappFollowUpSmsProp = pickNotionPropertyName(
+    databaseProperties,
+    [
+      "whatsapp follow-up sms",
+      "whatsapp follow up sms",
+      "follow-up sms",
+      "follow up sms"
+    ],
+    ["status", "select", "rich_text", "title", "checkbox"]
+  );
 
   const assignValue = (propName, value) => {
     if (!propName || !databaseProperties[propName]) {
@@ -1449,6 +1514,14 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
       properties[propName] = { url: cleanValue };
       return;
     }
+    if (propType === "phone_number") {
+      properties[propName] = { phone_number: cleanValue };
+      return;
+    }
+    if (propType === "date") {
+      properties[propName] = { date: { start: cleanValue } };
+      return;
+    }
     if (propType === "number") {
       const parsed = Number(cleanValue);
       if (Number.isFinite(parsed)) properties[propName] = { number: parsed };
@@ -1467,6 +1540,14 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
   assignValue(feedbackUrlProp, input.feedbackUrl);
   assignValue(referenciaProp, input.referencia);
   assignValue(whatsappTemplateProp, input.whatsappTemplate);
+  assignValue(codServicoProp, input.codServico);
+  assignValue(destinatarioProp, input.destinatario);
+  assignValue(contactoDestinatarioProp, input.contactoDestinatario);
+  assignValue(trkSecundarioProp, input.trkSecundario);
+  assignValue(dataEntregaProp, input.dataEntrega);
+  assignValue(sentDateProp, input.sentDate);
+  assignValue(statusProp, input.status);
+  assignValue(whatsappFollowUpSmsProp, input.whatsappFollowUpSms);
 
   return properties;
 }
