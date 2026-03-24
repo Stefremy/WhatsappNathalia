@@ -2157,16 +2157,63 @@ function App() {
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const latestSharedLogTimestampByPhone = useMemo(() => {
+    const byPhone: Record<string, number> = {};
+
+    for (const item of sharedLogs) {
+      const phoneDigits = digitsOnly(String(item.to_number || ""));
+      if (!phoneDigits) continue;
+
+      const ts = new Date(String(item.created_at || "")).getTime();
+      if (!Number.isFinite(ts)) continue;
+
+      if (!Number.isFinite(byPhone[phoneDigits]) || ts > byPhone[phoneDigits]) {
+        byPhone[phoneDigits] = ts;
+      }
+    }
+
+    return byPhone;
+  }, [sharedLogs]);
+
+  function getLocalConversationTimestamp(conversation: ConversationContact) {
+    const lastMessage = conversation.messages[conversation.messages.length - 1];
+    if (!lastMessage) return Number.NEGATIVE_INFINITY;
+
+    const idMatch = String(lastMessage.id || "").match(/-(\d{10,})$/);
+    if (idMatch) {
+      const tsFromId = Number(idMatch[1]);
+      if (Number.isFinite(tsFromId)) {
+        return tsFromId;
+      }
+    }
+
+    const fallbackTime = Date.parse(String(lastMessage.time || ""));
+    if (Number.isFinite(fallbackTime)) {
+      return fallbackTime;
+    }
+
+    return Number.NEGATIVE_INFINITY;
+  }
+
   const filteredConversations = useMemo(() => {
     const visibleConversations = conversations.filter((conversation) => conversation.messages.length > 0);
     const q = contactSearch.trim().toLowerCase();
-    if (!q) return visibleConversations;
-    return visibleConversations.filter(
+    const base = !q
+      ? visibleConversations
+      : visibleConversations.filter(
       (c) =>
         resolveContactName(c.phone, savedContacts).toLowerCase().includes(q) ||
         c.phone.includes(contactSearch.trim())
     );
-  }, [conversations, contactSearch, savedContacts]);
+
+    return [...base].sort((a, b) => {
+      const aPhone = digitsOnly(a.phone);
+      const bPhone = digitsOnly(b.phone);
+      const aTs = latestSharedLogTimestampByPhone[aPhone] ?? getLocalConversationTimestamp(a);
+      const bTs = latestSharedLogTimestampByPhone[bPhone] ?? getLocalConversationTimestamp(b);
+      return bTs - aTs;
+    });
+  }, [conversations, contactSearch, latestSharedLogTimestampByPhone, savedContacts]);
 
   const sentHistory = useMemo(() => {
     const chatEntries = conversations.flatMap((contact) =>
