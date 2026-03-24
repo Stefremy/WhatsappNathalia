@@ -1768,6 +1768,54 @@ p {
   align-items: center;
 }
 
+.wa-header-right {
+  display: grid;
+  gap: 0.36rem;
+  justify-items: end;
+}
+
+.wa-header-actions {
+  display: flex;
+  gap: 0.42rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wa-header-btn {
+  border: 1px solid rgba(233, 243, 239, 0.26);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8f4ef;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.24rem 0.58rem;
+  cursor: pointer;
+}
+
+.wa-header-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.wa-header-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wa-header-btn-close {
+  border-color: rgba(255, 174, 174, 0.4);
+  color: #ffd4d4;
+}
+
+.wa-header-btn-delete {
+  border-color: rgba(255, 128, 128, 0.6);
+  color: #ffd0d0;
+  background: rgba(120, 20, 20, 0.35);
+}
+
+.wa-header-btn-delete:hover:not(:disabled) {
+  background: rgba(168, 34, 34, 0.45);
+}
+
 .wa-avatar {
   width: 38px;
   height: 38px;
@@ -2459,6 +2507,20 @@ p {
 
   .wa-phone {
     max-width: 100%;
+  }
+
+  .wa-phone-header {
+    grid-template-columns: auto 1fr;
+    row-gap: 0.5rem;
+  }
+
+  .wa-header-right {
+    grid-column: 1 / -1;
+    justify-items: start;
+  }
+
+  .wa-header-actions {
+    justify-content: flex-start;
   }
 
   .wa-sidebar {

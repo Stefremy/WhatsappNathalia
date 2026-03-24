@@ -585,6 +585,17 @@ function extractPlaceholderIndexes(input: string) {
   );
 }
 
+function filterOptionalTemplateIndexes(indexes: number[], templateName?: string, languageCode?: string) {
+  const normalizedName = String(templateName || "").trim().toLowerCase();
+  const normalizedLanguage = String(languageCode || "").trim().toLowerCase();
+
+  if (normalizedName === "order_pick_no_ctt" && normalizedLanguage === "en_us") {
+    return indexes.filter((index) => index !== 4);
+  }
+
+  return indexes;
+}
+
 function extractInboundMediaFromLog(log: SharedLogItem) {
   const payload = log?.payload && typeof log.payload === "object" ? log.payload : null;
   const message = payload && typeof payload.message === "object" ? payload.message as Record<string, unknown> : null;
@@ -1118,10 +1129,10 @@ function App() {
     }, 0);
   }, [pudoNotifications, pudoShipments]);
 
-  const requiredBodyIndexes = useMemo(
-    () => extractPlaceholderIndexes(selectedTemplateBody),
-    [selectedTemplateBody]
-  );
+  const requiredBodyIndexes = useMemo(() => {
+    const extracted = extractPlaceholderIndexes(selectedTemplateBody);
+    return filterOptionalTemplateIndexes(extracted, genericTemplateName, genericLanguage);
+  }, [genericLanguage, genericTemplateName, selectedTemplateBody]);
 
   const requiredBodyVarCount = requiredBodyIndexes.length;
   const needsUrlButtonVariable = useMemo(
@@ -1391,7 +1402,11 @@ function App() {
     finalClientNameInput: string,
     trackingInput: string,
     messageTypeInput = "Pick Up Point",
-    notesInput = ""
+    notesInput = "",
+    options?: {
+      templateName?: string;
+      languageCode?: string;
+    }
   ) {
     const phoneDigits = digitsOnly(phoneInput || "");
     const formattedPhone = phoneDigits.length === 9
@@ -1402,8 +1417,8 @@ function App() {
           ? `+${phoneDigits}`
           : "";
 
-    setGenericTemplateName("order_pick_up_1");
-    setGenericLanguage("pt_PT");
+    setGenericTemplateName(String(options?.templateName || "order_pick_up_1"));
+    setGenericLanguage(String(options?.languageCode || "pt_PT"));
     setGenericTo(formattedPhone);
     setGenericBodyVars((prev) => ({
       ...prev,
@@ -1442,6 +1457,39 @@ function App() {
     );
     setNewContactPhone("");
     setNewContactName("");
+  }
+
+  function markActiveConversationAsRead() {
+    if (!activeConversationId) return;
+
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === activeConversationId
+          ? { ...conversation, unread: 0 }
+          : conversation
+      )
+    );
+  }
+
+  function closeActiveConversation() {
+    setActiveConversationId("");
+    setToNumber("");
+  }
+
+  function deleteActiveConversation() {
+    if (!activeConversationId) return;
+
+    const shouldDelete = window.confirm(
+      "Tem a certeza que quer apagar esta conversa?\n\nEsta ação não pode ser desfeita."
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setConversations((prev) => prev.filter((conversation) => conversation.id !== activeConversationId));
+    setActiveConversationId("");
+    setToNumber("");
   }
 
   function removeContact(digits: string) {
@@ -2110,9 +2158,10 @@ function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredConversations = useMemo(() => {
+    const visibleConversations = conversations.filter((conversation) => conversation.messages.length > 0);
     const q = contactSearch.trim().toLowerCase();
-    if (!q) return conversations;
-    return conversations.filter(
+    if (!q) return visibleConversations;
+    return visibleConversations.filter(
       (c) =>
         resolveContactName(c.phone, savedContacts).toLowerCase().includes(q) ||
         c.phone.includes(contactSearch.trim())
@@ -2331,7 +2380,7 @@ function App() {
     setSharedLogsError("");
     sharedLogsInFlightRef.current = true;
 
-    fetch(apiUrl("/api/logs?limit=300"))
+    fetch(apiUrl("/api/logs?limit=500"))
       .then((response) => response.json())
       .then((data) => {
         const rows = Array.isArray(data?.data) ? (data.data as SharedLogItem[]) : [];
@@ -2783,6 +2832,153 @@ function App() {
     });
   }, [activeConversationId, savedContacts, sharedLogs]);
 
+  // Rehydrate outbound manually written text messages from shared logs so all devices see the same typed history.
+  useEffect(() => {
+    const outboundLogs = sharedLogs
+      .filter((item) => String(item.direction || "").toLowerCase() === "out")
+      .filter((item) => String(item.channel || "").toLowerCase() === "text")
+      .filter((item) => String(item.to_number || "").trim().length > 0)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+    if (outboundLogs.length === 0) {
+      return;
+    }
+
+    setConversations((current) => {
+      let next = [...current];
+
+      for (const item of outboundLogs) {
+        const toDigits = digitsOnly(String(item.to_number || ""));
+        if (!toDigits) {
+          continue;
+        }
+
+        const apiMessageId = String(item.api_message_id || "").trim();
+        const text = String(item.message_text || item.template_name || "[mensagem enviada]").trim() || "[mensagem enviada]";
+        const parsedTime = new Date(item.created_at);
+        const timeLabel = isNaN(parsedTime.getTime())
+          ? nowLabel()
+          : parsedTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        const existingIndex = next.findIndex((conversation) => digitsOnly(conversation.phone) === toDigits);
+        if (existingIndex >= 0) {
+          const existing = next[existingIndex];
+          const alreadyExists = apiMessageId
+            ? existing.messages.some((message) => message.apiMessageId === apiMessageId)
+            : existing.messages.some(
+                (message) =>
+                  message.direction === "out" &&
+                  message.text === text &&
+                  message.time === timeLabel
+              );
+
+          if (alreadyExists) {
+            continue;
+          }
+
+          const updated = {
+            ...existing,
+            lastAt: timeLabel,
+            messages: [
+              ...existing.messages,
+              {
+                id: `out-log-${item.id}`,
+                direction: "out" as const,
+                text,
+                time: timeLabel,
+                apiMessageId: apiMessageId || undefined,
+                deliveryStatus: "sent" as const
+              }
+            ]
+          };
+
+          next[existingIndex] = updated;
+          continue;
+        }
+
+        next = [
+          {
+            id: `c-out-log-${item.id}`,
+            name: String(item.contact_name || "").trim() || resolveContactName(toDigits, savedContacts),
+            phone: toDigits,
+            unread: 0,
+            lastAt: timeLabel,
+            messages: [
+              {
+                id: `out-log-${item.id}`,
+                direction: "out" as const,
+                text,
+                time: timeLabel,
+                apiMessageId: apiMessageId || undefined,
+                deliveryStatus: "sent" as const
+              }
+            ]
+          },
+          ...next
+        ];
+      }
+
+      return next;
+    });
+  }, [savedContacts, sharedLogs]);
+
+  // Cleanup previously persisted non-text outbound entries from chat threads.
+  useEffect(() => {
+    const nonTextOutboundLogs = sharedLogs.filter(
+      (item) =>
+        String(item.direction || "").toLowerCase() === "out" &&
+        String(item.channel || "").toLowerCase() !== "text"
+    );
+
+    if (nonTextOutboundLogs.length === 0) {
+      return;
+    }
+
+    const nonTextApiIds = new Set(
+      nonTextOutboundLogs
+        .map((item) => String(item.api_message_id || "").trim())
+        .filter((value) => value.length > 0)
+    );
+    const nonTextLogMessageIds = new Set(nonTextOutboundLogs.map((item) => `out-log-${item.id}`));
+
+    setConversations((current) => {
+      let changed = false;
+
+      const next = current
+        .map((conversation) => {
+          const filteredMessages = conversation.messages.filter((message) => {
+            if (message.direction !== "out") {
+              return true;
+            }
+
+            const messageId = String(message.id || "");
+            const apiId = String(message.apiMessageId || "").trim();
+            const isNonTextByApiId = apiId.length > 0 && nonTextApiIds.has(apiId);
+            const isNonTextByLogId = nonTextLogMessageIds.has(messageId);
+            const isBotEventMessage = messageId.startsWith("bot-");
+            return !isNonTextByApiId && !isNonTextByLogId && !isBotEventMessage;
+          });
+
+          if (filteredMessages.length !== conversation.messages.length) {
+            changed = true;
+            return {
+              ...conversation,
+              messages: filteredMessages
+            };
+          }
+
+          return conversation;
+        })
+        .filter((conversation) => conversation.messages.length > 0);
+
+      if (next.length !== current.length) {
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [sharedLogs]);
+
   useEffect(() => {
     if (activeView === "tracker") {
       loadTmsDashboard();
@@ -3003,9 +3199,14 @@ function App() {
     const targetTo = String(overrides?.to ?? genericTo).trim();
     const targetTemplateName = String(overrides?.templateName ?? genericTemplateName).trim();
     const targetLanguageCode = String(overrides?.languageCode ?? genericLanguage).trim() || "pt_PT";
-    const targetRequiredIndexes = Array.isArray(overrides?.requiredIndexes)
+    const rawTargetRequiredIndexes = Array.isArray(overrides?.requiredIndexes)
       ? overrides.requiredIndexes
       : requiredBodyIndexes;
+    const targetRequiredIndexes = filterOptionalTemplateIndexes(
+      rawTargetRequiredIndexes,
+      targetTemplateName,
+      targetLanguageCode
+    );
     const targetTemplateBody = String(overrides?.templateBody ?? selectedTemplateBody);
     const targetNeedsUrlButtonVariable =
       overrides?.needsUrlButtonVariable ?? needsUrlButtonVariable;
@@ -3781,7 +3982,35 @@ function App() {
                 <strong>{activeConversation ? resolveContactName(activeConversation.phone, savedContacts) : "Chat de cliente"}</strong>
                 <small>{toNumber || activeConversation?.phone || "Sem destinatário"}</small>
               </div>
-              <span className={`wa-live-status ${loading ? "busy" : ""}`}>{statusText}</span>
+              <div className="wa-header-right">
+                <div className="wa-header-actions">
+                  <button
+                    type="button"
+                    className="wa-header-btn"
+                    onClick={markActiveConversationAsRead}
+                    disabled={!activeConversation || activeConversation.unread === 0}
+                  >
+                    Marcar como lida
+                  </button>
+                  <button
+                    type="button"
+                    className="wa-header-btn wa-header-btn-close"
+                    onClick={closeActiveConversation}
+                    disabled={!activeConversation}
+                  >
+                    Fechar conversa
+                  </button>
+                  <button
+                    type="button"
+                    className="wa-header-btn wa-header-btn-delete"
+                    onClick={deleteActiveConversation}
+                    disabled={!activeConversation}
+                  >
+                    Apagar conversa
+                  </button>
+                </div>
+                <span className={`wa-live-status ${loading ? "busy" : ""}`}>{statusText}</span>
+              </div>
             </header>
 
             <main className="wa-thread">
@@ -5116,11 +5345,17 @@ function App() {
                                                   item.recipient || "",
                                                   item.providerTrackingCode || item.parcelId || "",
                                                   "Pick Up Point",
-                                                  item.incidence || ""
+                                                  item.incidence || "",
+                                                  overdue
+                                                    ? {
+                                                        templateName: "order_pick_no_ctt",
+                                                        languageCode: "en_US"
+                                                      }
+                                                    : undefined
                                                 )
                                               }
                                             >
-                                              Preencher template
+                                              {overdue ? "Preencher template (EN)" : "Preencher template"}
                                             </button>
                                             <button
                                               type="button"
