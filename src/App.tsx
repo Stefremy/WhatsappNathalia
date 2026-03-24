@@ -570,6 +570,12 @@ function extractDeliveredDateKey(value: string) {
   return "";
 }
 
+function normalizeTrackingToken(value: string) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 function extractPlaceholderIndexes(input: string) {
   const matches = [...String(input || "").matchAll(/\{\{(\d+)\}\}/g)];
   return [...new Set(matches.map((match) => Number(match[1])).filter(Number.isFinite))].sort(
@@ -701,6 +707,8 @@ function App() {
     import.meta.env.VITE_DEFAULT_TEMPLATE_NAME ?? "order_pickup_ctt"
   );
   const [genericLanguage, setGenericLanguage] = useState("pt_PT");
+  const [feedbackTemplateName, setFeedbackTemplateName] = useState("");
+  const [feedbackLanguage, setFeedbackLanguage] = useState("pt_PT");
   const [genericBodyVars, setGenericBodyVars] = useState<Record<number, string>>({});
   const [genericButtonUrlVariable, setGenericButtonUrlVariable] = useState("");
   const [genericTrackerContext, setGenericTrackerContext] = useState<GenericTemplateTrackerContext | null>(null);
@@ -889,8 +897,39 @@ function App() {
   }, [metaTemplates]);
 
   const selectedFeedbackSurveyTemplate = useMemo(
-    () => feedbackSurveyTemplates.find((template) => template.name === genericTemplateName) || null,
-    [feedbackSurveyTemplates, genericTemplateName]
+    () => feedbackSurveyTemplates.find((template) => template.name === feedbackTemplateName) || null,
+    [feedbackSurveyTemplates, feedbackTemplateName]
+  );
+
+  const selectedFeedbackTemplateBody = useMemo(
+    () => extractBodyTemplateText(selectedFeedbackSurveyTemplate),
+    [selectedFeedbackSurveyTemplate]
+  );
+
+  const feedbackRequiredBodyIndexes = useMemo(
+    () => extractPlaceholderIndexes(selectedFeedbackTemplateBody),
+    [selectedFeedbackTemplateBody]
+  );
+
+  const feedbackRequiredBodyVarCount = feedbackRequiredBodyIndexes.length;
+
+  const feedbackNeedsUrlButtonVariable = useMemo(
+    () => templateNeedsUrlButtonVariable(selectedFeedbackSurveyTemplate),
+    [selectedFeedbackSurveyTemplate]
+  );
+
+  const feedbackPreviewBodyVars = useMemo(() => {
+    const maxIndex = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
+    const values = Array.from({ length: maxIndex }, () => "");
+    feedbackRequiredBodyIndexes.forEach((index) => {
+      values[index - 1] = String(genericBodyVars[index] || "").trim();
+    });
+    return values;
+  }, [feedbackRequiredBodyIndexes, genericBodyVars]);
+
+  const selectedFeedbackTemplatePreview = useMemo(
+    () => fillTemplateBody(selectedFeedbackTemplateBody, feedbackPreviewBodyVars),
+    [selectedFeedbackTemplateBody, feedbackPreviewBodyVars]
   );
 
   const pudoShipments = useMemo(
@@ -931,6 +970,7 @@ function App() {
 
   const filteredDeliveredRows = useMemo(() => {
     const query = deliveredSearchQuery.trim().toLowerCase();
+    const normalizedQuery = normalizeTrackingToken(query);
 
     return deliveredRows.filter((row) => {
       const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
@@ -943,6 +983,14 @@ function App() {
       }
 
       if (!query) return true;
+
+      const trackingTokens = [row.parcelId, row.providerTrackingCode]
+        .map((value) => normalizeTrackingToken(String(value || "")))
+        .join(" ");
+
+      if (normalizedQuery && trackingTokens.includes(normalizedQuery)) {
+        return true;
+      }
 
       const haystack = [
         row.parcelId,
@@ -1084,6 +1132,25 @@ function App() {
     () => fillTemplateBody(selectedTemplateBody, previewBodyVars),
     [selectedTemplateBody, previewBodyVars]
   );
+
+  useEffect(() => {
+    if (feedbackSurveyTemplates.length === 0) {
+      setFeedbackTemplateName("");
+      return;
+    }
+
+    if (!feedbackSurveyTemplates.some((template) => template.name === feedbackTemplateName)) {
+      const first = feedbackSurveyTemplates[0];
+      setFeedbackTemplateName(first.name);
+      setFeedbackLanguage(first.language || "pt_PT");
+      return;
+    }
+
+    const selected = feedbackSurveyTemplates.find((template) => template.name === feedbackTemplateName) || null;
+    if (selected?.language && selected.language !== feedbackLanguage) {
+      setFeedbackLanguage(selected.language);
+    }
+  }, [feedbackLanguage, feedbackSurveyTemplates, feedbackTemplateName]);
 
   const activeContactPhone = useMemo(
     () => digitsOnly(activeConversation?.phone || toNumber || ""),
@@ -2465,8 +2532,20 @@ function App() {
       });
   }
 
-  async function loadDeliveredShipmentsByDateRange(dateFrom: string, dateTo: string) {
-    if (!dateFrom && !dateTo) {
+  async function loadDeliveredShipmentsByFilters({
+    dateFrom,
+    dateTo,
+    searchQuery
+  }: {
+    dateFrom: string;
+    dateTo: string;
+    searchQuery: string;
+  }) {
+    const normalizedQuery = normalizeTrackingToken(searchQuery);
+    const hasDateFilter = Boolean(dateFrom || dateTo);
+    const hasTrackingFilter = Boolean(normalizedQuery);
+
+    if (!hasDateFilter && !hasTrackingFilter) {
       loadDeliveredShipments(1);
       return;
     }
@@ -2478,7 +2557,7 @@ function App() {
     try {
       let page = 1;
       let totalPages = 1;
-      const maxPages = 120;
+      const maxPages = normalizedQuery ? Number.MAX_SAFE_INTEGER : 120;
       const collected: TmsDeliveredShipment[] = [];
 
       while (page <= totalPages && page <= maxPages) {
@@ -2492,25 +2571,35 @@ function App() {
         const rows = Array.isArray(data?.data) ? (data.data as TmsDeliveredShipment[]) : [];
         totalPages = Number(data?.meta?.totalPages || 1) || 1;
 
-        const filteredByDate = rows.filter((row) => {
+        const filtered = rows.filter((row) => {
           const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
-          if (!dateKey) return false;
-          if (dateFrom && dateKey < dateFrom) return false;
-          if (dateTo && dateKey > dateTo) return false;
+          if (dateFrom && (!dateKey || dateKey < dateFrom)) return false;
+          if (dateTo && (!dateKey || dateKey > dateTo)) return false;
+
+          if (normalizedQuery) {
+            const trackingTokens = [row.parcelId, row.providerTrackingCode]
+              .map((value) => normalizeTrackingToken(String(value || "")))
+              .join(" ");
+            if (!trackingTokens.includes(normalizedQuery)) return false;
+          }
+
           return true;
         });
 
-        collected.push(...filteredByDate);
+        collected.push(...filtered);
 
-        const oldestDateKeyOnPage = rows.reduce((oldest, row) => {
-          const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
-          if (!dateKey) return oldest;
-          if (!oldest || dateKey < oldest) return dateKey;
-          return oldest;
-        }, "");
+        // Safe early stop only when filtering by date without tracking query.
+        if (dateFrom && !normalizedQuery) {
+          const oldestDateKeyOnPage = rows.reduce((oldest, row) => {
+            const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
+            if (!dateKey) return oldest;
+            if (!oldest || dateKey < oldest) return dateKey;
+            return oldest;
+          }, "");
 
-        if (dateFrom && oldestDateKeyOnPage && oldestDateKeyOnPage < dateFrom) {
-          break;
+          if (oldestDateKeyOnPage && oldestDateKeyOnPage < dateFrom) {
+            break;
+          }
         }
 
         page += 1;
@@ -2520,7 +2609,7 @@ function App() {
       setDeliveredTotal(collected.length);
       setDeliveredPage(1);
     } catch (error) {
-      setDeliveredError(error instanceof Error ? error.message : "Não foi possível filtrar entregues por período.");
+      setDeliveredError(error instanceof Error ? error.message : "Não foi possível filtrar entregues.");
       setDeliveredRows([]);
       setDeliveredTotal(0);
       setDeliveredPage(1);
@@ -2700,24 +2789,17 @@ function App() {
 
   useEffect(() => {
     if (activeView === "feedback" && deliveredRows.length === 0 && !deliveredLoading) {
-      if (deliveredDateFrom || deliveredDateTo) {
-        void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
+      if (deliveredDateFrom || deliveredDateTo || deliveredSearchQuery.trim()) {
+        void loadDeliveredShipmentsByFilters({
+          dateFrom: deliveredDateFrom,
+          dateTo: deliveredDateTo,
+          searchQuery: deliveredSearchQuery
+        });
       } else {
         loadDeliveredShipments(1);
       }
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (activeView !== "feedback") return;
-
-    if (deliveredDateFrom || deliveredDateTo) {
-      void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
-      return;
-    }
-
-    loadDeliveredShipments(1);
-  }, [deliveredDateFrom, deliveredDateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (feedbackPage > feedbackTotalPages) {
@@ -2896,17 +2978,30 @@ function App() {
         to?: string;
         bodyVariables?: string[];
         buttonUrlVariable?: string;
+        templateName?: string;
+        languageCode?: string;
+        requiredIndexes?: number[];
+        templateBody?: string;
+        needsUrlButtonVariable?: boolean;
       };
     }
   ) {
     const targetTo = String(overrides?.to ?? genericTo).trim();
+    const targetTemplateName = String(overrides?.templateName ?? genericTemplateName).trim();
+    const targetLanguageCode = String(overrides?.languageCode ?? genericLanguage).trim() || "pt_PT";
+    const targetRequiredIndexes = Array.isArray(overrides?.requiredIndexes)
+      ? overrides.requiredIndexes
+      : requiredBodyIndexes;
+    const targetTemplateBody = String(overrides?.templateBody ?? selectedTemplateBody);
+    const targetNeedsUrlButtonVariable =
+      overrides?.needsUrlButtonVariable ?? needsUrlButtonVariable;
     const variables = Array.isArray(overrides?.bodyVariables) ? overrides.bodyVariables : previewBodyVars;
     const targetButtonUrlVariable = String(overrides?.buttonUrlVariable ?? genericButtonUrlVariable).trim();
-    const missingIndexes = requiredBodyIndexes.filter(
+    const missingIndexes = targetRequiredIndexes.filter(
       (index) => !String(variables[index - 1] || "").trim()
     );
 
-    if (!targetTo || !genericTemplateName.trim()) {
+    if (!targetTo || !targetTemplateName) {
       setGenericStatus("Faltam campos obrigatórios");
       setGenericResponse("Número de destino e nome do template são obrigatórios.");
       return;
@@ -2920,7 +3015,7 @@ function App() {
       return;
     }
 
-    if (needsUrlButtonVariable && !targetButtonUrlVariable) {
+    if (targetNeedsUrlButtonVariable && !targetButtonUrlVariable) {
       setGenericStatus("Falta variável do botão URL");
       setGenericResponse("Este template inclui um botão URL dinâmico e precisa dessa variável.");
       return;
@@ -2938,8 +3033,8 @@ function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             to: targetTo,
-            templateName: genericTemplateName,
-            languageCode: genericLanguage,
+            templateName: targetTemplateName,
+            languageCode: targetLanguageCode,
             bodyVariables: variables,
             scheduledAt: scheduleAt
           })
@@ -2962,7 +3057,7 @@ function App() {
     setGenericLoading(true);
     setGenericStatus("A enviar...");
 
-    const historyPreview = fillTemplateBody(selectedTemplateBody, variables) || selectedTemplateBody || `Template ${genericTemplateName}`;
+    const historyPreview = fillTemplateBody(targetTemplateBody, variables) || targetTemplateBody || `Template ${targetTemplateName}`;
 
     try {
       const response = await fetch(apiUrl("/api/templates/send-generic"), {
@@ -2972,10 +3067,10 @@ function App() {
         },
         body: JSON.stringify({
           to: targetTo,
-          templateName: genericTemplateName,
-          languageCode: genericLanguage,
+          templateName: targetTemplateName,
+          languageCode: targetLanguageCode,
           bodyVariables: variables,
-          buttonUrlVariable: needsUrlButtonVariable ? targetButtonUrlVariable : "",
+          buttonUrlVariable: targetNeedsUrlButtonVariable ? targetButtonUrlVariable : "",
           trackerContext: genericTrackerContext || undefined
         })
       });
@@ -2986,7 +3081,7 @@ function App() {
 
       if (
         response.ok &&
-        (isAllowedPudoNotificationTemplate(genericTemplateName, genericLanguage) ||
+        (isAllowedPudoNotificationTemplate(targetTemplateName, targetLanguageCode) ||
           isPudoTrackerContext(genericTrackerContext))
       ) {
         markPudoNotifiedByPhone(targetTo, new Date().toISOString());
@@ -2996,7 +3091,7 @@ function App() {
         {
           id: `h-${Date.now()}`,
           to: targetTo,
-          templateName: genericTemplateName,
+          templateName: targetTemplateName,
           previewText: historyPreview,
           time: nowLabel(),
           status: response.ok ? "accepted" : `failed_${response.status}`
@@ -3011,7 +3106,7 @@ function App() {
         {
           id: `h-${Date.now()}`,
           to: targetTo,
-          templateName: genericTemplateName,
+          templateName: targetTemplateName,
           previewText: historyPreview,
           time: nowLabel(),
           status: "network_error"
@@ -3029,7 +3124,17 @@ function App() {
   }
 
   async function sendFeedbackSurveyNow() {
-    await executeGenericTemplateSend({ allowSchedule: false });
+    await executeGenericTemplateSend({
+      allowSchedule: false,
+      overrides: {
+        templateName: feedbackTemplateName,
+        languageCode: feedbackLanguage,
+        requiredIndexes: feedbackRequiredBodyIndexes,
+        templateBody: selectedFeedbackTemplateBody,
+        needsUrlButtonVariable: feedbackNeedsUrlButtonVariable,
+        bodyVariables: feedbackPreviewBodyVars
+      }
+    });
   }
 
   async function sendDeliveredFeedbackSurvey(row: TmsDeliveredShipment) {
@@ -3081,9 +3186,9 @@ function App() {
       return;
     }
 
-    const requiredMax = requiredBodyIndexes.length > 0 ? Math.max(...requiredBodyIndexes) : 0;
-    const varsLength = Math.max(3, requiredMax, previewBodyVars.length);
-    const variables = Array.from({ length: varsLength }, (_, index) => String(previewBodyVars[index] || "").trim());
+    const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
+    const varsLength = Math.max(3, requiredMax, feedbackPreviewBodyVars.length);
+    const variables = Array.from({ length: varsLength }, (_, index) => String(feedbackPreviewBodyVars[index] || "").trim());
     variables[0] = recipient || variables[0] || "";
     variables[1] = sender || variables[1] || "";
     variables[2] = matchedLink;
@@ -3095,7 +3200,7 @@ function App() {
       2: variables[1],
       3: variables[2]
     }));
-    if (needsUrlButtonVariable) {
+    if (feedbackNeedsUrlButtonVariable) {
       setGenericButtonUrlVariable(matchedLink);
     }
 
@@ -3105,7 +3210,12 @@ function App() {
       overrides: {
         to: targetTo,
         bodyVariables: variables,
-        buttonUrlVariable: needsUrlButtonVariable ? matchedLink : undefined
+        buttonUrlVariable: feedbackNeedsUrlButtonVariable ? matchedLink : undefined,
+        templateName: feedbackTemplateName,
+        languageCode: feedbackLanguage,
+        requiredIndexes: feedbackRequiredBodyIndexes,
+        templateBody: selectedFeedbackTemplateBody,
+        needsUrlButtonVariable: feedbackNeedsUrlButtonVariable
       }
     });
   }
@@ -3156,15 +3266,15 @@ function App() {
       return;
     }
 
-    if (needsUrlButtonVariable) {
+    if (feedbackNeedsUrlButtonVariable) {
       setGenericButtonUrlVariable(matchedLink);
-    } else if (requiredBodyIndexes.length > 0) {
-      const preferredIndex = requiredBodyIndexes.includes(3)
+    } else if (feedbackRequiredBodyIndexes.length > 0) {
+      const preferredIndex = feedbackRequiredBodyIndexes.includes(3)
         ? 3
-        : requiredBodyIndexes.find((index) => {
+        : feedbackRequiredBodyIndexes.find((index) => {
             const currentValue = String(genericBodyVars[index] || "").trim();
             return !currentValue || /^https?:\/\//i.test(currentValue);
-          }) || requiredBodyIndexes[requiredBodyIndexes.length - 1];
+          }) || feedbackRequiredBodyIndexes[feedbackRequiredBodyIndexes.length - 1];
 
       setGenericBodyVars((current) => ({
         ...current,
@@ -3198,7 +3308,7 @@ function App() {
         body: JSON.stringify({
           shopName: feedbackCreateShopName.trim(),
           feedbackUrl: feedbackCreateLink.trim(),
-          whatsappTemplate: genericTemplateName.trim()
+          whatsappTemplate: feedbackTemplateName.trim() || genericTemplateName.trim()
         })
       });
 
@@ -5363,7 +5473,10 @@ function App() {
                       <input
                         type="date"
                         value={deliveredDateFrom}
-                        onChange={(event) => setDeliveredDateFrom(event.target.value)}
+                        onChange={(event) => {
+                          setDeliveredDateFrom(event.target.value);
+                          setDeliveredRangeMode(false);
+                        }}
                       />
                     </label>
                     <label>
@@ -5371,7 +5484,10 @@ function App() {
                       <input
                         type="date"
                         value={deliveredDateTo}
-                        onChange={(event) => setDeliveredDateTo(event.target.value)}
+                        onChange={(event) => {
+                          setDeliveredDateTo(event.target.value);
+                          setDeliveredRangeMode(false);
+                        }}
                       />
                     </label>
                     <label>
@@ -5379,7 +5495,10 @@ function App() {
                       <input
                         type="text"
                         value={deliveredSearchQuery}
-                        onChange={(event) => setDeliveredSearchQuery(event.target.value)}
+                        onChange={(event) => {
+                          setDeliveredSearchQuery(event.target.value);
+                          setDeliveredRangeMode(false);
+                        }}
                         placeholder="Parcel ID, Tracking, Data Recolha..."
                       />
                     </label>
@@ -5387,8 +5506,12 @@ function App() {
                       type="button"
                       className="btn btn-secondary"
                       onClick={() => {
-                        if (deliveredDateFrom || deliveredDateTo) {
-                          void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
+                        if (deliveredDateFrom || deliveredDateTo || deliveredSearchQuery.trim()) {
+                          void loadDeliveredShipmentsByFilters({
+                            dateFrom: deliveredDateFrom,
+                            dateTo: deliveredDateTo,
+                            searchQuery: deliveredSearchQuery
+                          });
                           return;
                         }
                         loadDeliveredShipments(deliveredPage);
@@ -5403,6 +5526,9 @@ function App() {
                       onClick={() => {
                         setDeliveredDateFrom("");
                         setDeliveredDateTo("");
+                        setDeliveredSearchQuery("");
+                        setDeliveredRangeMode(false);
+                        loadDeliveredShipments(1);
                       }}
                     >
                       Limpar período
@@ -5541,12 +5667,12 @@ function App() {
                   <label>
                     Template Feedback Survey
                     <select
-                      value={genericTemplateName}
+                      value={feedbackTemplateName}
                       onChange={(event) => {
-                        const chosen = metaTemplates.find((item) => item.name === event.target.value) || null;
-                        setGenericTemplateName(event.target.value);
+                        const chosen = feedbackSurveyTemplates.find((item) => item.name === event.target.value) || null;
+                        setFeedbackTemplateName(event.target.value);
                         if (chosen?.language) {
-                          setGenericLanguage(chosen.language);
+                          setFeedbackLanguage(chosen.language);
                         }
                       }}
                     >
@@ -5622,15 +5748,15 @@ function App() {
                 <article className="template-chat-box feedback-template-preview">
                   <header>
                     <strong>Preview Feedback Survey</strong>
-                    <span>{selectedFeedbackSurveyTemplate?.language || genericLanguage || "pt_PT"}</span>
+                    <span>{selectedFeedbackSurveyTemplate?.language || feedbackLanguage || "pt_PT"}</span>
                   </header>
                   <div className="template-thread">
                     <article className="wa-msg in">
                       <p>{genericTo || "Número de destino (E.164)"}</p>
-                      <time>{selectedFeedbackSurveyTemplate?.name || genericTemplateName || "Template"}</time>
+                      <time>{selectedFeedbackSurveyTemplate?.name || feedbackTemplateName || "Template"}</time>
                     </article>
                     <article className="wa-msg out">
-                      <p>{selectedTemplatePreview || selectedTemplateBody || "Sem texto no body do template selecionado"}</p>
+                      <p>{selectedFeedbackTemplatePreview || selectedFeedbackTemplateBody || "Sem texto no body do template selecionado"}</p>
                       <time>{genericLoading ? "a enviar" : genericStatus}</time>
                     </article>
                   </div>
@@ -5660,9 +5786,9 @@ function App() {
                   )}
                 </article>
 
-                {requiredBodyVarCount > 0 ? (
+                {feedbackRequiredBodyVarCount > 0 ? (
                   <div className="template-var-grid feedback-template-vars">
-                    {requiredBodyIndexes.map((index) => (
+                    {feedbackRequiredBodyIndexes.map((index) => (
                       <label key={`feedback-bridge-var-${index}`}>
                         Variável {`{{${index}}}`}
                         <input
@@ -5682,7 +5808,7 @@ function App() {
                   <p className="status">Este template não exige variáveis no body.</p>
                 )}
 
-                {needsUrlButtonVariable ? (
+                {feedbackNeedsUrlButtonVariable ? (
                   <div className="tracker-actions">
                     <label>
                       Variável do botão URL
@@ -5696,9 +5822,9 @@ function App() {
                 ) : null}
 
                 <p className="status">
-                  Selecionado: {selectedFeedbackSurveyTemplate?.name || genericTemplateName || "-"}
+                  Selecionado: {selectedFeedbackSurveyTemplate?.name || feedbackTemplateName || "-"}
                   {" "}
-                  | Idioma: {selectedFeedbackSurveyTemplate?.language || genericLanguage || "pt_PT"}
+                  | Idioma: {selectedFeedbackSurveyTemplate?.language || feedbackLanguage || "pt_PT"}
                 </p>
 
                 <div className="api-actions feedback-bridge-actions">
