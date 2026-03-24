@@ -1391,6 +1391,86 @@ function normalizeConsumiveisCreateInput(rawInput) {
   };
 }
 
+function normalizeFeedbackCreateInput(rawInput) {
+  const input = rawInput && typeof rawInput === "object" ? rawInput : {};
+  return {
+    shopName: String(input.shopName || input.clientName || "").trim(),
+    feedbackUrl: String(input.feedbackUrl || input.link || "").trim(),
+    referencia: String(input.referencia || input.reference || "").trim(),
+    whatsappTemplate: String(input.whatsappTemplate || input.template || "").trim()
+  };
+}
+
+function buildFeedbackCreateProperties(databaseProperties, input) {
+  const properties = {};
+
+  const shopNameProp = pickNotionPropertyName(
+    databaseProperties,
+    ["nome cliente", "client name", "cliente", "loja", "store", "destinatario", "recipient"],
+    ["title", "rich_text", "select", "status"]
+  );
+  const feedbackUrlProp = pickNotionPropertyName(
+    databaseProperties,
+    ["feedback url", "feedback link", "survey url", "survey link", "url", "link"],
+    ["url", "rich_text", "title"]
+  );
+  const referenciaProp = pickNotionPropertyName(
+    databaseProperties,
+    ["referencia", "reference", "ref"],
+    ["rich_text", "title", "select", "status", "number"]
+  );
+  const whatsappTemplateProp = pickNotionPropertyName(
+    databaseProperties,
+    ["whatsapp template", "template whatsapp", "template"],
+    ["rich_text", "title", "select", "status"]
+  );
+
+  const assignValue = (propName, value) => {
+    if (!propName || !databaseProperties[propName]) {
+      return;
+    }
+
+    const propType = String(databaseProperties[propName]?.type || "");
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return;
+    }
+
+    const cleanValue = String(value).trim();
+
+    if (propType === "title") {
+      properties[propName] = { title: titleText(cleanValue) };
+      return;
+    }
+    if (propType === "rich_text") {
+      properties[propName] = { rich_text: richText(cleanValue) };
+      return;
+    }
+    if (propType === "url") {
+      properties[propName] = { url: cleanValue };
+      return;
+    }
+    if (propType === "number") {
+      const parsed = Number(cleanValue);
+      if (Number.isFinite(parsed)) properties[propName] = { number: parsed };
+      return;
+    }
+    if (propType === "select") {
+      properties[propName] = { select: { name: cleanValue } };
+      return;
+    }
+    if (propType === "status") {
+      properties[propName] = { status: { name: cleanValue } };
+    }
+  };
+
+  assignValue(shopNameProp, input.shopName);
+  assignValue(feedbackUrlProp, input.feedbackUrl);
+  assignValue(referenciaProp, input.referencia);
+  assignValue(whatsappTemplateProp, input.whatsappTemplate);
+
+  return properties;
+}
+
 function buildConsumiveisCreateProperties(databaseProperties, input) {
   const properties = {};
 
@@ -2228,6 +2308,81 @@ app.get("/api/feedback-tracker", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch feedback tracker from Notion.",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/feedback-tracker", async (req, res) => {
+  if (!notionFeedbackEnabled || !notionFeedback) {
+    return res.status(503).json({
+      error: "Feedback Tracker Notion integration is not configured.",
+      details: "Set NOTION_FEEDBACK_API_KEY and NOTION_FEEDBACK_DATABASE_ID or NOTION_FEEDBACK_PAGE_ID"
+    });
+  }
+
+  try {
+    const input = normalizeFeedbackCreateInput(req.body);
+    if (!input.shopName) {
+      return res.status(400).json({ error: "Field 'shopName' is required." });
+    }
+    if (!input.feedbackUrl) {
+      return res.status(400).json({ error: "Field 'feedbackUrl' is required." });
+    }
+
+    const pageDerivedDatabaseId = await resolveFeedbackDatabaseIdFromPage();
+    let resolvedDatabaseId = notionFeedbackDatabaseId || pageDerivedDatabaseId;
+    let pageFallbackUsed = !notionFeedbackDatabaseId && Boolean(pageDerivedDatabaseId);
+
+    if (!resolvedDatabaseId) {
+      return res.status(404).json({
+        error: "Could not resolve feedback tracker database from page.",
+        details: "Ensure NOTION_FEEDBACK_DATABASE_ID is valid or page contains a child database and is shared with integration."
+      });
+    }
+
+    let databaseInfo;
+    try {
+      databaseInfo = await notionFeedback.databases.retrieve({ database_id: resolvedDatabaseId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+
+      if (!(canFallbackToPageDb && /could not find database with id/i.test(message))) {
+        throw error;
+      }
+
+      resolvedDatabaseId = pageDerivedDatabaseId;
+      pageFallbackUsed = true;
+      databaseInfo = await notionFeedback.databases.retrieve({ database_id: resolvedDatabaseId });
+    }
+
+    const databaseProperties = databaseInfo?.properties || {};
+    const notionProperties = buildFeedbackCreateProperties(databaseProperties, input);
+
+    if (!Object.keys(notionProperties).length) {
+      return res.status(400).json({
+        error: "No writable properties matched the feedback tracker database schema.",
+        details: "Check property names and property types in Notion database."
+      });
+    }
+
+    const created = await notionFeedback.pages.create({
+      parent: { database_id: resolvedDatabaseId },
+      properties: notionProperties
+    });
+
+    const columns = Object.keys(databaseProperties);
+    return res.status(201).json({
+      data: normalizeConsumiveisRow(created, columns),
+      meta: {
+        createdAt: new Date().toISOString(),
+        databaseId: resolvedDatabaseId
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to create feedback tracker row in Notion.",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }

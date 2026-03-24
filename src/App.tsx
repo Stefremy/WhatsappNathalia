@@ -224,6 +224,8 @@ type TmsDashboardData = {
     sender: string;
     recipient: string;
     finalClientPhone: string;
+    pickupDate?: string;
+    deliveryDate?: string;
     status?: string;
     incidence?: string;
     hasCharge?: boolean;
@@ -236,6 +238,8 @@ type TmsDashboardData = {
     sender: string;
     recipient: string;
     finalClientPhone: string;
+    pickupDate?: string;
+    deliveryDate?: string;
     status?: string;
     incidence?: string;
     hasCharge?: boolean;
@@ -448,6 +452,15 @@ function fillTemplateBody(templateText: string, values: string[]) {
   });
 }
 
+function normalizeLookupToken(value: string) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function normalizeFeedbackColumnKey(value: string) {
   return String(value || "")
     .normalize("NFD")
@@ -531,6 +544,30 @@ function parseDeliveredSortTimestamp(row: TmsDeliveredShipment) {
   const pickupTs = parseDeliveredEntregaTimestamp(row.pickupDate || "");
   if (Number.isFinite(pickupTs)) return pickupTs;
   return parseDeliveredEntregaTimestamp(row.deliveryDate || "");
+}
+
+function extractDeliveredDateKey(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const isoMatch = raw.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const year = isoMatch[1];
+    const month = String(Number(isoMatch[2] || 0)).padStart(2, "0");
+    const day = String(Number(isoMatch[3] || 0)).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  const dmyMatch = raw.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})/);
+  if (dmyMatch) {
+    const day = String(Number(dmyMatch[1] || 0)).padStart(2, "0");
+    const month = String(Number(dmyMatch[2] || 0)).padStart(2, "0");
+    const rawYear = Number(dmyMatch[3] || 0);
+    const year = String(rawYear < 100 ? 2000 + rawYear : rawYear);
+    return `${year}-${month}-${day}`;
+  }
+
+  return "";
 }
 
 function extractPlaceholderIndexes(input: string) {
@@ -712,8 +749,17 @@ function App() {
   const [deliveredError, setDeliveredError] = useState("");
   const [deliveredPage, setDeliveredPage] = useState(1);
   const [deliveredTotal, setDeliveredTotal] = useState(0);
-  const [deliveredYearFilter, setDeliveredYearFilter] = useState<string>("all");
+  const [deliveredDateFrom, setDeliveredDateFrom] = useState("");
+  const [deliveredDateTo, setDeliveredDateTo] = useState("");
   const [deliveredSearchQuery, setDeliveredSearchQuery] = useState("");
+  const [deliveredRangeMode, setDeliveredRangeMode] = useState(false);
+  const [feedbackStoreLookup, setFeedbackStoreLookup] = useState("");
+  const [feedbackLookupStatus, setFeedbackLookupStatus] = useState("");
+  const [feedbackCreateOpen, setFeedbackCreateOpen] = useState(false);
+  const [feedbackCreateShopName, setFeedbackCreateShopName] = useState("");
+  const [feedbackCreateLink, setFeedbackCreateLink] = useState("");
+  const [feedbackCreateLoading, setFeedbackCreateLoading] = useState(false);
+  const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
   const [consumiveisForm, setConsumiveisForm] = useState({
     clientName: "",
     dateSent: "",
@@ -735,6 +781,12 @@ function App() {
   const [showIncidencesPanel, setShowIncidencesPanel] = useState(false);
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
   const [showPudoDetails, setShowPudoDetails] = useState(false);
+  const [incidenceDateFrom, setIncidenceDateFrom] = useState("");
+  const [incidenceDateTo, setIncidenceDateTo] = useState("");
+  const [pudoDateFrom, setPudoDateFrom] = useState("");
+  const [pudoDateTo, setPudoDateTo] = useState("");
+  const [incidenceTrackingSearch, setIncidenceTrackingSearch] = useState("");
+  const [pudoTrackingSearch, setPudoTrackingSearch] = useState("");
   const [incidenceDetailsPage, setIncidenceDetailsPage] = useState(1);
   const [pudoDetailsPage, setPudoDetailsPage] = useState(1);
   const [pudoNotifications, setPudoNotifications] = useState<PudoNotificationState>(() => {
@@ -827,6 +879,20 @@ function App() {
     [selectedMetaTemplate]
   );
 
+  const feedbackSurveyTemplates = useMemo(() => {
+    const preferred = metaTemplates.filter((template) => {
+      const name = String(template.name || "").toLowerCase();
+      return /feedback|survey|satisfa|inquerito|inquérito/.test(name);
+    });
+
+    return preferred.length > 0 ? preferred : metaTemplates;
+  }, [metaTemplates]);
+
+  const selectedFeedbackSurveyTemplate = useMemo(
+    () => feedbackSurveyTemplates.find((template) => template.name === genericTemplateName) || null,
+    [feedbackSurveyTemplates, genericTemplateName]
+  );
+
   const pudoShipments = useMemo(
     () => (Array.isArray(tmsDashboard?.pudoShipments) ? tmsDashboard.pudoShipments : []),
     [tmsDashboard]
@@ -863,28 +929,19 @@ function App() {
     [deliveredRows.length, deliveredTotal]
   );
 
-  const deliveredAvailableYears = useMemo(() => {
-    const years = new Set<string>();
-
-    for (const row of deliveredRows) {
-      const timestamp = parseDeliveredSortTimestamp(row);
-      if (!Number.isFinite(timestamp)) continue;
-      years.add(String(new Date(timestamp).getFullYear()));
-    }
-
-    return [...years].sort((a, b) => Number(b) - Number(a));
-  }, [deliveredRows]);
-
   const filteredDeliveredRows = useMemo(() => {
     const query = deliveredSearchQuery.trim().toLowerCase();
 
     return deliveredRows.filter((row) => {
-      const timestamp = parseDeliveredSortTimestamp(row);
-      const matchesYear = deliveredYearFilter === "all"
-        ? true
-        : Number.isFinite(timestamp) && String(new Date(timestamp).getFullYear()) === deliveredYearFilter;
+      const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
 
-      if (!matchesYear) return false;
+      if (deliveredDateFrom) {
+        if (!dateKey || dateKey < deliveredDateFrom) return false;
+      }
+      if (deliveredDateTo) {
+        if (!dateKey || dateKey > deliveredDateTo) return false;
+      }
+
       if (!query) return true;
 
       const haystack = [
@@ -902,7 +959,7 @@ function App() {
 
       return haystack.includes(query);
     });
-  }, [deliveredRows, deliveredSearchQuery, deliveredYearFilter]);
+  }, [deliveredRows, deliveredSearchQuery, deliveredDateFrom, deliveredDateTo]);
 
   const sortedDeliveredRows = useMemo(() => {
     return [...filteredDeliveredRows].sort((a, b) => {
@@ -924,25 +981,71 @@ function App() {
     [tmsDashboard]
   );
 
+  const filteredIncidenceShipments = useMemo(() => {
+    const query = incidenceTrackingSearch.trim().toLowerCase();
+
+    return incidenceShipments.filter((item) => {
+      const dateKey = extractDeliveredDateKey(item.pickupDate || item.deliveryDate || "");
+      if (incidenceDateFrom) {
+        if (!dateKey || dateKey < incidenceDateFrom) return false;
+      }
+      if (incidenceDateTo) {
+        if (!dateKey || dateKey > incidenceDateTo) return false;
+      }
+
+      if (query) {
+        const haystack = [item.providerTrackingCode, item.parcelId]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ");
+        if (!haystack.includes(query)) return false;
+      }
+
+      return true;
+    });
+  }, [incidenceDateFrom, incidenceDateTo, incidenceShipments, incidenceTrackingSearch]);
+
   const incidenceDetailsTotalPages = useMemo(
-    () => Math.max(1, Math.ceil(incidenceShipments.length / detailsPageSize)),
-    [incidenceShipments.length]
+    () => Math.max(1, Math.ceil(filteredIncidenceShipments.length / detailsPageSize)),
+    [filteredIncidenceShipments.length]
   );
 
   const paginatedIncidenceShipments = useMemo(() => {
     const start = (incidenceDetailsPage - 1) * detailsPageSize;
-    return incidenceShipments.slice(start, start + detailsPageSize);
-  }, [incidenceDetailsPage, incidenceShipments]);
+    return filteredIncidenceShipments.slice(start, start + detailsPageSize);
+  }, [filteredIncidenceShipments, incidenceDetailsPage]);
+
+  const filteredPudoShipments = useMemo(() => {
+    const query = pudoTrackingSearch.trim().toLowerCase();
+
+    return pudoShipments.filter((item) => {
+      const dateKey = extractDeliveredDateKey(item.pickupDate || item.deliveryDate || "");
+      if (pudoDateFrom) {
+        if (!dateKey || dateKey < pudoDateFrom) return false;
+      }
+      if (pudoDateTo) {
+        if (!dateKey || dateKey > pudoDateTo) return false;
+      }
+
+      if (query) {
+        const haystack = [item.providerTrackingCode, item.parcelId]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ");
+        if (!haystack.includes(query)) return false;
+      }
+
+      return true;
+    });
+  }, [pudoDateFrom, pudoDateTo, pudoShipments, pudoTrackingSearch]);
 
   const pudoDetailsTotalPages = useMemo(
-    () => Math.max(1, Math.ceil(pudoShipments.length / detailsPageSize)),
-    [pudoShipments.length]
+    () => Math.max(1, Math.ceil(filteredPudoShipments.length / detailsPageSize)),
+    [filteredPudoShipments.length]
   );
 
   const paginatedPudoShipments = useMemo(() => {
     const start = (pudoDetailsPage - 1) * detailsPageSize;
-    return pudoShipments.slice(start, start + detailsPageSize);
-  }, [pudoDetailsPage, pudoShipments]);
+    return filteredPudoShipments.slice(start, start + detailsPageSize);
+  }, [filteredPudoShipments, pudoDetailsPage]);
 
   const pudoOverdueCount = useMemo(() => {
     const oneDayMs = 24 * 60 * 60 * 1000;
@@ -1048,7 +1151,7 @@ function App() {
 
   useEffect(() => {
     setIncidenceDetailsPage(1);
-  }, [incidenceShipments.length, showIncidenceDetails]);
+  }, [filteredIncidenceShipments.length, showIncidenceDetails]);
 
   useEffect(() => {
     if (incidenceDetailsPage > incidenceDetailsTotalPages) {
@@ -1058,7 +1161,7 @@ function App() {
 
   useEffect(() => {
     setPudoDetailsPage(1);
-  }, [pudoShipments.length, showPudoDetails]);
+  }, [filteredPudoShipments.length, showPudoDetails]);
 
   useEffect(() => {
     if (pudoDetailsPage > pudoDetailsTotalPages) {
@@ -2050,6 +2153,10 @@ function App() {
     });
   }, [displayedHistory, historyDate, historySearch]);
 
+  const feedbackBridgeHistory = useMemo(() => {
+    return displayedHistory.slice(0, 12);
+  }, [displayedHistory]);
+
   const trackerRows = useMemo(() => {
     if (sharedLogs.length > 0) {
       return sharedLogs.map((item) => {
@@ -2335,6 +2442,7 @@ function App() {
 
     setDeliveredLoading(true);
     setDeliveredError("");
+    setDeliveredRangeMode(false);
 
     fetch(apiUrl(`/api/tms/delivered?page=${targetPage}&limit=${deliveredPageSize}`))
       .then(async (response) => {
@@ -2355,6 +2463,70 @@ function App() {
       .finally(() => {
         setDeliveredLoading(false);
       });
+  }
+
+  async function loadDeliveredShipmentsByDateRange(dateFrom: string, dateTo: string) {
+    if (!dateFrom && !dateTo) {
+      loadDeliveredShipments(1);
+      return;
+    }
+
+    setDeliveredLoading(true);
+    setDeliveredError("");
+    setDeliveredRangeMode(true);
+
+    try {
+      let page = 1;
+      let totalPages = 1;
+      const maxPages = 120;
+      const collected: TmsDeliveredShipment[] = [];
+
+      while (page <= totalPages && page <= maxPages) {
+        const response = await fetch(apiUrl(`/api/tms/delivered?page=${page}&limit=${deliveredPageSize}`));
+        const data = await parseResponse(response);
+
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha TMS Delivered (${response.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? (data.data as TmsDeliveredShipment[]) : [];
+        totalPages = Number(data?.meta?.totalPages || 1) || 1;
+
+        const filteredByDate = rows.filter((row) => {
+          const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
+          if (!dateKey) return false;
+          if (dateFrom && dateKey < dateFrom) return false;
+          if (dateTo && dateKey > dateTo) return false;
+          return true;
+        });
+
+        collected.push(...filteredByDate);
+
+        const oldestDateKeyOnPage = rows.reduce((oldest, row) => {
+          const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
+          if (!dateKey) return oldest;
+          if (!oldest || dateKey < oldest) return dateKey;
+          return oldest;
+        }, "");
+
+        if (dateFrom && oldestDateKeyOnPage && oldestDateKeyOnPage < dateFrom) {
+          break;
+        }
+
+        page += 1;
+      }
+
+      setDeliveredRows(collected);
+      setDeliveredTotal(collected.length);
+      setDeliveredPage(1);
+    } catch (error) {
+      setDeliveredError(error instanceof Error ? error.message : "Não foi possível filtrar entregues por período.");
+      setDeliveredRows([]);
+      setDeliveredTotal(0);
+      setDeliveredPage(1);
+    } finally {
+      setDeliveredLoading(false);
+    }
   }
 
   async function createConsumivelEntry(event: FormEvent<HTMLFormElement>) {
@@ -2528,9 +2700,24 @@ function App() {
 
   useEffect(() => {
     if (activeView === "feedback" && deliveredRows.length === 0 && !deliveredLoading) {
-      loadDeliveredShipments(1);
+      if (deliveredDateFrom || deliveredDateTo) {
+        void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
+      } else {
+        loadDeliveredShipments(1);
+      }
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView !== "feedback") return;
+
+    if (deliveredDateFrom || deliveredDateTo) {
+      void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
+      return;
+    }
+
+    loadDeliveredShipments(1);
+  }, [deliveredDateFrom, deliveredDateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (feedbackPage > feedbackTotalPages) {
@@ -2699,16 +2886,27 @@ function App() {
     '  -F "messaging_product=whatsapp"'
   ].join("\n");
 
-  async function sendGenericTemplate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  async function executeGenericTemplateSend(
+    {
+      allowSchedule,
+      overrides
+    }: {
+      allowSchedule: boolean;
+      overrides?: {
+        to?: string;
+        bodyVariables?: string[];
+        buttonUrlVariable?: string;
+      };
+    }
+  ) {
+    const targetTo = String(overrides?.to ?? genericTo).trim();
+    const variables = Array.isArray(overrides?.bodyVariables) ? overrides.bodyVariables : previewBodyVars;
+    const targetButtonUrlVariable = String(overrides?.buttonUrlVariable ?? genericButtonUrlVariable).trim();
     const missingIndexes = requiredBodyIndexes.filter(
-      (index) => !String(genericBodyVars[index] || "").trim()
+      (index) => !String(variables[index - 1] || "").trim()
     );
 
-    const variables = previewBodyVars;
-
-    if (!genericTo.trim() || !genericTemplateName.trim()) {
+    if (!targetTo || !genericTemplateName.trim()) {
       setGenericStatus("Faltam campos obrigatórios");
       setGenericResponse("Número de destino e nome do template são obrigatórios.");
       return;
@@ -2722,14 +2920,14 @@ function App() {
       return;
     }
 
-    if (needsUrlButtonVariable && !genericButtonUrlVariable.trim()) {
+    if (needsUrlButtonVariable && !targetButtonUrlVariable) {
       setGenericStatus("Falta variável do botão URL");
       setGenericResponse("Este template inclui um botão URL dinâmico e precisa dessa variável.");
       return;
     }
 
     // Feature 4: Schedule mode
-    if (useSchedule) {
+    if (allowSchedule && useSchedule) {
       if (!scheduleAt) {
         setGenericStatus("Seleciona data/hora para agendar");
         return;
@@ -2739,7 +2937,7 @@ function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            to: genericTo,
+            to: targetTo,
             templateName: genericTemplateName,
             languageCode: genericLanguage,
             bodyVariables: variables,
@@ -2764,7 +2962,7 @@ function App() {
     setGenericLoading(true);
     setGenericStatus("A enviar...");
 
-    const historyPreview = selectedTemplatePreview || selectedTemplateBody || `Template ${genericTemplateName}`;
+    const historyPreview = fillTemplateBody(selectedTemplateBody, variables) || selectedTemplateBody || `Template ${genericTemplateName}`;
 
     try {
       const response = await fetch(apiUrl("/api/templates/send-generic"), {
@@ -2773,11 +2971,11 @@ function App() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          to: genericTo,
+          to: targetTo,
           templateName: genericTemplateName,
           languageCode: genericLanguage,
           bodyVariables: variables,
-          buttonUrlVariable: needsUrlButtonVariable ? genericButtonUrlVariable.trim() : "",
+          buttonUrlVariable: needsUrlButtonVariable ? targetButtonUrlVariable : "",
           trackerContext: genericTrackerContext || undefined
         })
       });
@@ -2791,13 +2989,13 @@ function App() {
         (isAllowedPudoNotificationTemplate(genericTemplateName, genericLanguage) ||
           isPudoTrackerContext(genericTrackerContext))
       ) {
-        markPudoNotifiedByPhone(genericTo, new Date().toISOString());
+        markPudoNotifiedByPhone(targetTo, new Date().toISOString());
       }
 
       setTemplateHistory((current) => [
         {
           id: `h-${Date.now()}`,
-          to: genericTo,
+          to: targetTo,
           templateName: genericTemplateName,
           previewText: historyPreview,
           time: nowLabel(),
@@ -2812,7 +3010,7 @@ function App() {
       setTemplateHistory((current) => [
         {
           id: `h-${Date.now()}`,
-          to: genericTo,
+          to: targetTo,
           templateName: genericTemplateName,
           previewText: historyPreview,
           time: nowLabel(),
@@ -2822,6 +3020,202 @@ function App() {
       ]);
     } finally {
       setGenericLoading(false);
+    }
+  }
+
+  async function sendGenericTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await executeGenericTemplateSend({ allowSchedule: true });
+  }
+
+  async function sendFeedbackSurveyNow() {
+    await executeGenericTemplateSend({ allowSchedule: false });
+  }
+
+  async function sendDeliveredFeedbackSurvey(row: TmsDeliveredShipment) {
+    const targetTo = digitsOnly(row.finalClientPhone || "");
+    if (!targetTo) {
+      setGenericStatus("Número inválido");
+      setGenericResponse("O campo Final Client Phone desta linha está vazio ou inválido.");
+      return;
+    }
+
+    const sender = String(row.sender || "").trim();
+    const recipient = String(row.recipient || "").trim();
+    const senderNeedle = normalizeLookupToken(sender);
+
+    const candidates = feedbackRows.filter((item) => {
+      const fields = item.fields || {};
+      const link = String(fields["Feedback URL"] || "").trim() || String(item.url || "").trim();
+      if (!link) return false;
+
+      const joined = [
+        fields["Nome Cliente"],
+        fields["Destinatário"],
+        fields["Referência"],
+        fields["Cod. Serviço"]
+      ]
+        .map((value) => normalizeLookupToken(String(value || "")))
+        .join(" ");
+
+      return senderNeedle ? joined.includes(senderNeedle) : false;
+    });
+
+    if (candidates.length === 0) {
+      setFeedbackLookupStatus(`Sem link de feedback no Notion para sender: ${sender || "-"}.`);
+      return;
+    }
+
+    const best = [...candidates].sort((a, b) => {
+      const bTs = parseFeedbackEntregaTimestamp(b.fields["Data Entrega"] || "");
+      const aTs = parseFeedbackEntregaTimestamp(a.fields["Data Entrega"] || "");
+      if (Number.isFinite(aTs) && Number.isFinite(bTs)) return bTs - aTs;
+      if (Number.isFinite(aTs)) return -1;
+      if (Number.isFinite(bTs)) return 1;
+      return 0;
+    })[0];
+
+    const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
+    if (!matchedLink) {
+      setFeedbackLookupStatus(`Match encontrado para ${sender || "-"}, mas sem Feedback URL.`);
+      return;
+    }
+
+    const requiredMax = requiredBodyIndexes.length > 0 ? Math.max(...requiredBodyIndexes) : 0;
+    const varsLength = Math.max(3, requiredMax, previewBodyVars.length);
+    const variables = Array.from({ length: varsLength }, (_, index) => String(previewBodyVars[index] || "").trim());
+    variables[0] = recipient || variables[0] || "";
+    variables[1] = sender || variables[1] || "";
+    variables[2] = matchedLink;
+
+    setGenericTo(targetTo);
+    setGenericBodyVars((current) => ({
+      ...current,
+      1: variables[0],
+      2: variables[1],
+      3: variables[2]
+    }));
+    if (needsUrlButtonVariable) {
+      setGenericButtonUrlVariable(matchedLink);
+    }
+
+    setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
+    await executeGenericTemplateSend({
+      allowSchedule: false,
+      overrides: {
+        to: targetTo,
+        bodyVariables: variables,
+        buttonUrlVariable: needsUrlButtonVariable ? matchedLink : undefined
+      }
+    });
+  }
+
+  function autofillFeedbackLinkByStore() {
+    const needle = normalizeLookupToken(feedbackStoreLookup);
+    if (!needle) {
+      setFeedbackLookupStatus("Introduz a loja para pesquisar no Notion.");
+      return;
+    }
+
+    const candidates = feedbackRows.filter((row) => {
+      const fields = row.fields || {};
+      const link = String(fields["Feedback URL"] || "").trim() || String(row.url || "").trim();
+      if (!link) return false;
+
+      const joined = [
+        fields["Nome Cliente"],
+        fields["Destinatário"],
+        fields["Referência"],
+        fields["Cod. Serviço"]
+      ]
+        .map((value) => normalizeLookupToken(String(value || "")))
+        .join(" ");
+
+      return joined.includes(needle);
+    });
+
+    if (candidates.length === 0) {
+      setFeedbackLookupStatus(`Sem match no Notion para "${feedbackStoreLookup}".`);
+      return;
+    }
+
+    const best = [...candidates].sort((a, b) => {
+      const bTs = parseFeedbackEntregaTimestamp(b.fields["Data Entrega"] || "");
+      const aTs = parseFeedbackEntregaTimestamp(a.fields["Data Entrega"] || "");
+      if (Number.isFinite(aTs) && Number.isFinite(bTs)) {
+        return bTs - aTs;
+      }
+      if (Number.isFinite(aTs)) return -1;
+      if (Number.isFinite(bTs)) return 1;
+      return 0;
+    })[0];
+
+    const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
+    if (!matchedLink) {
+      setFeedbackLookupStatus("Match encontrado, mas sem Feedback URL nessa linha.");
+      return;
+    }
+
+    if (needsUrlButtonVariable) {
+      setGenericButtonUrlVariable(matchedLink);
+    } else if (requiredBodyIndexes.length > 0) {
+      const preferredIndex = requiredBodyIndexes.includes(3)
+        ? 3
+        : requiredBodyIndexes.find((index) => {
+            const currentValue = String(genericBodyVars[index] || "").trim();
+            return !currentValue || /^https?:\/\//i.test(currentValue);
+          }) || requiredBodyIndexes[requiredBodyIndexes.length - 1];
+
+      setGenericBodyVars((current) => ({
+        ...current,
+        [preferredIndex]: matchedLink
+      }));
+    }
+
+    const matchedStore = String(best.fields["Nome Cliente"] || best.fields["Destinatário"] || feedbackStoreLookup || "-");
+    setFeedbackLookupStatus(`Link associado automaticamente para: ${matchedStore}`);
+  }
+
+  async function createFeedbackShopLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!feedbackCreateShopName.trim()) {
+      setFeedbackCreateStatus("Nome da loja é obrigatório.");
+      return;
+    }
+    if (!feedbackCreateLink.trim()) {
+      setFeedbackCreateStatus("Feedback link é obrigatório.");
+      return;
+    }
+
+    setFeedbackCreateLoading(true);
+    setFeedbackCreateStatus("");
+
+    try {
+      const response = await fetch(apiUrl("/api/feedback-tracker"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shopName: feedbackCreateShopName.trim(),
+          feedbackUrl: feedbackCreateLink.trim(),
+          whatsappTemplate: genericTemplateName.trim()
+        })
+      });
+
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
+      }
+
+      setFeedbackCreateStatus("Loja e link criados no Notion com sucesso.");
+      setFeedbackStoreLookup(feedbackCreateShopName.trim());
+      setFeedbackCreateShopName("");
+      setFeedbackCreateLink("");
+      loadFeedbackTracker();
+    } catch (error) {
+      setFeedbackCreateStatus(error instanceof Error ? error.message : "Não foi possível criar loja/link no Notion.");
+    } finally {
+      setFeedbackCreateLoading(false);
     }
   }
 
@@ -4216,7 +4610,48 @@ function App() {
                       {showIncidenceDetails ? (
                         <div className="tms-incidence-details">
                           <h5>Incidências Ongoing (envios em incidência)</h5>
-                          {incidenceShipments.length === 0 ? (
+                          <div className="tracker-actions">
+                            <label>
+                              Data Recolha: De
+                              <input
+                                type="date"
+                                value={incidenceDateFrom}
+                                onChange={(event) => setIncidenceDateFrom(event.target.value)}
+                              />
+                            </label>
+                            <label>
+                              Data Recolha: Até
+                              <input
+                                type="date"
+                                value={incidenceDateTo}
+                                onChange={(event) => setIncidenceDateTo(event.target.value)}
+                              />
+                            </label>
+                            <label>
+                              Tracking Number
+                              <input
+                                type="text"
+                                value={incidenceTrackingSearch}
+                                onChange={(event) => setIncidenceTrackingSearch(event.target.value)}
+                                placeholder="Pesquisar tracking"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => {
+                                setIncidenceDateFrom("");
+                                setIncidenceDateTo("");
+                                setIncidenceTrackingSearch("");
+                              }}
+                            >
+                              Limpar período
+                            </button>
+                          </div>
+                          <p className="status">
+                            {filteredIncidenceShipments.length} registos visíveis (período: {incidenceDateFrom || "início"} até {incidenceDateTo || "hoje"})
+                          </p>
+                          {filteredIncidenceShipments.length === 0 ? (
                             <p className="tms-empty">Sem envios em incidência neste momento.</p>
                           ) : (
                             <>
@@ -4230,6 +4665,8 @@ function App() {
                                       <th>Sender</th>
                                       <th>Destinatário</th>
                                       <th>Final Client Phone</th>
+                                      <th>Data Recolha</th>
+                                      <th>Data Entrega</th>
                                       <th>Cobrança</th>
                                       <th>Status</th>
                                       <th>Incidência</th>
@@ -4245,6 +4682,8 @@ function App() {
                                         <td>{item.sender || "-"}</td>
                                         <td>{item.recipient || "-"}</td>
                                         <td>{item.finalClientPhone || "-"}</td>
+                                        <td>{item.pickupDate || "-"}</td>
+                                        <td>{item.deliveryDate || "-"}</td>
                                         <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
                                         <td>{item.status || "-"}</td>
                                         <td>{item.incidence || "-"}</td>
@@ -4305,7 +4744,48 @@ function App() {
                             Parcels em Pickup Point (PUDO)
                             {pudoOverdueCount > 0 ? ` - ${pudoOverdueCount} pendente(s) > 24h` : ""}
                           </h5>
-                          {pudoShipments.length === 0 ? (
+                          <div className="tracker-actions">
+                            <label>
+                              Data Recolha: De
+                              <input
+                                type="date"
+                                value={pudoDateFrom}
+                                onChange={(event) => setPudoDateFrom(event.target.value)}
+                              />
+                            </label>
+                            <label>
+                              Data Recolha: Até
+                              <input
+                                type="date"
+                                value={pudoDateTo}
+                                onChange={(event) => setPudoDateTo(event.target.value)}
+                              />
+                            </label>
+                            <label>
+                              Tracking Number
+                              <input
+                                type="text"
+                                value={pudoTrackingSearch}
+                                onChange={(event) => setPudoTrackingSearch(event.target.value)}
+                                placeholder="Pesquisar tracking"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => {
+                                setPudoDateFrom("");
+                                setPudoDateTo("");
+                                setPudoTrackingSearch("");
+                              }}
+                            >
+                              Limpar período
+                            </button>
+                          </div>
+                          <p className="status">
+                            {filteredPudoShipments.length} registos visíveis (período: {pudoDateFrom || "início"} até {pudoDateTo || "hoje"})
+                          </p>
+                          {filteredPudoShipments.length === 0 ? (
                             <p className="tms-empty">Sem envios PUDO neste momento.</p>
                           ) : (
                             <>
@@ -4319,6 +4799,8 @@ function App() {
                                       <th>Sender</th>
                                       <th>Destinatário</th>
                                       <th>Final Client Phone</th>
+                                      <th>Data Recolha</th>
+                                      <th>Data Entrega</th>
                                       <th>Cobrança</th>
                                       <th>Status</th>
                                       <th>Incidência</th>
@@ -4347,6 +4829,8 @@ function App() {
                                         <td>{item.sender || "-"}</td>
                                         <td>{item.recipient || "-"}</td>
                                         <td>{item.finalClientPhone || "-"}</td>
+                                        <td>{item.pickupDate || "-"}</td>
+                                        <td>{item.deliveryDate || "-"}</td>
                                         <td>{item.hasCharge ? `€${item.chargeAmount ? ` ${item.chargeAmount}` : ""}` : "-"}</td>
                                         <td>{item.status || "-"}</td>
                                         <td>{item.incidence || "-"}</td>
@@ -4867,7 +5351,7 @@ function App() {
                 </div>
               </div>
 
-              <section className="panel">
+              <section className="panel delivered-section">
                 <div className="tracker-header">
                   <div>
                     <h3>Entregues (Linke Portal API)</h3>
@@ -4875,16 +5359,20 @@ function App() {
                   </div>
                   <div className="tracker-actions">
                     <label>
-                      Ano
-                      <select
-                        value={deliveredYearFilter}
-                        onChange={(event) => setDeliveredYearFilter(event.target.value)}
-                      >
-                        <option value="all">Todos</option>
-                        {deliveredAvailableYears.map((year) => (
-                          <option key={`delivered-year-${year}`} value={year}>{year}</option>
-                        ))}
-                      </select>
+                      Data Recolha: De
+                      <input
+                        type="date"
+                        value={deliveredDateFrom}
+                        onChange={(event) => setDeliveredDateFrom(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Data Recolha: Até
+                      <input
+                        type="date"
+                        value={deliveredDateTo}
+                        onChange={(event) => setDeliveredDateTo(event.target.value)}
+                      />
                     </label>
                     <label>
                       Buscar
@@ -4898,10 +5386,26 @@ function App() {
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      onClick={() => loadDeliveredShipments(deliveredPage)}
+                      onClick={() => {
+                        if (deliveredDateFrom || deliveredDateTo) {
+                          void loadDeliveredShipmentsByDateRange(deliveredDateFrom, deliveredDateTo);
+                          return;
+                        }
+                        loadDeliveredShipments(deliveredPage);
+                      }}
                       disabled={deliveredLoading}
                     >
                       {deliveredLoading ? "A atualizar..." : "Atualizar entregues"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setDeliveredDateFrom("");
+                        setDeliveredDateTo("");
+                      }}
+                    >
+                      Limpar período
                     </button>
                   </div>
                 </div>
@@ -4909,14 +5413,15 @@ function App() {
                 {deliveredError ? <p className="status">{deliveredError}</p> : null}
                 {!deliveredError ? (
                   <p className="status">
-                    {sortedDeliveredRows.length} registos visíveis (ano: {deliveredYearFilter === "all" ? "Todos" : deliveredYearFilter})
+                    {sortedDeliveredRows.length} registos visíveis (período: {deliveredDateFrom || "início"} até {deliveredDateTo || "hoje"})
                   </p>
                 ) : null}
 
-                <div className="tracker-table-wrap delivered-scroll-wrap">
-                  <table className="tracker-table">
+                <div className="tracker-table-wrap delivered-scroll-wrap delivered-table-wrap">
+                  <table className="tracker-table delivered-table">
                     <thead>
                       <tr>
+                        <th>Enviar</th>
                         <th>Parcel ID</th>
                         <th>Tracking Number</th>
                         <th>Service</th>
@@ -4931,13 +5436,25 @@ function App() {
                     <tbody>
                       {sortedDeliveredRows.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="tracker-empty">
+                          <td colSpan={10} className="tracker-empty">
                             {deliveredLoading ? "A carregar entregues..." : "Sem dados de entregues para mostrar."}
                           </td>
                         </tr>
                       ) : (
                         sortedDeliveredRows.map((row, index) => (
                           <tr key={`delivered-${row.parcelId || row.providerTrackingCode || index}-${index}`}>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-secondary tms-mini-btn"
+                                onClick={() => {
+                                  void sendDeliveredFeedbackSurvey(row);
+                                }}
+                                disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading}
+                              >
+                                Enviar
+                              </button>
+                            </td>
                             <td>{row.parcelId || "-"}</td>
                             <td>{row.providerTrackingCode || "-"}</td>
                             <td>{row.service || "-"}</td>
@@ -4954,10 +5471,10 @@ function App() {
                   </table>
                 </div>
 
-                <div className="tracker-pagination">
+                <div className="tracker-pagination delivered-pagination">
                   <div className="tracker-page-size">
                     <span>Rows per page</span>
-                    <span>250</span>
+                    <span>{deliveredRangeMode ? "dataset filtrado" : "250"}</span>
                   </div>
 
                   <span className="tracker-page-label">
@@ -4966,30 +5483,251 @@ function App() {
                       : `${(deliveredPage - 1) * deliveredPageSize + 1}-${Math.min(deliveredPage * deliveredPageSize, deliveredTotal || deliveredRows.length)} of ${deliveredTotal || deliveredRows.length}`}
                   </span>
 
-                  <div className="tracker-page-actions">
-                    <button
-                      type="button"
-                      className="btn btn-secondary tracker-page-btn"
-                      onClick={() => loadDeliveredShipments(Math.max(1, deliveredPage - 1))}
-                      disabled={deliveredPage <= 1 || deliveredLoading}
-                    >
-                      Previous
-                    </button>
-                    <span>Page {deliveredPage} / {deliveredTotalPages}</span>
-                    <button
-                      type="button"
-                      className="btn btn-secondary tracker-page-btn"
-                      onClick={() => loadDeliveredShipments(Math.min(deliveredTotalPages, deliveredPage + 1))}
-                      disabled={deliveredPage >= deliveredTotalPages || deliveredLoading}
-                    >
-                      Next
-                    </button>
-                  </div>
+                  {deliveredRangeMode ? (
+                    <div className="tracker-page-actions">
+                      <span>Período pesquisado em múltiplas páginas</span>
+                    </div>
+                  ) : (
+                    <div className="tracker-page-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary tracker-page-btn"
+                        onClick={() => loadDeliveredShipments(Math.max(1, deliveredPage - 1))}
+                        disabled={deliveredPage <= 1 || deliveredLoading}
+                      >
+                        Previous
+                      </button>
+                      <span>Page {deliveredPage} / {deliveredTotalPages}</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary tracker-page-btn"
+                        onClick={() => loadDeliveredShipments(Math.min(deliveredTotalPages, deliveredPage + 1))}
+                        disabled={deliveredPage >= deliveredTotalPages || deliveredLoading}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
               </section>
 
-              <section className="panel">
-                <p>Vista sincronizada com a tua base Notion do Feedback Tracker.</p>
+              <section className="panel feedback-template-bridge">
+                <div className="tracker-header">
+                  <div>
+                    <h3>Template Feedback Survey selecionado</h3>
+                    <p>Template ativo para usar entre dados Entregues e tabela Notion.</p>
+                  </div>
+                  <div className="tracker-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={fetchMetaTemplates}
+                      disabled={metaTemplatesLoading}
+                    >
+                      {metaTemplatesLoading ? "A carregar..." : "Atualizar templates"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="tracker-actions">
+                  <label>
+                    Número (E.164)
+                    <input
+                      value={genericTo}
+                      onChange={(event) => setGenericTo(event.target.value)}
+                      placeholder="+351912858229"
+                    />
+                  </label>
+                  <label>
+                    Template Feedback Survey
+                    <select
+                      value={genericTemplateName}
+                      onChange={(event) => {
+                        const chosen = metaTemplates.find((item) => item.name === event.target.value) || null;
+                        setGenericTemplateName(event.target.value);
+                        if (chosen?.language) {
+                          setGenericLanguage(chosen.language);
+                        }
+                      }}
+                    >
+                      {feedbackSurveyTemplates.length === 0 ? <option value="">Sem templates carregados</option> : null}
+                      {feedbackSurveyTemplates.map((template) => (
+                        <option key={`feedback-template-${template.id || template.name}`} value={template.name}>
+                          {template.name} ({template.language || "pt_PT"})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Loja (Notion)
+                    <input
+                      value={feedbackStoreLookup}
+                      onChange={(event) => setFeedbackStoreLookup(event.target.value)}
+                      placeholder="Nome da loja para buscar Feedback URL"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={autofillFeedbackLinkByStore}
+                    disabled={feedbackLoading}
+                  >
+                    {feedbackLoading ? "A carregar Notion..." : "Buscar no Notion e preencher link"}
+                  </button>
+                </div>
+
+                {feedbackLookupStatus ? <p className="status">{feedbackLookupStatus}</p> : null}
+
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setFeedbackCreateOpen((open) => !open)}
+                  >
+                    {feedbackCreateOpen ? "Fechar" : "Adicionar nova loja"}
+                  </button>
+                </div>
+
+                {feedbackCreateOpen ? (
+                  <form className="api-form feedback-create-form" onSubmit={createFeedbackShopLink}>
+                    <h4>Adicionar nova loja</h4>
+                    <div className="template-var-grid feedback-template-vars">
+                      <label>
+                        Loja
+                        <input
+                          value={feedbackCreateShopName}
+                          onChange={(event) => setFeedbackCreateShopName(event.target.value)}
+                          placeholder="Nome da loja"
+                        />
+                      </label>
+                      <label>
+                        Feedback Link
+                        <input
+                          value={feedbackCreateLink}
+                          onChange={(event) => setFeedbackCreateLink(event.target.value)}
+                          placeholder="https://..."
+                        />
+                      </label>
+                    </div>
+
+                    <div className="api-actions feedback-bridge-actions">
+                      <button type="submit" className="btn btn-secondary" disabled={feedbackCreateLoading}>
+                        {feedbackCreateLoading ? "A criar..." : "Guardar nova loja"}
+                      </button>
+                      {feedbackCreateStatus ? <span className="status">{feedbackCreateStatus}</span> : null}
+                    </div>
+                  </form>
+                ) : null}
+
+                <article className="template-chat-box feedback-template-preview">
+                  <header>
+                    <strong>Preview Feedback Survey</strong>
+                    <span>{selectedFeedbackSurveyTemplate?.language || genericLanguage || "pt_PT"}</span>
+                  </header>
+                  <div className="template-thread">
+                    <article className="wa-msg in">
+                      <p>{genericTo || "Número de destino (E.164)"}</p>
+                      <time>{selectedFeedbackSurveyTemplate?.name || genericTemplateName || "Template"}</time>
+                    </article>
+                    <article className="wa-msg out">
+                      <p>{selectedTemplatePreview || selectedTemplateBody || "Sem texto no body do template selecionado"}</p>
+                      <time>{genericLoading ? "a enviar" : genericStatus}</time>
+                    </article>
+                  </div>
+                </article>
+
+                <article className="tms-block tracker-console-history feedback-history-panel">
+                  <h4>Histórico de mensagens enviadas</h4>
+                  {feedbackBridgeHistory.length === 0 ? (
+                    <p className="tms-empty">Sem histórico disponível.</p>
+                  ) : (
+                    <div className="sent-history-list">
+                      {feedbackBridgeHistory.map((item) => (
+                        <article key={`feedback-bridge-history-${item.channel}-${item.id}`} className="sent-history-item">
+                          <header>
+                            <strong>{item.channel === "template" ? "Template" : "Mensagem"}</strong>
+                            <span>{item.time}</span>
+                          </header>
+                          <p>Para: {item.to}</p>
+                          <p>{item.content}</p>
+                          <span className={`status sent-history-status sent-history-status-${statusTone(item.status, item.channel)}`}>
+                            <span className="sent-history-dot" aria-hidden="true" />
+                            Estado: {item.status}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </article>
+
+                {requiredBodyVarCount > 0 ? (
+                  <div className="template-var-grid feedback-template-vars">
+                    {requiredBodyIndexes.map((index) => (
+                      <label key={`feedback-bridge-var-${index}`}>
+                        Variável {`{{${index}}}`}
+                        <input
+                          value={genericBodyVars[index] || ""}
+                          onChange={(event) =>
+                            setGenericBodyVars((current) => ({
+                              ...current,
+                              [index]: event.target.value
+                            }))
+                          }
+                          placeholder={`Valor para {{${index}}}`}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="status">Este template não exige variáveis no body.</p>
+                )}
+
+                {needsUrlButtonVariable ? (
+                  <div className="tracker-actions">
+                    <label>
+                      Variável do botão URL
+                      <input
+                        value={genericButtonUrlVariable}
+                        onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
+                        placeholder="variável dinâmica de URL"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+
+                <p className="status">
+                  Selecionado: {selectedFeedbackSurveyTemplate?.name || genericTemplateName || "-"}
+                  {" "}
+                  | Idioma: {selectedFeedbackSurveyTemplate?.language || genericLanguage || "pt_PT"}
+                </p>
+
+                <div className="api-actions feedback-bridge-actions">
+                  <button
+                    type="button"
+                    className="wa-send"
+                    onClick={() => {
+                      void sendFeedbackSurveyNow();
+                    }}
+                    disabled={genericLoading}
+                  >
+                    {genericLoading ? "A enviar..." : "Send Feedback Survey now"}
+                  </button>
+                  <span className={`wa-live-status ${genericLoading ? "busy" : ""}`}>
+                    {genericLoading ? "A enviar" : "Inativo"}
+                  </span>
+                </div>
+              </section>
+
+              <section className="panel notion-section">
+                <div className="notion-section-head">
+                  <img
+                    src="https://www.insightplatforms.com/wp-content/uploads/2023/10/Notion-Logo-Square-Insight-Platforms.png"
+                    alt="Notion"
+                    className="notion-logo"
+                    loading="lazy"
+                  />
+                  <p>Vista sincronizada com a tua base Notion do Feedback Tracker.</p>
+                </div>
                 <span className="status">{filteredSortedFeedbackRows.length} registos com Data Entrega</span>
               </section>
 
