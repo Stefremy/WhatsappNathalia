@@ -30,6 +30,8 @@ function broadcastSSE(event, data) {
 
 // ── In-memory scheduled messages ──────────────────────────────────────────
 const scheduledMessages = [];
+const recentCallEvents = [];
+const MAX_CALL_EVENTS = 100;
 
 async function processScheduledMessages() {
   const now = Date.now();
@@ -3297,6 +3299,21 @@ async function handleWebhookEvent(req, res) {
 
     for (const change of changes) {
       const value = change?.value || {};
+      if (String(change?.field || "") === "calls") {
+        recentCallEvents.unshift({
+          at: new Date().toISOString(),
+          field: "calls",
+          value
+        });
+        if (recentCallEvents.length > MAX_CALL_EVENTS) {
+          recentCallEvents.length = MAX_CALL_EVENTS;
+        }
+
+        broadcastSSE("call_event", {
+          at: new Date().toISOString(),
+          value
+        });
+      }
       const statuses = value?.statuses || [];
       const messages = value?.messages || [];
       const contacts = value?.contacts || [];
@@ -3355,6 +3372,10 @@ async function handleWebhookEvent(req, res) {
 
 app.post("/webhook", handleWebhookEvent);
 app.post("/api/webhook", handleWebhookEvent);
+
+app.get("/api/calls/events", (_req, res) => {
+  return res.json({ data: recentCallEvents });
+});
 
 app.post("/api/botpress/events", async (req, res) => {
   try {
@@ -3879,6 +3900,119 @@ app.get("/api/radio/proxy", (req, res) => {
   });
 
   proxyReq.end();
+});
+
+// ── WhatsApp Calling API routes ────────────────────────────────────────────
+
+app.get("/api/calls/permissions", async (req, res) => {
+  try {
+    const userWaId = String(req.query.user_wa_id || "").trim();
+    if (!userWaId) {
+      return res.status(400).json({ error: "Query param 'user_wa_id' is required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/call_permissions?user_wa_id=${encodeURIComponent(userWaId)}`;
+    const apiRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const data = await apiRes.json();
+    return res.status(apiRes.status).json(data);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to check call permissions", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+app.post("/api/calls/request-permission", async (req, res) => {
+  try {
+    const userWaId = String(req.body?.user_wa_id || "").trim();
+    if (!userWaId) {
+      return res.status(400).json({ error: "Field 'user_wa_id' is required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/call_permissions`;
+    const payload = {
+      messaging_product: "whatsapp",
+      user_wa_id: userWaId,
+      action: "send_call_permission_request"
+    };
+
+    const apiRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await apiRes.json();
+    return res.status(apiRes.status).json(data);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to request call permission", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+app.post("/api/calls/manage", async (req, res) => {
+  try {
+    const { action, to, call_id, session, biz_opaque_callback_data } = req.body || {};
+    if (!action) {
+      return res.status(400).json({ error: "Field 'action' is required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+    let payload;
+    if (action === "terminate") {
+      if (!call_id) return res.status(400).json({ error: "Field 'call_id' is required for terminate." });
+      payload = { messaging_product: "whatsapp", call_id: String(call_id), action: "terminate" };
+    } else {
+      if (!to) return res.status(400).json({ error: "Field 'to' is required for this action." });
+      payload = { messaging_product: "whatsapp", to: String(to), action: String(action) };
+      if (biz_opaque_callback_data) {
+        payload.biz_opaque_callback_data = String(biz_opaque_callback_data);
+      }
+      if (action === "connect") {
+        if (!session || typeof session !== "object") {
+          return res.status(400).json({ error: "Field 'session' is required for connect action." });
+        }
+        const sdpType = String(session?.sdp_type || "").trim();
+        const sdp = String(session?.sdp || "").trim();
+        if (!sdpType || !sdp) {
+          return res.status(400).json({ error: "session.sdp_type and session.sdp are required for connect action." });
+        }
+        payload.session = {
+          sdp_type: sdpType,
+          sdp
+        };
+      }
+    }
+
+    const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/calls`;
+    const apiRes = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await apiRes.json();
+    return res.status(apiRes.status).json(data);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to manage call", details: error instanceof Error ? error.message : "Unknown error" });
+  }
 });
 
 if (!process.env.VERCEL) {

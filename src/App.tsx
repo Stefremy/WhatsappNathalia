@@ -7,6 +7,13 @@ const docsFacts = [
   { label: "Auth", value: "Bearer token" }
 ];
 
+const callingDocsFacts = [
+  { label: "Version", value: "v23.0" },
+  { label: "Primary Endpoint", value: "/{Version}/{Phone-Number-ID}/calls" },
+  { label: "Base URL", value: "https://graph.facebook.com" },
+  { label: "Auth", value: "Bearer token" }
+];
+
 const quickApps = [
   {
     name: "Tracking Linke",
@@ -344,7 +351,7 @@ function humanizeUsername(username: string) {
     .join(" ");
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" }) {
   switch (name) {
     case "overview":
       return (
@@ -374,6 +381,12 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3.75a4 4 0 0 1 4 4v.55a3.7 3.7 0 0 0 1.05 2.6l.42.43a1.8 1.8 0 0 1-1.28 3.07H7.8a1.8 1.8 0 0 1-1.28-3.07l.42-.43A3.7 3.7 0 0 0 8 8.3v-.55a4 4 0 0 1 4-4Zm1.9 12.65a2 2 0 0 1-3.8 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "calling":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7.8 3.8h2.5a1 1 0 0 1 1 .86l.35 2.4a1 1 0 0 1-.55 1.02l-1.45.72a12.4 12.4 0 0 0 5.6 5.6l.72-1.45a1 1 0 0 1 1.02-.55l2.4.35a1 1 0 0 1 .86 1v2.5a1.8 1.8 0 0 1-1.95 1.8C10.6 18.9 5.1 13.4 4 5.75A1.8 1.8 0 0 1 5.8 3.8Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "notes":
@@ -799,7 +812,35 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "consumiveis" | "feedback">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback">("workspace");
+
+  // ── WhatsApp Calling page state ─────────────────────────────────────────
+  const [callingPermPhone, setCallingPermPhone] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
+  const [callingPermResult, setCallingPermResult] = useState<null | {
+    status: string;
+    expiration_time?: number;
+    actions?: Array<{ action_name: string; can_perform_action: boolean; limits?: Array<{ time_period: string; current_usage: number; max_allowed: number }> }>;
+  }>(null);
+  const [callingPermLoading, setCallingPermLoading] = useState(false);
+  const [callingPermError, setCallingPermError] = useState("");
+  const [callingReqPermLoading, setCallingReqPermLoading] = useState(false);
+  const [callingReqPermResult, setCallingReqPermResult] = useState("");
+  const [callingReqPermError, setCallingReqPermError] = useState("");
+  const [callingAction, setCallingAction] = useState("connect");
+  const [callingTo, setCallingTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
+  const [callingCallId, setCallingCallId] = useState("");
+  const [callingManageLoading, setCallingManageLoading] = useState(false);
+  const [callingManageResult, setCallingManageResult] = useState("");
+  const [callingManageError, setCallingManageError] = useState("");
+  const [callingWebrtcLoading, setCallingWebrtcLoading] = useState(false);
+  const [callingWebrtcStatus, setCallingWebrtcStatus] = useState("Inativo");
+  const [callingWebrtcError, setCallingWebrtcError] = useState("");
+  const [callingWebrtcSdpPreview, setCallingWebrtcSdpPreview] = useState("");
+  const [callingEvents, setCallingEvents] = useState<Array<{ at?: string; field?: string; value?: unknown }>>([]);
+  const [callingEventsLoading, setCallingEventsLoading] = useState(false);
+  const [callingRefOpen, setCallingRefOpen] = useState(false);
+  const callingPeerRef = useRef<RTCPeerConnection | null>(null);
+  const callingLocalStreamRef = useRef<MediaStream | null>(null);
   const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status">("all");
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
@@ -3776,6 +3817,240 @@ function App() {
     }
   }
 
+  // ── Calling page handlers ────────────────────────────────────────────────
+  async function checkCallingPermission(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const phone = callingPermPhone.trim();
+    if (!phone) return;
+    setCallingPermLoading(true);
+    setCallingPermError("");
+    setCallingPermResult(null);
+    try {
+      const res = await fetch(apiUrl(`/api/calls/permissions?user_wa_id=${encodeURIComponent(phone)}`));
+      const data = await parseResponse(res);
+      if (!res.ok) {
+        setCallingPermError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
+        return;
+      }
+      setCallingPermResult({
+        status: String(data?.permission?.status || "unknown"),
+        expiration_time: data?.permission?.expiration_time as number | undefined,
+        actions: Array.isArray(data?.actions) ? data.actions as typeof callingPermResult extends null ? never : NonNullable<typeof callingPermResult>["actions"] : undefined
+      });
+    } catch {
+      setCallingPermError("Não foi possível ligar ao backend.");
+    } finally {
+      setCallingPermLoading(false);
+    }
+  }
+
+  async function requestCallingPermission() {
+    const phone = callingPermPhone.trim();
+    if (!phone) {
+      setCallingReqPermError("Preenche o número do utilizador primeiro.");
+      return;
+    }
+
+    setCallingReqPermLoading(true);
+    setCallingReqPermError("");
+    setCallingReqPermResult("");
+
+    try {
+      const res = await fetch(apiUrl("/api/calls/request-permission"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_wa_id: phone })
+      });
+      const data = await parseResponse(res);
+      if (!res.ok) {
+        setCallingReqPermError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
+        return;
+      }
+
+      setCallingReqPermResult("Pedido de permissão enviado com sucesso.");
+      await checkCallingPermission({ preventDefault: () => {} } as FormEvent<HTMLFormElement>);
+    } catch {
+      setCallingReqPermError("Não foi possível pedir permissão ao backend.");
+    } finally {
+      setCallingReqPermLoading(false);
+    }
+  }
+
+  async function manageCallingAction(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setCallingManageLoading(true);
+    setCallingManageError("");
+    setCallingManageResult("");
+    try {
+      const body: Record<string, unknown> = { action: callingAction };
+      if (callingAction === "terminate") {
+        if (!callingCallId.trim()) {
+          setCallingManageError("Call ID é obrigatório para a ação terminate.");
+          setCallingManageLoading(false);
+          return;
+        }
+        body.call_id = callingCallId.trim();
+      } else {
+        if (!callingTo.trim()) {
+          setCallingManageError("Número de telefone é obrigatório.");
+          setCallingManageLoading(false);
+          return;
+        }
+        body.to = callingTo.trim();
+      }
+      const res = await fetch(apiUrl("/api/calls/manage"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await parseResponse(res);
+      if (!res.ok) {
+        setCallingManageError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
+        return;
+      }
+      setCallingManageResult(JSON.stringify(data, null, 2));
+    } catch {
+      setCallingManageError("Não foi possível ligar ao backend.");
+    } finally {
+      setCallingManageLoading(false);
+    }
+  }
+
+  async function refreshCallingEvents() {
+    if (activeView !== "calling") return;
+    setCallingEventsLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/calls/events"));
+      const data = await parseResponse(res);
+      if (!res.ok) {
+        return;
+      }
+      const rows = Array.isArray(data?.data) ? data.data : [];
+      setCallingEvents(rows.slice(0, 15));
+    } catch {
+      // Ignore transient polling errors.
+    } finally {
+      setCallingEventsLoading(false);
+    }
+  }
+
+  function stopCallingMedia() {
+    if (callingPeerRef.current) {
+      try { callingPeerRef.current.close(); } catch {}
+      callingPeerRef.current = null;
+    }
+    if (callingLocalStreamRef.current) {
+      for (const track of callingLocalStreamRef.current.getTracks()) {
+        try { track.stop(); } catch {}
+      }
+      callingLocalStreamRef.current = null;
+    }
+    setCallingWebrtcStatus("Media local terminada");
+  }
+
+  async function startWebRtcConnect() {
+    const to = callingTo.trim();
+    if (!to) {
+      setCallingWebrtcError("Preenche o número de destino.");
+      return;
+    }
+
+    setCallingWebrtcLoading(true);
+    setCallingWebrtcError("");
+    setCallingWebrtcStatus("A preparar WebRTC...");
+    setCallingWebrtcSdpPreview("");
+
+    try {
+      stopCallingMedia();
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error("Browser sem suporte para getUserMedia.");
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      callingLocalStreamRef.current = stream;
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
+      });
+      callingPeerRef.current = pc;
+
+      for (const track of stream.getTracks()) {
+        pc.addTrack(track, stream);
+      }
+
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE candidates to be gathered so SDP includes connectivity candidates.
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === "complete") {
+          resolve();
+          return;
+        }
+        const timeout = setTimeout(() => {
+          pc.removeEventListener("icegatheringstatechange", onChange);
+          resolve();
+        }, 3000);
+        const onChange = () => {
+          if (pc.iceGatheringState === "complete") {
+            clearTimeout(timeout);
+            pc.removeEventListener("icegatheringstatechange", onChange);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", onChange);
+      });
+
+      const localDescription = pc.localDescription;
+      if (!localDescription?.sdp || !localDescription?.type) {
+        throw new Error("Não foi possível gerar SDP local.");
+      }
+
+      setCallingWebrtcSdpPreview(localDescription.sdp.slice(0, 1200));
+      setCallingWebrtcStatus("A enviar oferta SDP para o backend...");
+
+      const res = await fetch(apiUrl("/api/calls/manage"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "connect",
+          to,
+          session: {
+            sdp_type: localDescription.type,
+            sdp: localDescription.sdp
+          },
+          biz_opaque_callback_data: `workspace-${Date.now()}`
+        })
+      });
+
+      const data = await parseResponse(res);
+      if (!res.ok) {
+        throw new Error(String(data?.error?.message || data?.error || `Erro ${res.status}`));
+      }
+
+      setCallingManageResult(JSON.stringify(data, null, 2));
+      setCallingWebrtcStatus("Oferta SDP enviada. Aguardar eventos no painel de ciclo de chamada.");
+      await refreshCallingEvents();
+    } catch (error) {
+      setCallingWebrtcError(error instanceof Error ? error.message : "Falha ao iniciar WebRTC.");
+      setCallingWebrtcStatus("Falhou");
+    } finally {
+      setCallingWebrtcLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeView !== "calling") {
+      return;
+    }
+    void refreshCallingEvents();
+    const timer = setInterval(() => {
+      void refreshCallingEvents();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [activeView]);
+
   async function sendSmsFallback() {
     const to = digitsOnly(smsTo || genericTo);
     const message = smsText.trim();
@@ -3925,6 +4200,14 @@ function App() {
             >
               <span className="workspace-nav-icon">📊</span>
               <span>Data &amp; Analytics</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "calling" ? " active" : ""}`}
+              onClick={() => setActiveView("calling")}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="calling" /></span>
+              <span>WhatsApp API Calling</span>
             </button>
             <button
               type="button"
@@ -5872,6 +6155,367 @@ function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </section>
+          ) : activeView === "calling" ? (
+            <section className="panel tracker-page" id="calling-api-page">
+              {/* ── Header ── */}
+              <div className="tracker-header">
+                <div>
+                  <h2>WhatsApp API Calling</h2>
+                  <p>Verifique permissões e gerencie chamadas via WhatsApp Cloud API v23.0.</p>
+                </div>
+                <div className="tracker-actions">
+                  <a
+                    className="btn btn-secondary"
+                    href="https://developers.facebook.com/docs/whatsapp/cloud-api/reference/calling"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Documentação oficial ↗
+                  </a>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    ← Voltar
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Two-column grid ── */}
+              <div className="calling-grid">
+
+                {/* Card 1 – Check Permissions */}
+                <div className="calling-card">
+                  <div className="calling-card-header">
+                    <span className="calling-card-icon">🔍</span>
+                    <div>
+                      <h3>Verificar Permissão</h3>
+                      <p>Consulta se o negócio pode ligar para um utilizador.</p>
+                    </div>
+                  </div>
+                  <form className="api-form" onSubmit={checkCallingPermission}>
+                    <label>
+                      Número do utilizador
+                      <input
+                        type="tel"
+                        value={callingPermPhone}
+                        onChange={(e) => setCallingPermPhone(e.target.value)}
+                        placeholder="351912345678"
+                        required
+                      />
+                    </label>
+                    <div className="api-actions">
+                      <button
+                        type="submit"
+                        className="btn btn-primary"
+                        disabled={callingPermLoading}
+                      >
+                        {callingPermLoading ? "A verificar…" : "Verificar Permissão"}
+                      </button>
+                      {callingPermResult && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => { setCallingPermResult(null); setCallingPermError(""); }}
+                        >
+                          Limpar
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={requestCallingPermission}
+                        disabled={callingReqPermLoading || callingPermLoading}
+                      >
+                        {callingReqPermLoading ? "A pedir..." : "Pedir permissão"}
+                      </button>
+                    </div>
+                  </form>
+
+                  {callingPermError && (
+                    <div className="calling-alert calling-alert-error">
+                      <strong>Erro:</strong> {callingPermError}
+                    </div>
+                  )}
+
+                  {callingReqPermError && (
+                    <div className="calling-alert calling-alert-error">
+                      <strong>Erro no pedido:</strong> {callingReqPermError}
+                    </div>
+                  )}
+
+                  {callingReqPermResult && (
+                    <div className="calling-alert calling-alert-success">
+                      <strong>Sucesso:</strong> {callingReqPermResult}
+                    </div>
+                  )}
+
+                  {callingPermResult && (
+                    <div className="calling-perm-result">
+                      <div className="calling-perm-status-row">
+                        <span>Estado da permissão:</span>
+                        <span className={`calling-status-badge calling-status-${callingPermResult.status}`}>
+                          {callingPermResult.status === "granted" ? "✓ Concedida" :
+                           callingPermResult.status === "denied" ? "✗ Negada" :
+                           callingPermResult.status === "pending" ? "⏳ Pendente" :
+                           callingPermResult.status === "expired" ? "⌛ Expirada" :
+                           callingPermResult.status}
+                        </span>
+                      </div>
+                      {callingPermResult.expiration_time && (
+                        <div className="calling-perm-expiry">
+                          Expira em: <strong>{new Date(callingPermResult.expiration_time * 1000).toLocaleString("pt-PT")}</strong>
+                        </div>
+                      )}
+                      {callingPermResult.actions && callingPermResult.actions.length > 0 && (
+                        <div className="calling-actions-table">
+                          <h4>Ações disponíveis</h4>
+                          <table className="calling-table">
+                            <thead>
+                              <tr>
+                                <th>Ação</th>
+                                <th>Permitido</th>
+                                <th>Uso diário</th>
+                                <th>Limite</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {callingPermResult.actions.map((a) => {
+                                const daily = a.limits?.find((l) => l.time_period === "daily" || l.time_period === "PT24H");
+                                return (
+                                  <tr key={a.action_name}>
+                                    <td><code>{a.action_name}</code></td>
+                                    <td>
+                                      {a.can_perform_action
+                                        ? <span className="calling-ok">✓ Sim</span>
+                                        : <span className="calling-no">✗ Não</span>}
+                                    </td>
+                                    <td>{daily ? daily.current_usage : "—"}</td>
+                                    <td>{daily ? daily.max_allowed : "—"}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Card 2 – Manage Call */}
+                <div className="calling-card">
+                  <div className="calling-card-header">
+                    <span className="calling-card-icon">📞</span>
+                    <div>
+                      <h3>Gerir Chamada</h3>
+                      <p>Inicia ou gerencia o estado de uma chamada.</p>
+                    </div>
+                  </div>
+
+                  <div className="calling-webrtc-box">
+                    <h4>WebRTC Connect (recomendado)</h4>
+                    <p>Gera automaticamente uma oferta SDP local e envia ação <strong>connect</strong> com sessão.</p>
+                    <div className="api-actions">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={startWebRtcConnect}
+                        disabled={callingWebrtcLoading}
+                      >
+                        {callingWebrtcLoading ? "A preparar WebRTC..." : "Iniciar chamada com WebRTC"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={stopCallingMedia}
+                      >
+                        Parar media local
+                      </button>
+                    </div>
+                    <p className="calling-webrtc-status">Estado: <strong>{callingWebrtcStatus}</strong></p>
+                    {callingWebrtcError && (
+                      <div className="calling-alert calling-alert-error">
+                        <strong>Erro WebRTC:</strong> {callingWebrtcError}
+                      </div>
+                    )}
+                    {callingWebrtcSdpPreview && (
+                      <details>
+                        <summary>Ver preview SDP local</summary>
+                        <pre className="calling-response-pre">{callingWebrtcSdpPreview}</pre>
+                      </details>
+                    )}
+                  </div>
+
+                  <form className="api-form" onSubmit={manageCallingAction}>
+                    <label>
+                      Ação
+                      <select
+                        value={callingAction}
+                        onChange={(e) => { setCallingAction(e.target.value); setCallingManageResult(""); setCallingManageError(""); }}
+                      >
+                        <option value="connect">connect – Iniciar chamada</option>
+                        <option value="pre_accept">pre_accept – Pré-aceitar</option>
+                        <option value="accept">accept – Aceitar</option>
+                        <option value="reject">reject – Rejeitar</option>
+                        <option value="terminate">terminate – Terminar</option>
+                      </select>
+                    </label>
+
+                    {callingAction === "terminate" ? (
+                      <label>
+                        Call ID
+                        <input
+                          type="text"
+                          value={callingCallId}
+                          onChange={(e) => setCallingCallId(e.target.value)}
+                          placeholder="ID da chamada a terminar"
+                          required
+                        />
+                      </label>
+                    ) : (
+                      <label>
+                        Número de destino
+                        <input
+                          type="tel"
+                          value={callingTo}
+                          onChange={(e) => setCallingTo(e.target.value)}
+                          placeholder="351912345678"
+                          required
+                        />
+                      </label>
+                    )}
+
+                    <div className="calling-action-hint">
+                      {callingAction === "connect" && <span>📡 Envia pedido de chamada ao utilizador.</span>}
+                      {callingAction === "pre_accept" && <span>🤝 Sinaliza ao caller que will ser aceite.</span>}
+                      {callingAction === "accept" && <span>✅ Aceita a chamada recebida.</span>}
+                      {callingAction === "reject" && <span>🚫 Rejeita a chamada recebida.</span>}
+                      {callingAction === "terminate" && <span>⛔ Termina uma chamada ativa pelo ID.</span>}
+                    </div>
+
+                    <div className="api-actions">
+                      <button
+                        type="submit"
+                        className="btn btn-primary"
+                        disabled={callingManageLoading}
+                      >
+                        {callingManageLoading ? "A executar…" : `Executar ${callingAction}`}
+                      </button>
+                      {(callingManageResult || callingManageError) && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => { setCallingManageResult(""); setCallingManageError(""); }}
+                        >
+                          Limpar
+                        </button>
+                      )}
+                    </div>
+                  </form>
+
+                  {callingManageError && (
+                    <div className="calling-alert calling-alert-error">
+                      <strong>Erro:</strong> {callingManageError}
+                    </div>
+                  )}
+
+                  {callingManageResult && (
+                    <div className="calling-alert calling-alert-success">
+                      <strong>Resposta:</strong>
+                      <pre className="calling-response-pre">{callingManageResult}</pre>
+                    </div>
+                  )}
+                </div>
+
+                <div className="calling-card">
+                  <div className="calling-card-header">
+                    <span className="calling-card-icon">🛰️</span>
+                    <div>
+                      <h3>Ciclo de chamada (webhook)</h3>
+                      <p>Eventos recebidos do campo <strong>calls</strong> via webhook.</p>
+                    </div>
+                  </div>
+                  <div className="api-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={refreshCallingEvents}
+                      disabled={callingEventsLoading}
+                    >
+                      {callingEventsLoading ? "A atualizar..." : "Atualizar eventos"}
+                    </button>
+                  </div>
+                  {callingEvents.length === 0 ? (
+                    <p className="calling-empty-events">Sem eventos de chamadas até agora.</p>
+                  ) : (
+                    <div className="calling-events-list">
+                      {callingEvents.map((item, idx) => (
+                        <article className="calling-event-item" key={`${item.at || "evt"}-${idx}`}>
+                          <header>
+                            <strong>{item.field || "calls"}</strong>
+                            <span>{item.at ? new Date(item.at).toLocaleString("pt-PT") : "sem data"}</span>
+                          </header>
+                          <pre className="calling-response-pre">{JSON.stringify(item.value ?? {}, null, 2)}</pre>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Quick Reference (collapsible) ── */}
+              <div className="calling-ref-section">
+                <button
+                  type="button"
+                  className="calling-ref-toggle"
+                  onClick={() => setCallingRefOpen((v) => !v)}
+                >
+                  <span>📚 Referência rápida da API</span>
+                  <span>{callingRefOpen ? "▲" : "▼"}</span>
+                </button>
+                {callingRefOpen && (
+                  <div className="calling-ref-body">
+                    <div className="facts wa-facts">
+                      {callingDocsFacts.map((fact) => (
+                        <article className="fact" key={fact.label}>
+                          <span>{fact.label}</span>
+                          <strong>{fact.value}</strong>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="code-grid">
+                      <div>
+                        <h4>GET call_permissions</h4>
+                        <div className="code-block"><pre>{`GET /v23.0/{Phone-Number-ID}/call_permissions
+  ?user_wa_id=351912345678
+Authorization: Bearer <token>
+
+// Response permission.status:
+// "granted" | "pending" | "denied" | "expired"`}</pre></div>
+                      </div>
+                      <div>
+                        <h4>POST calls (connect)</h4>
+                        <div className="code-block"><pre>{`POST /v23.0/{Phone-Number-ID}/calls
+Authorization: Bearer <token>
+
+{
+  "messaging_product": "whatsapp",
+  "to": "351912345678",
+  "action": "connect"
+}`}</pre></div>
+                      </div>
+                    </div>
+
+                    <div className="calling-error-ref">
+                      <strong>⚠️ Erro 138006</strong> — O utilizador não concedeu permissão para receber chamadas. Use <code>send_call_permission_request</code> antes.
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           ) : activeView === "consumiveis" ? (
