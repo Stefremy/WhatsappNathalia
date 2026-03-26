@@ -351,7 +351,7 @@ function humanizeUsername(username: string) {
     .join(" ");
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" }) {
   switch (name) {
     case "overview":
       return (
@@ -387,6 +387,40 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M7.8 3.8h2.5a1 1 0 0 1 1 .86l.35 2.4a1 1 0 0 1-.55 1.02l-1.45.72a12.4 12.4 0 0 0 5.6 5.6l.72-1.45a1 1 0 0 1 1.02-.55l2.4.35a1 1 0 0 1 .86 1v2.5a1.8 1.8 0 0 1-1.95 1.8C10.6 18.9 5.1 13.4 4 5.75A1.8 1.8 0 0 1 5.8 3.8Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "consumiveis":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.75 7.5h14.5v10.75a1.75 1.75 0 0 1-1.75 1.75h-11a1.75 1.75 0 0 1-1.75-1.75Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M9 7.5V5.9a3 3 0 0 1 6 0v1.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "tracker":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.75 6.5h14.5v11.5a1.75 1.75 0 0 1-1.75 1.75h-11A1.75 1.75 0 0 1 4.75 18Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8 10h8M8 13.5h8M8 17h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "analytics":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 18.75V9.5M10 18.75V5.5M15 18.75v-6.25M20 18.75v-9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "feedback":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 18.5 3.5 20V6.5A2.5 2.5 0 0 1 6 4h12a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 17H8z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8.5 8.75h7M8.5 12h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "clientes":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8.25 11a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5ZM15.75 11a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M3.75 18.75a4.5 4.5 0 0 1 4.5-4.5h7.5a4.5 4.5 0 0 1 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "notes":
@@ -4221,7 +4255,7 @@ function App() {
               className={`workspace-nav-link workspace-nav-button${activeView === "consumiveis" ? " active" : ""}`}
               onClick={() => setActiveView("consumiveis")}
             >
-              <span className="workspace-nav-icon">📦</span>
+              <span className="workspace-nav-icon"><SidebarIcon name="consumiveis" /></span>
               <span>Consumiveis</span>
             </button>
             <button
@@ -4232,7 +4266,7 @@ function App() {
                 loadSharedLogs();
               }}
             >
-              <span className="workspace-nav-icon"><SidebarIcon name="logs" /></span>
+              <span className="workspace-nav-icon"><SidebarIcon name="tracker" /></span>
               <span>Client Tracker</span>
             </button>
             <button
@@ -4243,7 +4277,7 @@ function App() {
                 loadSharedLogs();
               }}
             >
-              <span className="workspace-nav-icon">📊</span>
+              <span className="workspace-nav-icon"><SidebarIcon name="analytics" /></span>
               <span>Data &amp; Analytics</span>
             </button>
             <button
@@ -4252,14 +4286,14 @@ function App() {
               onClick={() => setActiveView("calling")}
             >
               <span className="workspace-nav-icon"><SidebarIcon name="calling" /></span>
-              <span>WhatsApp API Calling</span>
+              <span>API Calling</span>
             </button>
             <button
               type="button"
               className={`workspace-nav-link workspace-nav-button${activeView === "feedback" ? " active" : ""}`}
               onClick={() => setActiveView("feedback")}
             >
-              <span className="workspace-nav-icon">📝</span>
+              <span className="workspace-nav-icon"><SidebarIcon name="feedback" /></span>
               <span>Feedback Tracker</span>
             </button>
             <button
@@ -4267,7 +4301,7 @@ function App() {
               className={`workspace-nav-link workspace-nav-button${activeView === "clientes" ? " active" : ""}`}
               onClick={() => setActiveView("clientes")}
             >
-              <span className="workspace-nav-icon">👥</span>
+              <span className="workspace-nav-icon"><SidebarIcon name="clientes" /></span>
               <span>Clientes</span>
             </button>
           </nav>
