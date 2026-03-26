@@ -5938,6 +5938,49 @@ function App() {
                 </div>
               </section>
 
+              <section className="tms-panel tracker-sms-panel">
+                <article className="sms-fallback-box">
+                  <header>
+                    <strong>Fallback SMS (ClickSend)</strong>
+                    <span>Usar quando WhatsApp falhar</span>
+                  </header>
+                  <div className="sms-fallback-thread">
+                    <article className="sms-msg out">
+                      <p>{smsText.trim() || "Escreve aqui a mensagem SMS de fallback..."}</p>
+                      <time>pré-visualização</time>
+                    </article>
+                  </div>
+                  <div className="sms-fallback-form">
+                    <input
+                      value={smsTo}
+                      onChange={(event) => setSmsTo(event.target.value)}
+                      placeholder="Número SMS (E.164)"
+                    />
+                    <textarea
+                      value={smsText}
+                      onChange={(event) => setSmsText(event.target.value)}
+                      rows={2}
+                      placeholder="Mensagem SMS (fallback ClickSend)"
+                    />
+                    <div className="sms-fallback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sms"
+                        onClick={() => void sendSmsFallback()}
+                        disabled={smsLoading || !smsText.trim() || !digitsOnly(smsTo || genericTo)}
+                      >
+                        {smsLoading ? "A enviar SMS..." : "Enviar SMS fallback"}
+                      </button>
+                      <span className="status">Estado: {smsStatus}</span>
+                    </div>
+                    <details className="sms-response">
+                      <summary>Resposta SMS</summary>
+                      <pre>{smsResponse}</pre>
+                    </details>
+                  </div>
+                </article>
+              </section>
+
               {sharedLogsError ? <p className="status">{sharedLogsError}</p> : null}
 
               <div className="tracker-table-wrap">
@@ -7080,6 +7123,49 @@ Authorization: Bearer <token>
                     {genericLoading ? "A enviar" : "Inativo"}
                   </span>
                 </div>
+              </section>
+
+              <section className="panel">
+                <article className="sms-fallback-box">
+                  <header>
+                    <strong>Fallback SMS (ClickSend)</strong>
+                    <span>Usar quando WhatsApp falhar</span>
+                  </header>
+                  <div className="sms-fallback-thread">
+                    <article className="sms-msg out">
+                      <p>{smsText.trim() || "Escreve aqui a mensagem SMS de fallback..."}</p>
+                      <time>pré-visualização</time>
+                    </article>
+                  </div>
+                  <div className="sms-fallback-form">
+                    <input
+                      value={smsTo}
+                      onChange={(event) => setSmsTo(event.target.value)}
+                      placeholder="Número SMS (E.164)"
+                    />
+                    <textarea
+                      value={smsText}
+                      onChange={(event) => setSmsText(event.target.value)}
+                      rows={2}
+                      placeholder="Mensagem SMS (fallback ClickSend)"
+                    />
+                    <div className="sms-fallback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sms"
+                        onClick={() => void sendSmsFallback()}
+                        disabled={smsLoading || !smsText.trim() || !digitsOnly(smsTo || genericTo)}
+                      >
+                        {smsLoading ? "A enviar SMS..." : "Enviar SMS fallback"}
+                      </button>
+                      <span className="status">Estado: {smsStatus}</span>
+                    </div>
+                    <details className="sms-response">
+                      <summary>Resposta SMS</summary>
+                      <pre>{smsResponse}</pre>
+                    </details>
+                  </div>
+                </article>
               </section>
 
               <section className="panel notion-section">
