@@ -3633,6 +3633,108 @@ app.get("/api/tms/dashboard", async (_req, res) => {
   }
 });
 
+async function fetchTmsCustomersData({ page = 1, limit = 100, search = "" } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+  if (!baseUrl || !email || !password) throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+
+  const safePage = Math.max(1, Math.trunc(Number(page) || 1));
+  const safeLimit = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 100)));
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) throw new Error("Could not extract CSRF token.");
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Referer: loginUrl, Cookie: cookieJarHeader(cookieJar) },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const start = (safePage - 1) * safeLimit;
+  const datatableBody = new URLSearchParams();
+  datatableBody.set("_token", csrfToken);
+  datatableBody.set("draw", String(safePage));
+  datatableBody.set("start", String(start));
+  datatableBody.set("length", String(safeLimit));
+  if (search) datatableBody.set("search[value]", search);
+
+  const customersRes = await fetch(`${baseUrl}/admin/customers/datatable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: `${baseUrl}/admin/customers`,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: datatableBody.toString(),
+    redirect: "manual"
+  });
+
+  if (!customersRes.ok) throw new Error(`Customers datatable failed: ${customersRes.status}`);
+  const payload = await customersRes.json().catch(() => ({}));
+
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  const total = Number(payload?.recordsFiltered ?? payload?.recordsTotal ?? data.length) || 0;
+
+  const rows = data.map((row) => ({
+    id: Number(row?.id || 0),
+    name: stripHtml(row?.name || row?.company_name || ""),
+    email: String(row?.email || "").trim(),
+    phone: decodeHtmlEntities(String(row?.phone || row?.phone_number || ""))
+      .replace(/<br\s*\/?>/gi, " / ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    nif: String(row?.nif || row?.vat || row?.tax_id || "").trim(),
+    address: stripHtml(row?.address || row?.street || ""),
+    city: stripHtml(row?.city || ""),
+    country: stripHtml(row?.country || ""),
+    active: parseIconBoolean(row?.is_active) || String(row?.active || row?.status || "").toLowerCase() === "1" || String(row?.active || "").toLowerCase() === "true" || String(row?.is_active || "").toLowerCase() === "1",
+    createdAt: String(row?.created_at || "").trim(),
+    shipments: Number(row?.shipments_count || row?.total_shipments || 0) || 0,
+    url: `${baseUrl}/admin/customers/${row?.id || ""}`
+  }));
+
+  return {
+    rows,
+    meta: { page: safePage, limit: safeLimit, total, totalPages: Math.max(1, Math.ceil(total / safeLimit)) }
+  };
+}
+
+app.get("/api/customers", async (req, res) => {
+  try {
+    const page = Number(req.query?.page || 1);
+    const limit = Number(req.query?.limit || 100);
+    const search = String(req.query?.search || "").trim();
+    const data = await fetchTmsCustomersData({ page, limit, search });
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch customers",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/api/tms/delivered", async (req, res) => {
   try {
     const requestedPage = Number(req.query?.page || 1);

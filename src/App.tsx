@@ -794,6 +794,18 @@ function App() {
   const [feedbackCreateLink, setFeedbackCreateLink] = useState("");
   const [feedbackCreateLoading, setFeedbackCreateLoading] = useState(false);
   const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
+
+  // ── Clientes page state ────────────────────────────────────────────────
+  const [clientesRows, setClientesRows] = useState<Array<{ id: number; name: string; email: string; phone: string; nif: string; address: string; city: string; country: string; active: boolean; createdAt: string; shipments: number; url: string }>>([]);
+  const [clientesLoading, setClientesLoading] = useState(false);
+  const [clientesError, setClientesError] = useState("");
+  const [clientesPage, setClientesPage] = useState(1);
+  const [clientesTotalPages, setClientesTotalPages] = useState(1);
+  const [clientesTotal, setClientesTotal] = useState(0);
+  const [clientesSearch, setClientesSearch] = useState("");
+  const [clientesSearchInput, setClientesSearchInput] = useState("");
+  const [clientesFilterActive, setClientesFilterActive] = useState<"all" | "active" | "inactive">("all");
+  const CLIENTES_PAGE_SIZE = 100;
   const [deliveredSendingKey, setDeliveredSendingKey] = useState("");
   const [deliveredSentKeys, setDeliveredSentKeys] = useState<Record<string, true>>(() => {
     try {
@@ -812,7 +824,7 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback" | "clientes">("workspace");
 
   // ── WhatsApp Calling page state ─────────────────────────────────────────
   const [callingPermPhone, setCallingPermPhone] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
@@ -2704,6 +2716,32 @@ function App() {
       });
   }
 
+  function loadClientes(page = clientesPage, search = clientesSearch) {
+    setClientesLoading(true);
+    setClientesError("");
+    const searchParam = search ? `&search=${encodeURIComponent(search)}` : "";
+    fetch(apiUrl(`/api/customers?page=${page}&limit=${CLIENTES_PAGE_SIZE}${searchParam}`))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha Clientes (${response.status})`));
+        }
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const total = Number(data?.meta?.total ?? rows.length) || rows.length;
+        const totalPages = Number(data?.meta?.totalPages ?? Math.max(1, Math.ceil(total / CLIENTES_PAGE_SIZE))) || 1;
+        setClientesRows(rows as typeof clientesRows);
+        setClientesTotal(total);
+        setClientesTotalPages(totalPages);
+        setClientesPage(page);
+      })
+      .catch((error) => {
+        setClientesError(error instanceof Error ? error.message : "Não foi possível carregar clientes.");
+      })
+      .finally(() => {
+        setClientesLoading(false);
+      });
+  }
+
   function loadDeliveredShipments(page = deliveredPage) {
     const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
 
@@ -3145,6 +3183,12 @@ function App() {
       } else {
         loadDeliveredShipments(1);
       }
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "clientes" && clientesRows.length === 0 && !clientesLoading) {
+      loadClientes(1, "");
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -4216,6 +4260,14 @@ function App() {
             >
               <span className="workspace-nav-icon">📝</span>
               <span>Feedback Tracker</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "clientes" ? " active" : ""}`}
+              onClick={() => setActiveView("clientes")}
+            >
+              <span className="workspace-nav-icon">👥</span>
+              <span>Clientes</span>
             </button>
           </nav>
         </aside>
@@ -6700,7 +6752,7 @@ Authorization: Bearer <token>
                 </table>
               </div>
             </section>
-          ) : (
+          ) : activeView === "feedback" ? (
             <section className="panel tracker-page" id="feedback-tracker-page">
               <div className="tracker-header">
                 <div>
@@ -7255,7 +7307,180 @@ Authorization: Bearer <token>
                 </div>
               </div>
             </section>
-          )}
+          ) : activeView === "clientes" ? (
+            <section className="panel tracker-page" id="clientes-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Clientes</h2>
+                  <p>Dados de clientes sincronizados do portal Linke.</p>
+                </div>
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setClientesSearch(clientesSearchInput.trim());
+                      loadClientes(1, clientesSearchInput.trim());
+                    }}
+                    disabled={clientesLoading}
+                  >
+                    {clientesLoading ? "A atualizar..." : "Atualizar clientes"}
+                  </button>
+                </div>
+              </div>
+
+              <section className="panel notion-section">
+                <div className="notion-section-head">
+                  <img
+                    src="https://portal.linke.pt/assets/images/logo.png"
+                    alt="Linke Portal"
+                    className="notion-logo"
+                    loading="lazy"
+                  />
+                  <p>Vista sincronizada com portal.linke.pt/admin/customers.</p>
+                </div>
+                <span className="status">{clientesTotal} clientes</span>
+              </section>
+
+              <section className="panel">
+                <div className="tracker-actions">
+                  <label>
+                    Procurar
+                    <input
+                      value={clientesSearchInput}
+                      onChange={(event) => setClientesSearchInput(event.target.value)}
+                      placeholder="Nome, email, telefone..."
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setClientesSearch(clientesSearchInput.trim());
+                      loadClientes(1, clientesSearchInput.trim());
+                    }}
+                    disabled={clientesLoading}
+                  >
+                    Pesquisar
+                  </button>
+                  <div className="tracker-filter-buttons" role="group" aria-label="Filtrar clientes por estado">
+                    {[
+                      { key: "all", label: "Todos" },
+                      { key: "active", label: "Ativos" },
+                      { key: "inactive", label: "Inativos" }
+                    ].map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`tracker-filter-btn${clientesFilterActive === option.key ? " active" : ""}`}
+                        onClick={() => setClientesFilterActive(option.key as "all" | "active" | "inactive")}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {clientesError ? <p className="status">{clientesError}</p> : null}
+
+                <div className="tracker-table-wrap">
+                  <table className="tracker-table consumiveis-table">
+                    <thead>
+                      <tr>
+                        <th>Cliente</th>
+                        <th>Email</th>
+                        <th>Telefone</th>
+                        <th>NIF</th>
+                        <th>Cidade</th>
+                        <th>País</th>
+                        <th>Envios</th>
+                        <th>Estado</th>
+                        <th>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const filtered = clientesRows.filter((row) => {
+                          if (clientesFilterActive === "active") return row.active;
+                          if (clientesFilterActive === "inactive") return !row.active;
+                          return true;
+                        });
+
+                        if (filtered.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={9} className="tracker-empty">
+                                {clientesLoading ? "A carregar clientes..." : "Sem clientes para mostrar."}
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return filtered.map((row) => (
+                          <tr key={`cliente-${row.id}`}>
+                            <td>{row.name || "-"}</td>
+                            <td>{row.email || "-"}</td>
+                            <td>{row.phone || "-"}</td>
+                            <td>{row.nif || "-"}</td>
+                            <td>{row.city || "-"}</td>
+                            <td>{row.country || "-"}</td>
+                            <td>{row.shipments || 0}</td>
+                            <td>
+                              <span className={`status clientes-status ${row.active ? "clientes-status-active" : "clientes-status-inactive"}`}>
+                                {row.active ? "Ativo" : "Inativo"}
+                              </span>
+                            </td>
+                            <td>
+                              {row.url ? (
+                                <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
+                                  Abrir
+                                </a>
+                              ) : (
+                                <span className="status">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+
+                  <div className="tracker-pagination">
+                    <div className="tracker-page-size">
+                      <span>Rows per page</span>
+                      <span>{CLIENTES_PAGE_SIZE}</span>
+                    </div>
+
+                    <span className="tracker-page-label">
+                      {clientesTotal === 0
+                        ? "0 results"
+                        : `${(clientesPage - 1) * CLIENTES_PAGE_SIZE + 1}-${Math.min(clientesPage * CLIENTES_PAGE_SIZE, clientesTotal)} of ${clientesTotal}`}
+                    </span>
+
+                    <div className="tracker-page-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary tracker-page-btn"
+                        onClick={() => loadClientes(Math.max(1, clientesPage - 1), clientesSearch)}
+                        disabled={clientesPage <= 1 || clientesLoading}
+                      >
+                        Previous
+                      </button>
+                      <span>Page {clientesPage} / {clientesTotalPages}</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary tracker-page-btn"
+                        onClick={() => loadClientes(Math.min(clientesTotalPages, clientesPage + 1), clientesSearch)}
+                        disabled={clientesPage >= clientesTotalPages || clientesLoading}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </section>
+          ) : null}
         </main>
       </div>
     </div>
