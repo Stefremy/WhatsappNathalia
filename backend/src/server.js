@@ -3710,6 +3710,15 @@ async function fetchTmsCustomersData({ page = 1, limit = 100, search = "" } = {}
     country: stripHtml(row?.country || ""),
     active: parseIconBoolean(row?.is_active) || String(row?.active || row?.status || "").toLowerCase() === "1" || String(row?.active || "").toLowerCase() === "true" || String(row?.is_active || "").toLowerCase() === "1",
     createdAt: String(row?.created_at || "").trim(),
+    lastShipment: stripHtml(
+      row?.last_shipment_at ||
+      row?.last_shipping_date ||
+      row?.last_shipment_date ||
+      row?.last_shipment ||
+      row?.last_send ||
+      row?.updated_at ||
+      ""
+    ),
     shipments: Number(row?.shipments_count || row?.total_shipments || 0) || 0,
     url: `${baseUrl}/admin/customers/${row?.id || ""}`
   }));

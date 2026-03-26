@@ -796,7 +796,7 @@ function App() {
   const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
 
   // ── Clientes page state ────────────────────────────────────────────────
-  const [clientesRows, setClientesRows] = useState<Array<{ id: number; name: string; email: string; phone: string; nif: string; address: string; city: string; country: string; active: boolean; createdAt: string; shipments: number; url: string }>>([]);
+  const [clientesRows, setClientesRows] = useState<Array<{ id: number; name: string; email: string; phone: string; nif: string; address: string; city: string; country: string; active: boolean; createdAt: string; lastShipment: string; shipments: number; url: string }>>([]);
   const [clientesLoading, setClientesLoading] = useState(false);
   const [clientesError, setClientesError] = useState("");
   const [clientesPage, setClientesPage] = useState(1);
@@ -805,6 +805,7 @@ function App() {
   const [clientesSearch, setClientesSearch] = useState("");
   const [clientesSearchInput, setClientesSearchInput] = useState("");
   const [clientesFilterActive, setClientesFilterActive] = useState<"all" | "active" | "inactive">("all");
+  const [clientesSortMode, setClientesSortMode] = useState<"last_desc" | "last_asc" | "no_services_first" | "inactive_first">("last_desc");
   const CLIENTES_PAGE_SIZE = 100;
   const [deliveredSendingKey, setDeliveredSendingKey] = useState("");
   const [deliveredSentKeys, setDeliveredSentKeys] = useState<Record<string, true>>(() => {
@@ -7379,6 +7380,27 @@ Authorization: Bearer <token>
                       </button>
                     ))}
                   </div>
+                  <div className="tracker-filter-buttons" role="group" aria-label="Ordenar clientes">
+                    {[
+                      { key: "last_desc", label: "Último envio ↓" },
+                      { key: "last_asc", label: "Último envio ↑" },
+                      { key: "no_services_first", label: "Sem serviços" },
+                      { key: "inactive_first", label: "Inativos" }
+                    ].map((option) => (
+                      <button
+                        key={`clientes-sort-${option.key}`}
+                        type="button"
+                        className={`tracker-filter-btn${clientesSortMode === option.key ? " active" : ""}`}
+                        onClick={() =>
+                          setClientesSortMode(
+                            option.key as "last_desc" | "last_asc" | "no_services_first" | "inactive_first"
+                          )
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {clientesError ? <p className="status">{clientesError}</p> : null}
@@ -7393,6 +7415,7 @@ Authorization: Bearer <token>
                         <th>NIF</th>
                         <th>Cidade</th>
                         <th>País</th>
+                        <th>Último envio</th>
                         <th>Envios</th>
                         <th>Estado</th>
                         <th>Ação</th>
@@ -7400,47 +7423,99 @@ Authorization: Bearer <token>
                     </thead>
                     <tbody>
                       {(() => {
+                        const parseShipmentDate = (value: string) => {
+                          const raw = String(value || "").trim();
+                          const dateMatch = raw.match(/(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})/);
+                          if (!dateMatch?.[1]) return null;
+
+                          const matchedDate = dateMatch[1];
+                          if (/^\d{4}-\d{2}-\d{2}$/.test(matchedDate)) {
+                            return new Date(`${matchedDate}T00:00:00`);
+                          }
+
+                          const [day, month, year] = matchedDate.split("/");
+                          return new Date(`${year}-${month}-${day}T00:00:00`);
+                        };
+
                         const filtered = clientesRows.filter((row) => {
                           if (clientesFilterActive === "active") return row.active;
                           if (clientesFilterActive === "inactive") return !row.active;
                           return true;
                         });
 
-                        if (filtered.length === 0) {
+                        const sorted = [...filtered].sort((a, b) => {
+                          const aShipments = Number(a.shipments || 0) || 0;
+                          const bShipments = Number(b.shipments || 0) || 0;
+                          const aTime = parseShipmentDate(a.lastShipment)?.getTime() || 0;
+                          const bTime = parseShipmentDate(b.lastShipment)?.getTime() || 0;
+
+                          if (clientesSortMode === "last_desc") return bTime - aTime;
+                          if (clientesSortMode === "last_asc") return aTime - bTime;
+                          if (clientesSortMode === "no_services_first") {
+                            const aNo = aShipments <= 0 ? 1 : 0;
+                            const bNo = bShipments <= 0 ? 1 : 0;
+                            if (bNo !== aNo) return bNo - aNo;
+                            return bTime - aTime;
+                          }
+                          if (clientesSortMode === "inactive_first") {
+                            const aInactive = a.active ? 0 : 1;
+                            const bInactive = b.active ? 0 : 1;
+                            if (bInactive !== aInactive) return bInactive - aInactive;
+                            return bTime - aTime;
+                          }
+
+                          return 0;
+                        });
+
+                        if (sorted.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={9} className="tracker-empty">
+                              <td colSpan={10} className="tracker-empty">
                                 {clientesLoading ? "A carregar clientes..." : "Sem clientes para mostrar."}
                               </td>
                             </tr>
                           );
                         }
 
-                        return filtered.map((row) => (
-                          <tr key={`cliente-${row.id}`}>
-                            <td>{row.name || "-"}</td>
-                            <td>{row.email || "-"}</td>
-                            <td>{row.phone || "-"}</td>
-                            <td>{row.nif || "-"}</td>
-                            <td>{row.city || "-"}</td>
-                            <td>{row.country || "-"}</td>
-                            <td>{row.shipments || 0}</td>
-                            <td>
-                              <span className={`status clientes-status ${row.active ? "clientes-status-active" : "clientes-status-inactive"}`}>
-                                {row.active ? "Ativo" : "Inativo"}
-                              </span>
-                            </td>
-                            <td>
-                              {row.url ? (
-                                <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
-                                  Abrir
-                                </a>
-                              ) : (
-                                <span className="status">-</span>
-                              )}
-                            </td>
-                          </tr>
-                        ));
+                        return sorted.map((row) => {
+                          const shipments = Number(row.shipments || 0) || 0;
+                          const lastShipmentText = String(row.lastShipment || "").trim();
+
+                          const lastShipmentDate = parseShipmentDate(lastShipmentText);
+
+                          const isOlderThanMonth = lastShipmentDate
+                            ? (Date.now() - lastShipmentDate.getTime()) > 30 * 24 * 60 * 60 * 1000
+                            : false;
+                          const hasNoServices = shipments <= 0;
+                          const shouldFlagRow = hasNoServices || isOlderThanMonth;
+
+                          return (
+                            <tr key={`cliente-${row.id}`} className={shouldFlagRow ? "clientes-row-alert" : ""}>
+                              <td>{row.name || "-"}</td>
+                              <td>{row.email || "-"}</td>
+                              <td>{row.phone || "-"}</td>
+                              <td>{row.nif || "-"}</td>
+                              <td>{row.city || "-"}</td>
+                              <td>{row.country || "-"}</td>
+                              <td>{row.lastShipment || "-"}</td>
+                              <td>{shipments}</td>
+                              <td>
+                                <span className={`status clientes-status ${row.active ? "clientes-status-active" : "clientes-status-inactive"}`}>
+                                  {row.active ? "Ativo" : "Inativo"}
+                                </span>
+                              </td>
+                              <td>
+                                {row.url ? (
+                                  <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
+                                    Abrir
+                                  </a>
+                                ) : (
+                                  <span className="status">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        });
                       })()}
                     </tbody>
                   </table>
