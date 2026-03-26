@@ -7522,6 +7522,7 @@ Authorization: Bearer <token>
                             : false;
                           const hasNoServices = shipments <= 0;
                           const shouldFlagRow = hasNoServices || isOlderThanMonth;
+                          const effectiveActive = row.active && !shouldFlagRow;
 
                           return (
                             <tr key={`cliente-${row.id}`} className={shouldFlagRow ? "clientes-row-alert" : ""}>
@@ -7534,8 +7535,8 @@ Authorization: Bearer <token>
                               <td>{row.lastShipment || "-"}</td>
                               <td>{shipments}</td>
                               <td>
-                                <span className={`status clientes-status ${row.active ? "clientes-status-active" : "clientes-status-inactive"}`}>
-                                  {row.active ? "Ativo" : "Inativo"}
+                                <span className={`status clientes-status ${effectiveActive ? "clientes-status-active" : "clientes-status-inactive"}`}>
+                                  {effectiveActive ? "Ativo" : "Inativo"}
                                 </span>
                               </td>
                               <td>
