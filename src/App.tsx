@@ -840,6 +840,13 @@ function App() {
   const [clientesSearchInput, setClientesSearchInput] = useState("");
   const [clientesFilterActive, setClientesFilterActive] = useState<"all" | "active" | "inactive">("all");
   const [clientesSortMode, setClientesSortMode] = useState<"last_desc" | "last_asc" | "no_services_first" | "inactive_first">("last_desc");
+  const [clientesEmailTo, setClientesEmailTo] = useState("");
+  const [clientesEmailSubject, setClientesEmailSubject] = useState("");
+  const [clientesEmailBody, setClientesEmailBody] = useState("");
+  const [clientesEmailStatus, setClientesEmailStatus] = useState("Inativo");
+  const [clientesEmailSending, setClientesEmailSending] = useState(false);
+  const [clientesGoogleConnected, setClientesGoogleConnected] = useState(false);
+  const [clientesGoogleStatusLoading, setClientesGoogleStatusLoading] = useState(false);
   const CLIENTES_PAGE_SIZE = 100;
   const [deliveredSendingKey, setDeliveredSendingKey] = useState("");
   const [deliveredSentKeys, setDeliveredSentKeys] = useState<Record<string, true>>(() => {
@@ -2805,6 +2812,82 @@ function App() {
       });
   }
 
+  function openClientesEmailComposer(mode: "gmail" | "mailto") {
+    const to = String(clientesEmailTo || "").trim();
+    if (!to) {
+      setClientesEmailStatus("Preenche o email de destino.");
+      return;
+    }
+
+    const subject = String(clientesEmailSubject || "").trim();
+    const body = String(clientesEmailBody || "").trim();
+
+    if (mode === "gmail") {
+      const url = new URL("https://mail.google.com/mail/");
+      url.searchParams.set("view", "cm");
+      url.searchParams.set("fs", "1");
+      url.searchParams.set("to", to);
+      if (subject) url.searchParams.set("su", subject);
+      if (body) url.searchParams.set("body", body);
+      window.open(url.toString(), "_blank", "noopener,noreferrer");
+      setClientesEmailStatus("Composer Gmail aberto ✓");
+      return;
+    }
+
+    const mailtoUrl = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(mailtoUrl, "_blank", "noopener,noreferrer");
+    setClientesEmailStatus("Composer de email aberto ✓");
+  }
+
+  async function sendClientesEmailNow() {
+    const to = String(clientesEmailTo || "").trim();
+    if (!to) {
+      setClientesEmailStatus("Preenche o email de destino.");
+      return;
+    }
+
+    setClientesEmailSending(true);
+    setClientesEmailStatus("A enviar email...");
+    try {
+      const response = await fetch(apiUrl("/api/google/email/send"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to,
+          subject: clientesEmailSubject,
+          body: clientesEmailBody
+        })
+      });
+
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(String(data?.details?.error?.message || data?.details || data?.error || `Falha Email (${response.status})`));
+      }
+
+      setClientesEmailStatus("Email enviado ✓");
+    } catch (error) {
+      setClientesEmailStatus(error instanceof Error ? error.message : "Não foi possível enviar email.");
+    } finally {
+      setClientesEmailSending(false);
+    }
+  }
+
+  async function refreshClientesGoogleStatus() {
+    setClientesGoogleStatusLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/google/oauth/status"));
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(String(data?.details || data?.error || `Falha OAuth status (${response.status})`));
+      }
+      setClientesGoogleConnected(Boolean(data?.connected));
+    } catch {
+      setClientesGoogleConnected(false);
+    } finally {
+      setClientesGoogleStatusLoading(false);
+    }
+  }
+
   async function loadDeliveredShipmentsByFilters({
     dateFrom,
     dateTo,
@@ -3224,6 +3307,12 @@ function App() {
   useEffect(() => {
     if (activeView === "clientes" && clientesRows.length === 0 && !clientesLoading) {
       loadClientes(1, "");
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "clientes") {
+      void refreshClientesGoogleStatus();
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -7540,13 +7629,26 @@ Authorization: Bearer <token>
                                 </span>
                               </td>
                               <td>
-                                {row.url ? (
-                                  <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
-                                    Abrir
-                                  </a>
-                                ) : (
-                                  <span className="status">-</span>
-                                )}
+                                <div className="tracker-pudo-actions">
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary tms-mini-btn"
+                                    onClick={() => {
+                                      setClientesEmailTo(String(row.email || "").trim());
+                                      setClientesEmailStatus(row.email ? "Email preenchido." : "Este cliente não tem email.");
+                                    }}
+                                    disabled={!row.email}
+                                  >
+                                    Usar email
+                                  </button>
+                                  {row.url ? (
+                                    <a className="btn btn-secondary tms-mini-btn" href={row.url} target="_blank" rel="noreferrer">
+                                      Abrir
+                                    </a>
+                                  ) : (
+                                    <span className="status">-</span>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -7588,6 +7690,99 @@ Authorization: Bearer <token>
                     </div>
                   </div>
                 </div>
+              </section>
+
+              <section className="panel clientes-email-box">
+                <div className="tracker-header">
+                  <div>
+                    <h3>Email Box</h3>
+                    <p>Composer rápido para contactar clientes por email.</p>
+                  </div>
+                  <span className="status">
+                    Google: {clientesGoogleStatusLoading ? "a verificar..." : clientesGoogleConnected ? "conectado ✅" : "não conectado ❌"}
+                  </span>
+                </div>
+
+                <form
+                  className="api-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    openClientesEmailComposer("gmail");
+                  }}
+                >
+                  <div className="template-var-grid">
+                    <label>
+                      Para
+                      <input
+                        type="email"
+                        value={clientesEmailTo}
+                        onChange={(event) => setClientesEmailTo(event.target.value)}
+                        placeholder="cliente@email.com"
+                      />
+                    </label>
+                    <label>
+                      Assunto
+                      <input
+                        value={clientesEmailSubject}
+                        onChange={(event) => setClientesEmailSubject(event.target.value)}
+                        placeholder="Assunto do email"
+                      />
+                    </label>
+                  </div>
+
+                  <label>
+                    Mensagem
+                    <textarea
+                      value={clientesEmailBody}
+                      onChange={(event) => setClientesEmailBody(event.target.value)}
+                      rows={5}
+                      placeholder="Escreve aqui a tua mensagem..."
+                    />
+                  </label>
+
+                  <div className="api-actions">
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={() => {
+                        window.open(apiUrl("/api/google/oauth/start?mode=redirect"), "_blank", "noopener,noreferrer");
+                      }}
+                    >
+                      Ligar Google
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={() => {
+                        void refreshClientesGoogleStatus();
+                      }}
+                      disabled={clientesGoogleStatusLoading}
+                    >
+                      {clientesGoogleStatusLoading ? "A verificar..." : "Atualizar ligação"}
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      onClick={() => {
+                        void sendClientesEmailNow();
+                      }}
+                      disabled={clientesEmailSending || !clientesEmailTo.trim()}
+                    >
+                      {clientesEmailSending ? "A enviar..." : "Enviar email"}
+                    </button>
+                    <button className="btn btn-secondary" type="submit">
+                      Abrir no Gmail
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={() => openClientesEmailComposer("mailto")}
+                    >
+                      Abrir app de email
+                    </button>
+                    <span className="status">{clientesEmailStatus}</span>
+                  </div>
+                </form>
               </section>
             </section>
           ) : null}

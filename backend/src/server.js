@@ -32,6 +32,14 @@ function broadcastSSE(event, data) {
 const scheduledMessages = [];
 const recentCallEvents = [];
 const MAX_CALL_EVENTS = 100;
+const googleOauthStates = new Map();
+const googleOauthSession = {
+  accessToken: "",
+  refreshToken: "",
+  expiresAt: 0,
+  scope: "",
+  tokenType: "Bearer"
+};
 
 async function processScheduledMessages() {
   const now = Date.now();
@@ -2299,6 +2307,235 @@ app.get("/", (_req, res) => {
     message: "API is running",
     health: "/health"
   });
+});
+
+app.get("/api/google/oauth/start", (req, res) => {
+  try {
+    const clientId = requiredEnv("GOOGLE_OAUTH_CLIENT_ID");
+    const redirectUri = requiredEnv("GOOGLE_OAUTH_REDIRECT_URI");
+    const authBase = String(process.env.GOOGLE_OAUTH_AUTH_URI || "https://accounts.google.com/o/oauth2/v2/auth").trim();
+    const scope = String(process.env.GOOGLE_OAUTH_SCOPE || "openid email profile https://www.googleapis.com/auth/gmail.readonly").trim();
+    const loginHint = String(process.env.GOOGLE_OAUTH_LOGIN_HINT || "").trim();
+    const hostedDomain = String(process.env.GOOGLE_OAUTH_HD || "").trim();
+    const state = `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+
+    googleOauthStates.set(state, Date.now());
+    setTimeout(() => googleOauthStates.delete(state), 15 * 60 * 1000);
+
+    const url = new URL(authBase);
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("scope", scope);
+    url.searchParams.set("access_type", "offline");
+    url.searchParams.set("prompt", "select_account consent");
+    if (loginHint) {
+      url.searchParams.set("login_hint", loginHint);
+    }
+    if (hostedDomain) {
+      url.searchParams.set("hd", hostedDomain);
+    }
+    url.searchParams.set("state", state);
+
+    const mode = String(req.query.mode || "json").toLowerCase();
+    if (mode === "redirect") {
+      return res.redirect(url.toString());
+    }
+
+    return res.json({ ok: true, url: url.toString(), state });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to build Google OAuth URL",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/google/oauth/callback", async (req, res) => {
+  try {
+    const code = String(req.query.code || "").trim();
+    const state = String(req.query.state || "").trim();
+
+    if (!code) {
+      return res.status(400).json({ error: "Missing 'code' query parameter." });
+    }
+    if (!state || !googleOauthStates.has(state)) {
+      return res.status(400).json({ error: "Invalid or expired OAuth state." });
+    }
+    googleOauthStates.delete(state);
+
+    const clientId = requiredEnv("GOOGLE_OAUTH_CLIENT_ID");
+    const clientSecret = requiredEnv("GOOGLE_OAUTH_CLIENT_SECRET");
+    const redirectUri = requiredEnv("GOOGLE_OAUTH_REDIRECT_URI");
+    const tokenUri = String(process.env.GOOGLE_OAUTH_TOKEN_URI || "https://oauth2.googleapis.com/token").trim();
+
+    const tokenBody = new URLSearchParams();
+    tokenBody.set("code", code);
+    tokenBody.set("client_id", clientId);
+    tokenBody.set("client_secret", clientSecret);
+    tokenBody.set("redirect_uri", redirectUri);
+    tokenBody.set("grant_type", "authorization_code");
+
+    const tokenRes = await fetch(tokenUri, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: tokenBody.toString()
+    });
+
+    const tokenData = await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok) {
+      return res.status(tokenRes.status).json({
+        error: "Failed to exchange Google OAuth code",
+        details: tokenData
+      });
+    }
+
+    const allowedEmail = String(process.env.GOOGLE_OAUTH_ALLOWED_EMAIL || "").trim().toLowerCase();
+    if (allowedEmail) {
+      const idToken = String(tokenData?.id_token || "").trim();
+      const jwtPayload = idToken.split(".")[1] || "";
+      let tokenEmail = "";
+      try {
+        const normalized = jwtPayload.replace(/-/g, "+").replace(/_/g, "/");
+        const decoded = JSON.parse(Buffer.from(normalized, "base64").toString("utf8"));
+        tokenEmail = String(decoded?.email || "").trim().toLowerCase();
+      } catch {
+        tokenEmail = "";
+      }
+
+      if (!tokenEmail || tokenEmail !== allowedEmail) {
+        return res.status(403).json({
+          error: "Wrong Google account connected",
+          details: `Please connect with ${allowedEmail}`
+        });
+      }
+    }
+
+    googleOauthSession.accessToken = String(tokenData?.access_token || "").trim();
+    if (tokenData?.refresh_token) {
+      googleOauthSession.refreshToken = String(tokenData.refresh_token || "").trim();
+    }
+    googleOauthSession.scope = String(tokenData?.scope || "").trim();
+    googleOauthSession.tokenType = String(tokenData?.token_type || "Bearer").trim() || "Bearer";
+    const expiresIn = Number(tokenData?.expires_in || 0) || 0;
+    googleOauthSession.expiresAt = Date.now() + (expiresIn > 0 ? expiresIn * 1000 : 0);
+
+    return res.json({
+      ok: true,
+      token_type: tokenData?.token_type || "Bearer",
+      scope: tokenData?.scope || "",
+      expires_in: tokenData?.expires_in || 0,
+      access_token: tokenData?.access_token || "",
+      refresh_token: tokenData?.refresh_token || ""
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Google OAuth callback failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/google/oauth/status", (_req, res) => {
+  const connected = Boolean(googleOauthSession.accessToken);
+  return res.json({
+    ok: true,
+    connected,
+    scope: googleOauthSession.scope || "",
+    expires_at: googleOauthSession.expiresAt || 0
+  });
+});
+
+async function ensureGoogleAccessToken() {
+  if (!googleOauthSession.accessToken) {
+    throw new Error("Google account not connected. Authorize first at /api/google/oauth/start?mode=redirect");
+  }
+
+  const stillValid = googleOauthSession.expiresAt > Date.now() + 60_000;
+  if (stillValid) {
+    return googleOauthSession.accessToken;
+  }
+
+  if (!googleOauthSession.refreshToken) {
+    return googleOauthSession.accessToken;
+  }
+
+  const clientId = requiredEnv("GOOGLE_OAUTH_CLIENT_ID");
+  const clientSecret = requiredEnv("GOOGLE_OAUTH_CLIENT_SECRET");
+  const tokenUri = String(process.env.GOOGLE_OAUTH_TOKEN_URI || "https://oauth2.googleapis.com/token").trim();
+
+  const refreshBody = new URLSearchParams();
+  refreshBody.set("client_id", clientId);
+  refreshBody.set("client_secret", clientSecret);
+  refreshBody.set("refresh_token", googleOauthSession.refreshToken);
+  refreshBody.set("grant_type", "refresh_token");
+
+  const refreshRes = await fetch(tokenUri, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: refreshBody.toString()
+  });
+
+  const refreshData = await refreshRes.json().catch(() => ({}));
+  if (!refreshRes.ok || !refreshData?.access_token) {
+    throw new Error(`Failed to refresh Google token (${refreshRes.status})`);
+  }
+
+  googleOauthSession.accessToken = String(refreshData.access_token || "").trim();
+  googleOauthSession.tokenType = String(refreshData.token_type || "Bearer").trim() || "Bearer";
+  const expiresIn = Number(refreshData.expires_in || 0) || 0;
+  googleOauthSession.expiresAt = Date.now() + (expiresIn > 0 ? expiresIn * 1000 : 0);
+
+  return googleOauthSession.accessToken;
+}
+
+app.post("/api/google/email/send", async (req, res) => {
+  try {
+    const to = String(req.body?.to || "").trim();
+    const subject = String(req.body?.subject || "").trim();
+    const body = String(req.body?.body || "").trim();
+
+    if (!to) {
+      return res.status(400).json({ error: "Field 'to' is required." });
+    }
+
+    const accessToken = await ensureGoogleAccessToken();
+
+    const mimeLines = [
+      `To: ${to}`,
+      `Subject: ${subject || "(sem assunto)"}`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=UTF-8",
+      "",
+      body || "(mensagem vazia)"
+    ];
+    const raw = Buffer.from(mimeLines.join("\r\n"), "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+    const sendRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ raw })
+    });
+
+    const sendData = await sendRes.json().catch(() => ({}));
+    if (!sendRes.ok) {
+      return res.status(sendRes.status).json({ error: "Failed to send email", details: sendData });
+    }
+
+    return res.json({ ok: true, data: sendData });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Google email send failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 });
 
 app.get("/api/consumiveis", async (req, res) => {
