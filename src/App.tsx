@@ -131,6 +131,13 @@ type TemplateHistoryItem = {
   status: string;
 };
 
+type ClientesEmailTemplate = {
+  id: string;
+  name: string;
+  subject: string;
+  body: string;
+};
+
 type TeamReminder = {
   id: string;
   phone: string;
@@ -843,6 +850,18 @@ function App() {
   const [clientesEmailTo, setClientesEmailTo] = useState("");
   const [clientesEmailSubject, setClientesEmailSubject] = useState("");
   const [clientesEmailBody, setClientesEmailBody] = useState("");
+  const [clientesEmailAsHtml, setClientesEmailAsHtml] = useState(false);
+  const [clientesTemplateNameInput, setClientesTemplateNameInput] = useState("");
+  const [clientesTemplateSubjectInput, setClientesTemplateSubjectInput] = useState("");
+  const [clientesTemplateBodyInput, setClientesTemplateBodyInput] = useState("");
+  const [clientesEmailTemplates, setClientesEmailTemplates] = useState<ClientesEmailTemplate[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_clientes_email_templates") || "[]") as ClientesEmailTemplate[];
+    } catch {
+      return [];
+    }
+  });
+  const [clientesSelectedTemplateId, setClientesSelectedTemplateId] = useState("");
   const [clientesEmailStatus, setClientesEmailStatus] = useState("Inativo");
   const [clientesEmailSending, setClientesEmailSending] = useState(false);
   const [clientesGoogleConnected, setClientesGoogleConnected] = useState(false);
@@ -2051,6 +2070,18 @@ function App() {
     try { localStorage.setItem("wa_template_history", JSON.stringify(templateHistory)); } catch {}
   }, [templateHistory]);
 
+  useEffect(() => {
+    try { localStorage.setItem("wa_clientes_email_templates", JSON.stringify(clientesEmailTemplates)); } catch {}
+  }, [clientesEmailTemplates]);
+
+  useEffect(() => {
+    if (!clientesSelectedTemplateId) return;
+    const exists = clientesEmailTemplates.some((template) => template.id === clientesSelectedTemplateId);
+    if (!exists) {
+      setClientesSelectedTemplateId("");
+    }
+  }, [clientesEmailTemplates, clientesSelectedTemplateId]);
+
   // Persist team notes/reminders
   useEffect(() => {
     try { localStorage.setItem("wa_contact_notes", JSON.stringify(contactNotes)); } catch {}
@@ -2812,6 +2843,58 @@ function App() {
       });
   }
 
+  function applyClientesTemplateText(text: string, clientName: string) {
+    const safeName = String(clientName || "").trim();
+    return String(text || "").replace(/\{\{\s*name\s*\}\}/gi, safeName || "Cliente");
+  }
+
+  function saveClientesEmailTemplate() {
+    const name = String(clientesTemplateNameInput || "").trim();
+    const subject = String(clientesTemplateSubjectInput || "").trim();
+    const body = String(clientesTemplateBodyInput || "").trim();
+
+    if (!name) {
+      setClientesEmailStatus("Nome do template é obrigatório.");
+      return;
+    }
+    if (!subject && !body) {
+      setClientesEmailStatus("Preenche assunto ou mensagem do template.");
+      return;
+    }
+
+    const id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const template: ClientesEmailTemplate = { id, name, subject, body };
+    setClientesEmailTemplates((prev) => [template, ...prev]);
+    setClientesSelectedTemplateId(id);
+    setClientesTemplateNameInput("");
+    setClientesTemplateSubjectInput("");
+    setClientesTemplateBodyInput("");
+    setClientesEmailStatus("Template guardado ✓");
+  }
+
+  function applyClientesEmailTemplate(template: ClientesEmailTemplate, options?: { to?: string; clientName?: string }) {
+    const to = String(options?.to || "").trim();
+    const clientName = String(options?.clientName || "").trim();
+
+    if (to) {
+      setClientesEmailTo(to);
+    }
+    setClientesEmailSubject(applyClientesTemplateText(template.subject, clientName));
+    setClientesEmailBody(applyClientesTemplateText(template.body, clientName));
+    setClientesSelectedTemplateId(template.id);
+    setClientesEmailStatus(to ? "Template aplicado e email pronto para envio." : "Template aplicado no composer.");
+
+    const emailBox = document.getElementById("clientes-email-box");
+    if (emailBox) {
+      emailBox.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  function deleteClientesEmailTemplate(templateId: string) {
+    setClientesEmailTemplates((prev) => prev.filter((template) => template.id !== templateId));
+    setClientesEmailStatus("Template removido.");
+  }
+
   function openClientesEmailComposer(mode: "gmail" | "mailto") {
     const to = String(clientesEmailTo || "").trim();
     if (!to) {
@@ -2855,7 +2938,9 @@ function App() {
         body: JSON.stringify({
           to,
           subject: clientesEmailSubject,
-          body: clientesEmailBody
+          body: clientesEmailBody,
+          sendAsHtml: clientesEmailAsHtml,
+          htmlBody: clientesEmailAsHtml ? clientesEmailBody : undefined
         })
       });
 
@@ -2869,6 +2954,27 @@ function App() {
       setClientesEmailStatus(error instanceof Error ? error.message : "Não foi possível enviar email.");
     } finally {
       setClientesEmailSending(false);
+    }
+  }
+
+  function prepareClienteReadyToSend(row: { email: string; name: string }) {
+    const email = String(row.email || "").trim();
+    if (!email) {
+      setClientesEmailStatus("Este cliente não tem email.");
+      return;
+    }
+
+    const selectedTemplate = clientesEmailTemplates.find((template) => template.id === clientesSelectedTemplateId) || null;
+    if (selectedTemplate) {
+      applyClientesEmailTemplate(selectedTemplate, { to: email, clientName: row.name });
+      return;
+    }
+
+    setClientesEmailTo(email);
+    setClientesEmailStatus("Email preenchido. Seleciona/cria um template para finalizar.");
+    const emailBox = document.getElementById("clientes-email-box");
+    if (emailBox) {
+      emailBox.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }
 
@@ -7632,6 +7738,14 @@ Authorization: Bearer <token>
                                 <div className="tracker-pudo-actions">
                                   <button
                                     type="button"
+                                    className="btn btn-primary tms-mini-btn"
+                                    onClick={() => prepareClienteReadyToSend({ email: row.email, name: row.name })}
+                                    disabled={!row.email}
+                                  >
+                                    Pronto envio
+                                  </button>
+                                  <button
+                                    type="button"
                                     className="btn btn-secondary tms-mini-btn"
                                     onClick={() => {
                                       setClientesEmailTo(String(row.email || "").trim());
@@ -7695,6 +7809,99 @@ Authorization: Bearer <token>
               <section className="panel clientes-email-box">
                 <div className="tracker-header">
                   <div>
+                    <h3>Email Templates</h3>
+                    <p>Cria templates de assunto e mensagem para preparar envios em 1 clique. Usa {"{{name}}"} para nome do cliente.</p>
+                  </div>
+                  <span className="status">{clientesEmailTemplates.length} templates</span>
+                </div>
+
+                <div className="api-form">
+                  <div className="template-var-grid">
+                    <label>
+                      Nome do template
+                      <input
+                        value={clientesTemplateNameInput}
+                        onChange={(event) => setClientesTemplateNameInput(event.target.value)}
+                        placeholder="Ex: Follow-up Loja"
+                      />
+                    </label>
+                    <label>
+                      Assunto
+                      <input
+                        value={clientesTemplateSubjectInput}
+                        onChange={(event) => setClientesTemplateSubjectInput(event.target.value)}
+                        placeholder="Ex: Novidades para {{name}}"
+                      />
+                    </label>
+                  </div>
+
+                  <label>
+                    Body do template
+                    <textarea
+                      value={clientesTemplateBodyInput}
+                      onChange={(event) => setClientesTemplateBodyInput(event.target.value)}
+                      rows={4}
+                      placeholder="Ex: Olá {{name}}, temos novidades para si..."
+                    />
+                  </label>
+
+                  <div className="api-actions">
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      onClick={saveClientesEmailTemplate}
+                    >
+                      Guardar template
+                    </button>
+                  </div>
+
+                  {clientesEmailTemplates.length > 0 ? (
+                    <div className="tracker-table-wrap">
+                      <table className="tracker-table">
+                        <thead>
+                          <tr>
+                            <th>Template</th>
+                            <th>Assunto</th>
+                            <th>Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {clientesEmailTemplates.map((template) => (
+                            <tr key={template.id}>
+                              <td>{template.name}</td>
+                              <td>{template.subject || "(sem assunto)"}</td>
+                              <td>
+                                <div className="tracker-pudo-actions">
+                                  <button
+                                    className="btn btn-secondary tms-mini-btn"
+                                    type="button"
+                                    onClick={() => applyClientesEmailTemplate(template)}
+                                  >
+                                    Usar no composer
+                                  </button>
+                                  <button
+                                    className="btn btn-secondary tms-mini-btn"
+                                    type="button"
+                                    onClick={() => deleteClientesEmailTemplate(template.id)}
+                                  >
+                                    Apagar
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="status">Sem templates criados ainda.</p>
+                  )}
+                </div>
+              </section>
+
+              <section className="panel clientes-email-box" id="clientes-email-box">
+                <div className="tracker-header">
+                  <div>
                     <h3>Email Box</h3>
                     <p>Composer rápido para contactar clientes por email.</p>
                   </div>
@@ -7711,6 +7918,27 @@ Authorization: Bearer <token>
                   }}
                 >
                   <div className="template-var-grid">
+                    <label>
+                      Template
+                      <select
+                        value={clientesSelectedTemplateId}
+                        onChange={(event) => {
+                          const selectedId = event.target.value;
+                          setClientesSelectedTemplateId(selectedId);
+                          const selected = clientesEmailTemplates.find((template) => template.id === selectedId);
+                          if (selected) {
+                            applyClientesEmailTemplate(selected, { to: clientesEmailTo });
+                          }
+                        }}
+                      >
+                        <option value="">Sem template selecionado</option>
+                        {clientesEmailTemplates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <label>
                       Para
                       <input
@@ -7736,8 +7964,17 @@ Authorization: Bearer <token>
                       value={clientesEmailBody}
                       onChange={(event) => setClientesEmailBody(event.target.value)}
                       rows={5}
-                      placeholder="Escreve aqui a tua mensagem..."
+                      placeholder={clientesEmailAsHtml ? "Escreve HTML aqui (ex: <h1>Ola</h1><p>Mensagem...</p>)" : "Escreve aqui a tua mensagem..."}
                     />
+                  </label>
+
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={clientesEmailAsHtml}
+                      onChange={(event) => setClientesEmailAsHtml(event.target.checked)}
+                    />
+                    Enviar como HTML
                   </label>
 
                   <div className="api-actions">

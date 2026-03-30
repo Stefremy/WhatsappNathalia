@@ -582,6 +582,15 @@ function stripHtml(input) {
     .trim();
 }
 
+function escapeHtml(input) {
+  return String(input || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function normalizeDatatableTextCell(input) {
   const seen = new WeakSet();
 
@@ -2697,6 +2706,8 @@ app.post("/api/google/email/send", async (req, res) => {
     const to = String(req.body?.to || "").trim();
     const subject = String(req.body?.subject || "").trim();
     const body = String(req.body?.body || "").trim();
+    const htmlBodyInput = String(req.body?.htmlBody || "").trim();
+    const sendAsHtml = Boolean(req.body?.sendAsHtml);
 
     if (!to) {
       return res.status(400).json({ error: "Field 'to' is required." });
@@ -2704,14 +2715,43 @@ app.post("/api/google/email/send", async (req, res) => {
 
     const accessToken = await ensureGoogleAccessToken();
 
+    const effectiveHtmlBody = htmlBodyInput || body;
+    const hasHtmlTags = /<\/?[a-z][\s\S]*>/i.test(effectiveHtmlBody);
+    const normalizedHtml = hasHtmlTags
+      ? effectiveHtmlBody
+      : escapeHtml(effectiveHtmlBody).replace(/\r?\n/g, "<br>");
+    const plainBodyFromHtml = stripHtml(normalizedHtml) || "(mensagem vazia)";
+    const plainBody = body || plainBodyFromHtml || "(mensagem vazia)";
+
     const mimeLines = [
       `To: ${to}`,
       `Subject: ${subject || "(sem assunto)"}`,
-      "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=UTF-8",
-      "",
-      body || "(mensagem vazia)"
+      "MIME-Version: 1.0"
     ];
+
+    if (sendAsHtml) {
+      const boundary = `mixed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      mimeLines.push(`Content-Type: multipart/alternative; boundary=\"${boundary}\"`);
+      mimeLines.push("");
+      mimeLines.push(`--${boundary}`);
+      mimeLines.push("Content-Type: text/plain; charset=UTF-8");
+      mimeLines.push("Content-Transfer-Encoding: 7bit");
+      mimeLines.push("");
+      mimeLines.push(plainBody);
+      mimeLines.push("");
+      mimeLines.push(`--${boundary}`);
+      mimeLines.push("Content-Type: text/html; charset=UTF-8");
+      mimeLines.push("Content-Transfer-Encoding: 7bit");
+      mimeLines.push("");
+      mimeLines.push(normalizedHtml || "<p>(mensagem vazia)</p>");
+      mimeLines.push("");
+      mimeLines.push(`--${boundary}--`);
+    } else {
+      mimeLines.push("Content-Type: text/plain; charset=UTF-8");
+      mimeLines.push("");
+      mimeLines.push(plainBody);
+    }
+
     const raw = Buffer.from(mimeLines.join("\r\n"), "utf8")
       .toString("base64")
       .replace(/\+/g, "-")
