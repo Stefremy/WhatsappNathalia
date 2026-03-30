@@ -1638,6 +1638,29 @@ async function resolveFeedbackDatabaseIdFromPage() {
   }
 }
 
+function notionErrorDetails(error) {
+  if (!(error && typeof error === "object")) {
+    return "Unknown error";
+  }
+
+  const message = error instanceof Error ? error.message : "Unknown error";
+  const code = typeof error.code === "string" ? error.code : "";
+  const status = Number(error.status || 0) || 0;
+  const requestId =
+    typeof error.request_id === "string"
+      ? error.request_id
+      : typeof error.requestId === "string"
+        ? error.requestId
+        : "";
+
+  const parts = [message];
+  if (code) parts.push(`code=${code}`);
+  if (status > 0) parts.push(`status=${status}`);
+  if (requestId) parts.push(`request_id=${requestId}`);
+
+  return parts.join(" | ");
+}
+
 function parseBooleanLike(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return ["1", "true", "yes", "sim", "on"].includes(normalized);
@@ -3079,6 +3102,7 @@ app.get("/api/feedback-tracker", async (req, res) => {
 
     const pageDerivedDatabaseId = await resolveFeedbackDatabaseIdFromPage();
     let resolvedDatabaseId = notionFeedbackDatabaseId || pageDerivedDatabaseId;
+    const initialDatabaseId = resolvedDatabaseId;
     let pageFallbackUsed = !notionFeedbackDatabaseId && Boolean(pageDerivedDatabaseId);
 
     if (!resolvedDatabaseId) {
@@ -3098,10 +3122,10 @@ app.get("/api/feedback-tracker", async (req, res) => {
       hasMore = result.hasMore;
       columns = result.columns;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+      const canFallbackToPageDb =
+        Boolean(pageDerivedDatabaseId) && !pageFallbackUsed && pageDerivedDatabaseId !== resolvedDatabaseId;
 
-      if (canFallbackToPageDb && /could not find database with id/i.test(message)) {
+      if (canFallbackToPageDb) {
         resolvedDatabaseId = pageDerivedDatabaseId;
         pageFallbackUsed = true;
         const fallbackResult = await queryFeedbackRows(resolvedDatabaseId, limit);
@@ -3119,13 +3143,15 @@ app.get("/api/feedback-tracker", async (req, res) => {
         fetchedAt: new Date().toISOString(),
         count: rows.length,
         hasMore,
-        columns
+        columns,
+        databaseId: resolvedDatabaseId,
+        fallbackFromDatabaseId: pageFallbackUsed ? initialDatabaseId : ""
       }
     });
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch feedback tracker from Notion.",
-      details: error instanceof Error ? error.message : "Unknown error"
+      details: notionErrorDetails(error)
     });
   }
 });
@@ -3149,6 +3175,7 @@ app.post("/api/feedback-tracker", async (req, res) => {
 
     const pageDerivedDatabaseId = await resolveFeedbackDatabaseIdFromPage();
     let resolvedDatabaseId = notionFeedbackDatabaseId || pageDerivedDatabaseId;
+    const initialDatabaseId = resolvedDatabaseId;
     let pageFallbackUsed = !notionFeedbackDatabaseId && Boolean(pageDerivedDatabaseId);
 
     if (!resolvedDatabaseId) {
@@ -3162,10 +3189,10 @@ app.post("/api/feedback-tracker", async (req, res) => {
     try {
       databaseInfo = await notionFeedback.databases.retrieve({ database_id: resolvedDatabaseId });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      const canFallbackToPageDb = Boolean(pageDerivedDatabaseId) && !pageFallbackUsed;
+      const canFallbackToPageDb =
+        Boolean(pageDerivedDatabaseId) && !pageFallbackUsed && pageDerivedDatabaseId !== resolvedDatabaseId;
 
-      if (!(canFallbackToPageDb && /could not find database with id/i.test(message))) {
+      if (!canFallbackToPageDb) {
         throw error;
       }
 
@@ -3194,13 +3221,14 @@ app.post("/api/feedback-tracker", async (req, res) => {
       data: normalizeConsumiveisRow(created, columns),
       meta: {
         createdAt: new Date().toISOString(),
-        databaseId: resolvedDatabaseId
+        databaseId: resolvedDatabaseId,
+        fallbackFromDatabaseId: pageFallbackUsed ? initialDatabaseId : ""
       }
     });
   } catch (error) {
     return res.status(500).json({
       error: "Failed to create feedback tracker row in Notion.",
-      details: error instanceof Error ? error.message : "Unknown error"
+      details: notionErrorDetails(error)
     });
   }
 });
