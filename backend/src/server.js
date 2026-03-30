@@ -2813,7 +2813,7 @@ app.post("/api/google/email/send", async (req, res) => {
     const subject = String(req.body?.subject || "").trim();
     const body = String(req.body?.body || "").trim();
     const htmlBodyInput = String(req.body?.htmlBody || "").trim();
-    const sendAsHtml = Boolean(req.body?.sendAsHtml);
+    const requestedHtml = Boolean(req.body?.sendAsHtml);
 
     if (!to) {
       return res.status(400).json({ error: "Field 'to' is required." });
@@ -2823,6 +2823,7 @@ app.post("/api/google/email/send", async (req, res) => {
 
     const effectiveHtmlBody = htmlBodyInput || body;
     const hasHtmlTags = /<\/?[a-z][\s\S]*>/i.test(effectiveHtmlBody);
+    const sendAsHtml = requestedHtml || hasHtmlTags;
     const normalizedHtml = hasHtmlTags
       ? effectiveHtmlBody
       : escapeHtml(effectiveHtmlBody).replace(/\r?\n/g, "<br>");
