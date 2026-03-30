@@ -181,6 +181,7 @@ type SharedLogItem = {
 type ConsumivelItem = {
   id: string;
   fields: Record<string, string>;
+  client?: string;
   url?: string;
 };
 
@@ -848,6 +849,13 @@ function App() {
   const [feedbackLinkCache, setFeedbackLinkCache] = useState<Record<string, string>>(() => {
     try {
       return JSON.parse(localStorage.getItem("wa_feedback_link_cache") || "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  const [feedbackSenderLinkMap, setFeedbackSenderLinkMap] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_feedback_sender_link_map") || "{}") as Record<string, string>;
     } catch {
       return {};
     }
@@ -2095,6 +2103,10 @@ function App() {
   }, [feedbackLinkCache]);
 
   useEffect(() => {
+    try { localStorage.setItem("wa_feedback_sender_link_map", JSON.stringify(feedbackSenderLinkMap)); } catch {}
+  }, [feedbackSenderLinkMap]);
+
+  useEffect(() => {
     try { localStorage.setItem("wa_clientes_email_templates", JSON.stringify(clientesEmailTemplates)); } catch {}
   }, [clientesEmailTemplates]);
 
@@ -2742,68 +2754,76 @@ function App() {
       });
   }
 
+  function normalizeFeedbackRows(rows: unknown[]) {
+    return rows.map((row) => {
+      const safeRow = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+      const rawFields = safeRow.fields && typeof safeRow.fields === "object"
+        ? Object.fromEntries(
+            Object.entries(safeRow.fields as Record<string, unknown>).map(([key, value]) => [
+              String(key || ""),
+              String(value || "-")
+            ])
+          )
+        : {};
+
+      const normalizedLookup = new Map<string, string>();
+      for (const [key, value] of Object.entries(rawFields)) {
+        const normalized = normalizeFeedbackColumnKey(key);
+        if (!normalizedLookup.has(normalized)) {
+          normalizedLookup.set(normalized, String(value || "-"));
+        }
+      }
+
+      const orderedFields = Object.fromEntries(
+        FEEDBACK_COLUMNS_ORDER.map((targetColumn) => {
+          const candidates = [targetColumn, ...(FEEDBACK_COLUMN_ALIASES[targetColumn] || [])];
+
+          for (const candidate of candidates) {
+            const exact = rawFields[candidate];
+            if (exact !== undefined && String(exact || "").length > 0) {
+              return [targetColumn, String(exact || "-")];
+            }
+          }
+
+          for (const candidate of candidates) {
+            const normalized = normalizeFeedbackColumnKey(candidate);
+            if (normalizedLookup.has(normalized)) {
+              return [targetColumn, String(normalizedLookup.get(normalized) || "-")];
+            }
+          }
+
+          return [targetColumn, "-"];
+        })
+      );
+
+      return {
+        id: String(safeRow.id || ""),
+        client: String(safeRow.client || "").trim() || undefined,
+        fields: orderedFields,
+        url: String(safeRow.url || "") || undefined
+      } as ConsumivelItem;
+    });
+  }
+
+  async function fetchFeedbackTrackerRows() {
+    const response = await fetch(apiUrl("/api/feedback-tracker?limit=200"));
+    const data = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
+    }
+
+    const rows = Array.isArray(data?.data) ? data.data : [];
+    return normalizeFeedbackRows(rows);
+  }
+
   function loadFeedbackTracker() {
     setFeedbackLoading(true);
     setFeedbackError("");
 
-    fetch(apiUrl("/api/feedback-tracker?limit=200"))
-      .then(async (response) => {
-        const data = await parseResponse(response);
-        if (!response.ok) {
-          throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
-        }
-
-        const rows = Array.isArray(data?.data) ? data.data : [];
-
+    fetchFeedbackTrackerRows()
+      .then((rows) => {
         setFeedbackColumns(FEEDBACK_COLUMNS_ORDER);
-        setFeedbackRows(
-          rows.map((row: Record<string, unknown>) => {
-            const rawFields = row.fields && typeof row.fields === "object"
-              ? Object.fromEntries(
-                  Object.entries(row.fields as Record<string, unknown>).map(([key, value]) => [
-                    String(key || ""),
-                    String(value || "-")
-                  ])
-                )
-              : {};
-
-            const normalizedLookup = new Map<string, string>();
-            for (const [key, value] of Object.entries(rawFields)) {
-              const normalized = normalizeFeedbackColumnKey(key);
-              if (!normalizedLookup.has(normalized)) {
-                normalizedLookup.set(normalized, String(value || "-"));
-              }
-            }
-
-            const orderedFields = Object.fromEntries(
-              FEEDBACK_COLUMNS_ORDER.map((targetColumn) => {
-                const candidates = [targetColumn, ...(FEEDBACK_COLUMN_ALIASES[targetColumn] || [])];
-
-                for (const candidate of candidates) {
-                  const exact = rawFields[candidate];
-                  if (exact !== undefined && String(exact || "").length > 0) {
-                    return [targetColumn, String(exact || "-")];
-                  }
-                }
-
-                for (const candidate of candidates) {
-                  const normalized = normalizeFeedbackColumnKey(candidate);
-                  if (normalizedLookup.has(normalized)) {
-                    return [targetColumn, String(normalizedLookup.get(normalized) || "-")];
-                  }
-                }
-
-                return [targetColumn, "-"];
-              })
-            );
-
-            return {
-              id: String(row.id || ""),
-              fields: orderedFields,
-              url: String(row.url || "") || undefined
-            };
-          })
-        );
+        setFeedbackRows(rows);
       })
       .catch((error) => {
         setFeedbackError(error instanceof Error ? error.message : "Não foi possível carregar feedback tracker.");
@@ -3846,11 +3866,20 @@ function App() {
         ? genericButtonUrlVariable
         : sentVars[2] || genericButtonUrlVariable
     ).trim();
+    const manualSender = String(sentVars[1] || feedbackStoreLookup || "").trim();
 
     if (!feedbackUrl) {
       setFeedbackLookupStatus("Template enviado, mas sem Feedback URL para marcar Follow-up SMS no Notion.");
       return;
     }
+
+    const senderAssociation = validateSenderLinkAssociation(manualSender, feedbackUrl);
+    if (!senderAssociation.ok) {
+      setFeedbackLookupStatus(senderAssociation.message);
+      return;
+    }
+
+    rememberSenderLinkAssociation(manualSender, feedbackUrl);
 
     try {
       await createFeedbackFollowUpEntry({
@@ -3899,7 +3928,66 @@ function App() {
     return "";
   }
 
-  function resolveDeliveredFeedbackMatch(row: TmsDeliveredShipment) {
+  function senderToken(sender: string) {
+    return normalizeLookupToken(String(sender || "").trim());
+  }
+
+  function getLinkedSenderTokenForLink(link: string, exceptToken = "") {
+    const normalizedLink = String(link || "").trim();
+    if (!normalizedLink) return "";
+
+    for (const [token, linked] of Object.entries(feedbackSenderLinkMap)) {
+      if (!token || token === exceptToken) continue;
+      if (String(linked || "").trim() === normalizedLink) {
+        return token;
+      }
+    }
+
+    return "";
+  }
+
+  function validateSenderLinkAssociation(sender: string, link: string) {
+    const token = senderToken(sender);
+    const normalizedLink = String(link || "").trim();
+
+    if (!token || !normalizedLink) {
+      return { ok: true as const };
+    }
+
+    const existingForSender = String(feedbackSenderLinkMap[token] || "").trim();
+    if (existingForSender && existingForSender !== normalizedLink) {
+      return {
+        ok: false as const,
+        message: `Sender ${sender} já está associado a outro link. Envio bloqueado para evitar link errado.`
+      };
+    }
+
+    const linkedToOtherSender = getLinkedSenderTokenForLink(normalizedLink, token);
+    if (linkedToOtherSender) {
+      return {
+        ok: false as const,
+        message: "Este link já está associado a outro sender. Envio bloqueado para evitar associação cruzada."
+      };
+    }
+
+    return { ok: true as const };
+  }
+
+  function rememberSenderLinkAssociation(sender: string, link: string) {
+    const token = senderToken(sender);
+    const normalizedLink = String(link || "").trim();
+    if (!token || !normalizedLink) return;
+
+    setFeedbackSenderLinkMap((current) => {
+      if (String(current[token] || "").trim() === normalizedLink) return current;
+      return {
+        ...current,
+        [token]: normalizedLink
+      };
+    });
+  }
+
+  function resolveDeliveredFeedbackMatch(row: TmsDeliveredShipment, sourceRows: ConsumivelItem[] = feedbackRows) {
     const sender = String(row.sender || "").trim();
     const recipient = String(row.recipient || "").trim();
     const senderNeedle = normalizeLookupToken(sender);
@@ -3907,18 +3995,25 @@ function App() {
     const trackingNeedle = normalizeLookupToken(String(row.providerTrackingCode || ""));
     const parcelNeedle = normalizeLookupToken(String(row.parcelId || ""));
 
-    const candidates = feedbackRows
+    const candidates = sourceRows
       .map((item) => {
       const fields = item.fields || {};
       const link = String(fields["Feedback URL"] || "").trim() || String(item.url || "").trim();
       if (!link) return null;
 
       const joined = [
+        item.client,
         fields["Nome Cliente"],
+        fields["Morada Destinatário"],
+        fields["Morada Destinat�rio"],
         fields["Destinatário"],
+        fields["Destinat�rio"],
         fields["Referência"],
+        fields["Refer�ncia"],
         fields["Cod. Serviço"],
-        fields["TRK Secundário"]
+        fields["Cod. Servi�o"],
+        fields["TRK Secundário"],
+        fields["TRK Secund�rio"]
       ]
         .map((value) => normalizeLookupToken(String(value || "")))
         .join(" ");
@@ -4020,17 +4115,48 @@ function App() {
       String(row.providerTrackingCode || ""),
       String(row.parcelId || "")
     ]);
-    const resolved = resolveDeliveredFeedbackMatch(row);
-    const sender = String(resolved?.sender || row.sender || "").trim();
-    const recipient = String(resolved?.recipient || row.recipient || "").trim();
-    const matchedLink = String(resolved?.matchedLink || cachedLink || manualFallbackLink).trim();
+    setFeedbackLookupStatus("A atualizar links no Notion antes de enviar...");
 
-    if (!matchedLink) {
+    let freshFeedbackRows: ConsumivelItem[] = feedbackRows;
+    try {
+      freshFeedbackRows = await fetchFeedbackTrackerRows();
+      setFeedbackRows(freshFeedbackRows);
+      setFeedbackColumns(FEEDBACK_COLUMNS_ORDER);
+      setFeedbackError("");
+    } catch (error) {
       setFeedbackLookupStatus(
-        `Sem link de feedback no Notion para sender: ${row.sender || "-"}. Usa \"Buscar no Notion e preencher link\" para fallback manual.`
+        error instanceof Error
+          ? `Não foi possível atualizar Notion antes do envio: ${error.message}`
+          : "Não foi possível atualizar Notion antes do envio."
       );
       return;
     }
+
+    const resolved = resolveDeliveredFeedbackMatch(row, freshFeedbackRows);
+    const sender = String(resolved?.sender || row.sender || "").trim();
+    const recipient = String(resolved?.recipient || row.recipient || "").trim();
+    const matchedLink = String(resolved?.matchedLink || cachedLink).trim();
+
+    if (!matchedLink) {
+      const suggestedShop = sender || recipient || String(row.sender || row.recipient || "").trim() || "";
+      if (suggestedShop) {
+        setFeedbackStoreLookup(suggestedShop);
+        setFeedbackCreateShopName((current) => current.trim() || suggestedShop);
+      }
+      setFeedbackCreateOpen(true);
+      setFeedbackLookupStatus(
+        `Sem link para ${suggestedShop || "esta loja"}. Adiciona em \"Adicionar nova loja\" para memorizar antes de enviar.`
+      );
+      return;
+    }
+
+    const senderAssociation = validateSenderLinkAssociation(sender, matchedLink);
+    if (!senderAssociation.ok) {
+      setFeedbackLookupStatus(senderAssociation.message);
+      return;
+    }
+
+    rememberSenderLinkAssociation(sender, matchedLink);
 
     const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
     const varsLength = Math.max(3, requiredMax, feedbackPreviewBodyVars.length);
@@ -4063,8 +4189,10 @@ function App() {
       setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
     } else if (cachedLink) {
       setFeedbackLookupStatus(`A usar link em cache para ${sender || "-"}.`);
-    } else {
+    } else if (manualFallbackLink) {
       setFeedbackLookupStatus(`Sem match exato no Notion, a usar link manual para ${sender || "-"}.`);
+    } else {
+      setFeedbackLookupStatus(`Link associado para ${sender || "-"}.`);
     }
     const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
@@ -4120,10 +4248,16 @@ function App() {
       if (!link) return false;
 
       const joined = [
+        row.client,
         fields["Nome Cliente"],
+        fields["Morada Destinatário"],
+        fields["Morada Destinat�rio"],
         fields["Destinatário"],
+        fields["Destinat�rio"],
         fields["Referência"],
-        fields["Cod. Serviço"]
+        fields["Refer�ncia"],
+        fields["Cod. Serviço"],
+        fields["Cod. Servi�o"]
       ]
         .map((value) => normalizeLookupToken(String(value || "")))
         .join(" ");
@@ -4152,6 +4286,14 @@ function App() {
       setFeedbackLookupStatus("Match encontrado, mas sem Feedback URL nessa linha.");
       return;
     }
+
+    const association = validateSenderLinkAssociation(feedbackStoreLookup, matchedLink);
+    if (!association.ok) {
+      setFeedbackLookupStatus(association.message);
+      return;
+    }
+
+    rememberSenderLinkAssociation(feedbackStoreLookup, matchedLink);
 
     if (feedbackNeedsUrlButtonVariable) {
       setGenericButtonUrlVariable(matchedLink);
@@ -4186,6 +4328,12 @@ function App() {
       return;
     }
 
+    const association = validateSenderLinkAssociation(feedbackCreateShopName.trim(), feedbackCreateLink.trim());
+    if (!association.ok) {
+      setFeedbackCreateStatus(association.message);
+      return;
+    }
+
     setFeedbackCreateLoading(true);
     setFeedbackCreateStatus("");
 
@@ -4208,6 +4356,7 @@ function App() {
       setFeedbackCreateStatus("Loja e link criados no Notion com sucesso.");
       setFeedbackStoreLookup(feedbackCreateShopName.trim());
       cacheFeedbackLink(feedbackCreateLink.trim(), [feedbackCreateShopName.trim()]);
+      rememberSenderLinkAssociation(feedbackCreateShopName.trim(), feedbackCreateLink.trim());
       setFeedbackCreateShopName("");
       setFeedbackCreateLink("");
       loadFeedbackTracker();
