@@ -1789,6 +1789,10 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
     }
     if (propType === "status") {
       properties[propName] = { status: { name: cleanValue } };
+      return;
+    }
+    if (propType === "checkbox") {
+      properties[propName] = { checkbox: parseBooleanLike(cleanValue) };
     }
   };
 
@@ -1804,6 +1808,22 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
   assignValue(sentDateProp, input.sentDate);
   assignValue(statusProp, input.status);
   assignValue(whatsappFollowUpSmsProp, input.whatsappFollowUpSms);
+
+  // Fallback for databases with different property names.
+  if (!Object.keys(properties).length) {
+    const fallbackTitleProp = Object.entries(databaseProperties).find(([, prop]) => String(prop?.type || "") === "title")?.[0] || "";
+    const fallbackUrlProp = Object.entries(databaseProperties).find(([, prop]) => String(prop?.type || "") === "url")?.[0] || "";
+    const fallbackRichTextProp = Object.entries(databaseProperties).find(([, prop]) => String(prop?.type || "") === "rich_text")?.[0] || "";
+
+    if (fallbackTitleProp) {
+      assignValue(fallbackTitleProp, input.shopName || input.referencia || "Feedback Survey");
+    }
+    if (fallbackUrlProp) {
+      assignValue(fallbackUrlProp, input.feedbackUrl);
+    } else if (fallbackRichTextProp) {
+      assignValue(fallbackRichTextProp, input.feedbackUrl);
+    }
+  }
 
   return properties;
 }

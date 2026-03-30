@@ -845,6 +845,13 @@ function App() {
   const [feedbackCreateLink, setFeedbackCreateLink] = useState("");
   const [feedbackCreateLoading, setFeedbackCreateLoading] = useState(false);
   const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
+  const [feedbackLinkCache, setFeedbackLinkCache] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_feedback_link_cache") || "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
 
   // ── Clientes page state ────────────────────────────────────────────────
   const [clientesRows, setClientesRows] = useState<Array<{ id: number; name: string; email: string; phone: string; nif: string; address: string; city: string; country: string; active: boolean; createdAt: string; lastShipment: string; shipments: number; url: string }>>([]);
@@ -2082,6 +2089,10 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem("wa_template_history", JSON.stringify(templateHistory)); } catch {}
   }, [templateHistory]);
+
+  useEffect(() => {
+    try { localStorage.setItem("wa_feedback_link_cache", JSON.stringify(feedbackLinkCache)); } catch {}
+  }, [feedbackLinkCache]);
 
   useEffect(() => {
     try { localStorage.setItem("wa_clientes_email_templates", JSON.stringify(clientesEmailTemplates)); } catch {}
@@ -3858,6 +3869,36 @@ function App() {
     }
   }
 
+  function cacheFeedbackLink(link: string, aliases: string[]) {
+    const normalizedLink = String(link || "").trim();
+    if (!normalizedLink) return;
+
+    setFeedbackLinkCache((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      for (const alias of aliases) {
+        const token = normalizeLookupToken(alias);
+        if (!token) continue;
+        if (next[token] === normalizedLink) continue;
+        next[token] = normalizedLink;
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }
+
+  function getCachedFeedbackLink(aliases: string[]) {
+    for (const alias of aliases) {
+      const token = normalizeLookupToken(alias);
+      if (!token) continue;
+      const cached = String(feedbackLinkCache[token] || "").trim();
+      if (cached) return cached;
+    }
+    return "";
+  }
+
   function resolveDeliveredFeedbackMatch(row: TmsDeliveredShipment) {
     const sender = String(row.sender || "").trim();
     const recipient = String(row.recipient || "").trim();
@@ -3973,10 +4014,16 @@ function App() {
     }
 
     const manualFallbackLink = String(genericButtonUrlVariable || genericBodyVars[3] || "").trim();
+    const cachedLink = getCachedFeedbackLink([
+      String(row.sender || ""),
+      String(row.recipient || ""),
+      String(row.providerTrackingCode || ""),
+      String(row.parcelId || "")
+    ]);
     const resolved = resolveDeliveredFeedbackMatch(row);
     const sender = String(resolved?.sender || row.sender || "").trim();
     const recipient = String(resolved?.recipient || row.recipient || "").trim();
-    const matchedLink = String(resolved?.matchedLink || manualFallbackLink).trim();
+    const matchedLink = String(resolved?.matchedLink || cachedLink || manualFallbackLink).trim();
 
     if (!matchedLink) {
       setFeedbackLookupStatus(
@@ -4003,8 +4050,19 @@ function App() {
       setGenericButtonUrlVariable(matchedLink);
     }
 
+    cacheFeedbackLink(matchedLink, [
+      sender,
+      recipient,
+      String(row.sender || ""),
+      String(row.recipient || ""),
+      String(row.providerTrackingCode || ""),
+      String(row.parcelId || "")
+    ]);
+
     if (resolved?.matchedLink) {
       setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
+    } else if (cachedLink) {
+      setFeedbackLookupStatus(`A usar link em cache para ${sender || "-"}.`);
     } else {
       setFeedbackLookupStatus(`Sem match exato no Notion, a usar link manual para ${sender || "-"}.`);
     }
@@ -4112,6 +4170,7 @@ function App() {
     }
 
     const matchedStore = String(best.fields["Nome Cliente"] || best.fields["Destinatário"] || feedbackStoreLookup || "-");
+    cacheFeedbackLink(matchedLink, [matchedStore, feedbackStoreLookup]);
     setFeedbackLookupStatus(`Link associado automaticamente para: ${matchedStore}`);
   }
 
@@ -4148,6 +4207,7 @@ function App() {
 
       setFeedbackCreateStatus("Loja e link criados no Notion com sucesso.");
       setFeedbackStoreLookup(feedbackCreateShopName.trim());
+      cacheFeedbackLink(feedbackCreateLink.trim(), [feedbackCreateShopName.trim()]);
       setFeedbackCreateShopName("");
       setFeedbackCreateLink("");
       loadFeedbackTracker();
