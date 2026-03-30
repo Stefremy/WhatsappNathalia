@@ -452,6 +452,106 @@ function isGoogleOauthStateValid(state) {
   return timingSafeEqual(provided, expected);
 }
 
+function wantsHtmlResponse(req) {
+  const format = String(req.query.format || "").trim().toLowerCase();
+  if (format === "json") return false;
+  if (format === "html") return true;
+  const accept = String(req.headers.accept || "").toLowerCase();
+  return accept.includes("text/html");
+}
+
+function sendOauthHtmlResponse(res, {
+  ok,
+  title,
+  message,
+  statusCode = 200
+}) {
+  const safeTitle = String(title || "Google OAuth").replace(/[<>]/g, "");
+  const safeMessage = String(message || "").replace(/[<>]/g, "");
+  const bg = ok ? "#ecfdf3" : "#fef2f2";
+  const border = ok ? "#10b981" : "#ef4444";
+  const text = ok ? "#065f46" : "#7f1d1d";
+
+  const html = `<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        background: #f8fafc;
+        color: #0f172a;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: min(560px, 100%);
+        background: ${bg};
+        border: 1px solid ${border};
+        border-radius: 14px;
+        padding: 20px 18px;
+        box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 20px;
+        line-height: 1.3;
+        color: ${text};
+      }
+      p {
+        margin: 0;
+        line-height: 1.5;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 13px;
+        opacity: 0.85;
+      }
+      .actions {
+        margin-top: 16px;
+      }
+      button {
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        background: #fff;
+        color: #0f172a;
+        font: inherit;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>${safeTitle}</h1>
+      <p>${safeMessage}</p>
+      <p class="hint">Esta janela pode fechar automaticamente.</p>
+      <div class="actions">
+        <button type="button" onclick="window.close()">Fechar janela</button>
+      </div>
+    </main>
+    <script>
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage({ type: "google_oauth_done", ok: ${ok ? "true" : "false"} }, "*");
+        }
+      } catch {}
+      setTimeout(() => {
+        try { window.close(); } catch {}
+      }, 500);
+    </script>
+  </body>
+</html>`;
+
+  return res.status(statusCode).type("html").send(html);
+}
+
 function normalizeRecipient(input) {
   const digits = String(input ?? "").replace(/\D/g, "");
   if (!digits) return "";
@@ -2393,13 +2493,30 @@ app.get("/api/google/oauth/start", (req, res) => {
 
 app.get("/api/google/oauth/callback", async (req, res) => {
   try {
+    const htmlResponse = wantsHtmlResponse(req);
     const code = String(req.query.code || "").trim();
     const state = String(req.query.state || "").trim();
 
     if (!code) {
+      if (htmlResponse) {
+        return sendOauthHtmlResponse(res, {
+          ok: false,
+          title: "Ligacao Google incompleta",
+          message: "Falta o codigo de autorizacao. Inicia novamente a ligacao Google.",
+          statusCode: 400
+        });
+      }
       return res.status(400).json({ error: "Missing 'code' query parameter." });
     }
     if (!isGoogleOauthStateValid(state)) {
+      if (htmlResponse) {
+        return sendOauthHtmlResponse(res, {
+          ok: false,
+          title: "Sessao OAuth expirada",
+          message: "O pedido expirou. Clica em Ligar Google novamente para gerar uma nova sessao.",
+          statusCode: 400
+        });
+      }
       return res.status(400).json({ error: "Invalid or expired OAuth state." });
     }
 
@@ -2423,6 +2540,27 @@ app.get("/api/google/oauth/callback", async (req, res) => {
 
     const tokenData = await tokenRes.json().catch(() => ({}));
     if (!tokenRes.ok) {
+      const isInvalidGrant = String(tokenData?.error || "").toLowerCase() === "invalid_grant";
+      if (isInvalidGrant && googleOauthSession.accessToken && htmlResponse) {
+        return sendOauthHtmlResponse(res, {
+          ok: true,
+          title: "Conta Google ja ligada",
+          message: "Este codigo ja foi usado. A tua conta ja esta conectada, podes voltar a app.",
+          statusCode: 200
+        });
+      }
+
+      if (htmlResponse) {
+        return sendOauthHtmlResponse(res, {
+          ok: false,
+          title: "Falha na ligacao Google",
+          message: isInvalidGrant
+            ? "O codigo de autorizacao ja foi usado ou expirou. Inicia novamente a ligacao Google."
+            : "Nao foi possivel concluir a ligacao Google. Tenta novamente.",
+          statusCode: tokenRes.status || 400
+        });
+      }
+
       return res.status(tokenRes.status).json({
         error: "Failed to exchange Google OAuth code",
         details: tokenData
@@ -2443,6 +2581,14 @@ app.get("/api/google/oauth/callback", async (req, res) => {
       }
 
       if (!tokenEmail || tokenEmail !== allowedEmail) {
+        if (htmlResponse) {
+          return sendOauthHtmlResponse(res, {
+            ok: false,
+            title: "Conta Google errada",
+            message: `Liga com a conta ${allowedEmail}.`,
+            statusCode: 403
+          });
+        }
         return res.status(403).json({
           error: "Wrong Google account connected",
           details: `Please connect with ${allowedEmail}`
@@ -2459,6 +2605,15 @@ app.get("/api/google/oauth/callback", async (req, res) => {
     const expiresIn = Number(tokenData?.expires_in || 0) || 0;
     googleOauthSession.expiresAt = Date.now() + (expiresIn > 0 ? expiresIn * 1000 : 0);
 
+    if (htmlResponse) {
+      return sendOauthHtmlResponse(res, {
+        ok: true,
+        title: "Google ligado com sucesso",
+        message: "Autorizacao concluida. Ja podes voltar a app e enviar emails.",
+        statusCode: 200
+      });
+    }
+
     return res.json({
       ok: true,
       token_type: tokenData?.token_type || "Bearer",
@@ -2468,6 +2623,15 @@ app.get("/api/google/oauth/callback", async (req, res) => {
       refresh_token: tokenData?.refresh_token || ""
     });
   } catch (error) {
+    if (wantsHtmlResponse(req)) {
+      return sendOauthHtmlResponse(res, {
+        ok: false,
+        title: "Erro no callback Google",
+        message: error instanceof Error ? error.message : "Erro inesperado no OAuth Google.",
+        statusCode: 500
+      });
+    }
+
     return res.status(500).json({
       error: "Google OAuth callback failed",
       details: error instanceof Error ? error.message : "Unknown error"
