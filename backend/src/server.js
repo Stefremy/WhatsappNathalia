@@ -7,6 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Pool } from "pg";
 import https from "https";
 import http from "http";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -32,7 +33,7 @@ function broadcastSSE(event, data) {
 const scheduledMessages = [];
 const recentCallEvents = [];
 const MAX_CALL_EVENTS = 100;
-const googleOauthStates = new Map();
+const GOOGLE_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const googleOauthSession = {
   accessToken: "",
   refreshToken: "",
@@ -407,6 +408,48 @@ function requiredEnv(name) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function googleOauthStateSecret() {
+  const secret = String(process.env.GOOGLE_OAUTH_STATE_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim();
+  if (!secret) {
+    throw new Error("Missing state signing secret for Google OAuth");
+  }
+  return secret;
+}
+
+function createGoogleOauthState() {
+  const issuedAt = String(Date.now());
+  const nonce = randomBytes(16).toString("hex");
+  const payload = `${issuedAt}.${nonce}`;
+  const signature = createHmac("sha256", googleOauthStateSecret()).update(payload).digest("hex");
+  return `${payload}.${signature}`;
+}
+
+function isGoogleOauthStateValid(state) {
+  if (!state) return false;
+
+  const parts = String(state).split(".");
+  if (parts.length !== 3) return false;
+
+  const [issuedAtRaw, nonce, signature] = parts;
+  if (!/^\d+$/.test(issuedAtRaw)) return false;
+  if (!/^[a-f0-9]{32}$/i.test(nonce)) return false;
+  if (!/^[a-f0-9]{64}$/i.test(signature)) return false;
+
+  const issuedAt = Number(issuedAtRaw);
+  const ageMs = Date.now() - issuedAt;
+  if (!Number.isFinite(issuedAt) || ageMs < 0 || ageMs > GOOGLE_OAUTH_STATE_TTL_MS) {
+    return false;
+  }
+
+  const payload = `${issuedAtRaw}.${nonce}`;
+  const expectedSignature = createHmac("sha256", googleOauthStateSecret()).update(payload).digest("hex");
+  const provided = Buffer.from(signature, "utf8");
+  const expected = Buffer.from(expectedSignature, "utf8");
+  if (provided.length !== expected.length) return false;
+
+  return timingSafeEqual(provided, expected);
 }
 
 function normalizeRecipient(input) {
@@ -2317,10 +2360,7 @@ app.get("/api/google/oauth/start", (req, res) => {
     const scope = String(process.env.GOOGLE_OAUTH_SCOPE || "openid email profile https://www.googleapis.com/auth/gmail.readonly").trim();
     const loginHint = String(process.env.GOOGLE_OAUTH_LOGIN_HINT || "").trim();
     const hostedDomain = String(process.env.GOOGLE_OAUTH_HD || "").trim();
-    const state = `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
-
-    googleOauthStates.set(state, Date.now());
-    setTimeout(() => googleOauthStates.delete(state), 15 * 60 * 1000);
+    const state = createGoogleOauthState();
 
     const url = new URL(authBase);
     url.searchParams.set("client_id", clientId);
@@ -2359,10 +2399,9 @@ app.get("/api/google/oauth/callback", async (req, res) => {
     if (!code) {
       return res.status(400).json({ error: "Missing 'code' query parameter." });
     }
-    if (!state || !googleOauthStates.has(state)) {
+    if (!isGoogleOauthStateValid(state)) {
       return res.status(400).json({ error: "Invalid or expired OAuth state." });
     }
-    googleOauthStates.delete(state);
 
     const clientId = requiredEnv("GOOGLE_OAUTH_CLIENT_ID");
     const clientSecret = requiredEnv("GOOGLE_OAUTH_CLIENT_SECRET");
