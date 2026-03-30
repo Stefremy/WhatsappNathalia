@@ -3862,36 +3862,58 @@ function App() {
     const sender = String(row.sender || "").trim();
     const recipient = String(row.recipient || "").trim();
     const senderNeedle = normalizeLookupToken(sender);
+    const recipientNeedle = normalizeLookupToken(recipient);
+    const trackingNeedle = normalizeLookupToken(String(row.providerTrackingCode || ""));
+    const parcelNeedle = normalizeLookupToken(String(row.parcelId || ""));
 
-    const candidates = feedbackRows.filter((item) => {
+    const candidates = feedbackRows
+      .map((item) => {
       const fields = item.fields || {};
       const link = String(fields["Feedback URL"] || "").trim() || String(item.url || "").trim();
-      if (!link) return false;
+      if (!link) return null;
 
       const joined = [
         fields["Nome Cliente"],
         fields["Destinatário"],
         fields["Referência"],
-        fields["Cod. Serviço"]
+        fields["Cod. Serviço"],
+        fields["TRK Secundário"]
       ]
         .map((value) => normalizeLookupToken(String(value || "")))
         .join(" ");
 
-      return senderNeedle ? joined.includes(senderNeedle) : false;
-    });
+      let score = 0;
+      if (trackingNeedle && joined.includes(trackingNeedle)) score += 6;
+      if (senderNeedle && joined.includes(senderNeedle)) score += 4;
+      if (recipientNeedle && joined.includes(recipientNeedle)) score += 3;
+      if (parcelNeedle && joined.includes(parcelNeedle)) score += 2;
+
+      if (score <= 0) return null;
+
+      return {
+        item,
+        score
+      };
+    })
+      .filter(Boolean) as Array<{ item: ConsumivelItem; score: number }>;
 
     if (candidates.length === 0) {
       return null;
     }
 
     const best = [...candidates].sort((a, b) => {
-      const bTs = parseFeedbackEntregaTimestamp(b.fields["Data Entrega"] || "");
-      const aTs = parseFeedbackEntregaTimestamp(a.fields["Data Entrega"] || "");
+      if (b.score !== a.score) return b.score - a.score;
+      const bTs = parseFeedbackEntregaTimestamp(b.item.fields["Data Entrega"] || "");
+      const aTs = parseFeedbackEntregaTimestamp(a.item.fields["Data Entrega"] || "");
       if (Number.isFinite(aTs) && Number.isFinite(bTs)) return bTs - aTs;
       if (Number.isFinite(aTs)) return -1;
       if (Number.isFinite(bTs)) return 1;
       return 0;
-    })[0];
+    })[0]?.item;
+
+    if (!best) {
+      return null;
+    }
 
     const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
     if (!matchedLink) {
@@ -3950,13 +3972,18 @@ function App() {
       return;
     }
 
+    const manualFallbackLink = String(genericButtonUrlVariable || genericBodyVars[3] || "").trim();
     const resolved = resolveDeliveredFeedbackMatch(row);
-    if (!resolved) {
-      setFeedbackLookupStatus(`Sem link de feedback no Notion para sender: ${row.sender || "-"}.`);
+    const sender = String(resolved?.sender || row.sender || "").trim();
+    const recipient = String(resolved?.recipient || row.recipient || "").trim();
+    const matchedLink = String(resolved?.matchedLink || manualFallbackLink).trim();
+
+    if (!matchedLink) {
+      setFeedbackLookupStatus(
+        `Sem link de feedback no Notion para sender: ${row.sender || "-"}. Usa \"Buscar no Notion e preencher link\" para fallback manual.`
+      );
       return;
     }
-
-    const { sender, recipient, matchedLink } = resolved;
 
     const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
     const varsLength = Math.max(3, requiredMax, feedbackPreviewBodyVars.length);
@@ -3976,7 +4003,11 @@ function App() {
       setGenericButtonUrlVariable(matchedLink);
     }
 
-    setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
+    if (resolved?.matchedLink) {
+      setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
+    } else {
+      setFeedbackLookupStatus(`Sem match exato no Notion, a usar link manual para ${sender || "-"}.`);
+    }
     const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
       overrides: {
