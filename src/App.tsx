@@ -138,6 +138,16 @@ type ClientesEmailTemplate = {
   body: string;
 };
 
+type ClientesInboxEmail = {
+  id: string;
+  threadId?: string;
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  unread?: boolean;
+};
+
 type TeamReminder = {
   id: string;
   phone: string;
@@ -866,6 +876,9 @@ function App() {
   const [clientesEmailSending, setClientesEmailSending] = useState(false);
   const [clientesGoogleConnected, setClientesGoogleConnected] = useState(false);
   const [clientesGoogleStatusLoading, setClientesGoogleStatusLoading] = useState(false);
+  const [clientesInboxRows, setClientesInboxRows] = useState<ClientesInboxEmail[]>([]);
+  const [clientesInboxLoading, setClientesInboxLoading] = useState(false);
+  const [clientesInboxStatus, setClientesInboxStatus] = useState("Inbox inativa");
   const CLIENTES_PAGE_SIZE = 100;
   const [deliveredSendingKey, setDeliveredSendingKey] = useState("");
   const [deliveredSentKeys, setDeliveredSentKeys] = useState<Record<string, true>>(() => {
@@ -2994,6 +3007,28 @@ function App() {
     }
   }
 
+  async function loadClientesInbox() {
+    setClientesInboxLoading(true);
+    setClientesInboxStatus("A carregar inbox...");
+
+    try {
+      const response = await fetch(apiUrl("/api/google/email/inbox?maxResults=20"));
+      const data = await parseResponse(response);
+      if (!response.ok) {
+        throw new Error(String(data?.details?.error?.message || data?.details || data?.error || `Falha Inbox (${response.status})`));
+      }
+
+      const rows = Array.isArray(data?.data) ? data.data : [];
+      setClientesInboxRows(rows as ClientesInboxEmail[]);
+      setClientesInboxStatus(`${rows.length} emails na inbox.`);
+    } catch (error) {
+      setClientesInboxRows([]);
+      setClientesInboxStatus(error instanceof Error ? error.message : "Não foi possível carregar inbox.");
+    } finally {
+      setClientesInboxLoading(false);
+    }
+  }
+
   async function loadDeliveredShipmentsByFilters({
     dateFrom,
     dateTo,
@@ -3419,6 +3454,7 @@ function App() {
   useEffect(() => {
     if (activeView === "clientes") {
       void refreshClientesGoogleStatus();
+      void loadClientesInbox();
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -8020,6 +8056,79 @@ Authorization: Bearer <token>
                     <span className="status">{clientesEmailStatus}</span>
                   </div>
                 </form>
+              </section>
+
+              <section className="panel clientes-email-box">
+                <div className="tracker-header">
+                  <div>
+                    <h3>Inbox Emails</h3>
+                    <p>Emails recentes da inbox Gmail ligada.</p>
+                  </div>
+                  <span className="status">{clientesInboxStatus}</span>
+                </div>
+
+                <div className="api-actions">
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => {
+                      void loadClientesInbox();
+                    }}
+                    disabled={clientesInboxLoading}
+                  >
+                    {clientesInboxLoading ? "A carregar..." : "Atualizar inbox"}
+                  </button>
+                </div>
+
+                <div className="tracker-table-wrap">
+                  <table className="tracker-table">
+                    <thead>
+                      <tr>
+                        <th>Estado</th>
+                        <th>De</th>
+                        <th>Assunto</th>
+                        <th>Data</th>
+                        <th>Snippet</th>
+                        <th>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clientesInboxRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="tracker-empty">
+                            {clientesInboxLoading ? "A carregar inbox..." : "Sem emails para mostrar."}
+                          </td>
+                        </tr>
+                      ) : (
+                        clientesInboxRows.map((email) => (
+                          <tr key={email.id}>
+                            <td>{email.unread ? "Não lido" : "Lido"}</td>
+                            <td>{email.from || "-"}</td>
+                            <td>{email.subject || "(sem assunto)"}</td>
+                            <td>{email.date || "-"}</td>
+                            <td>{email.snippet || "-"}</td>
+                            <td>
+                              <button
+                                className="btn btn-secondary tms-mini-btn"
+                                type="button"
+                                onClick={() => {
+                                  setClientesEmailSubject(`RE: ${String(email.subject || "").trim()}`);
+                                  setClientesEmailStatus("Assunto preparado a partir da inbox.");
+                                  const emailBox = document.getElementById("clientes-email-box");
+                                  if (emailBox) {
+                                    emailBox.scrollIntoView({ behavior: "smooth", block: "start" });
+                                  }
+                                }}
+                              >
+                                Preparar resposta
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </section>
             </section>
           ) : null}

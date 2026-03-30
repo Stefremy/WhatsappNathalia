@@ -2781,6 +2781,94 @@ app.post("/api/google/email/send", async (req, res) => {
   }
 });
 
+function readGmailHeader(headers, headerName) {
+  const normalizedTarget = String(headerName || "").trim().toLowerCase();
+  const list = Array.isArray(headers) ? headers : [];
+  const found = list.find((item) => String(item?.name || "").trim().toLowerCase() === normalizedTarget);
+  return String(found?.value || "").trim();
+}
+
+app.get("/api/google/email/inbox", async (req, res) => {
+  try {
+    const requested = Number(req.query.maxResults || 20);
+    const maxResults = Number.isFinite(requested)
+      ? Math.max(1, Math.min(50, Math.floor(requested)))
+      : 20;
+
+    const accessToken = await ensureGoogleAccessToken();
+
+    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+    listUrl.searchParams.set("maxResults", String(maxResults));
+    listUrl.searchParams.set("labelIds", "INBOX");
+
+    const listRes = await fetch(listUrl.toString(), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    const listData = await listRes.json().catch(() => ({}));
+    if (!listRes.ok) {
+      return res.status(listRes.status).json({ error: "Failed to fetch inbox list", details: listData });
+    }
+
+    const messages = Array.isArray(listData?.messages) ? listData.messages : [];
+    if (messages.length === 0) {
+      return res.json({ ok: true, data: [] });
+    }
+
+    const detailed = await Promise.all(
+      messages.map(async (item) => {
+        const messageId = String(item?.id || "").trim();
+        if (!messageId) return null;
+
+        const detailUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}`);
+        detailUrl.searchParams.set("format", "metadata");
+        detailUrl.searchParams.set("metadataHeaders", "Subject");
+        detailUrl.searchParams.set("metadataHeaders", "From");
+        detailUrl.searchParams.set("metadataHeaders", "Date");
+
+        const detailRes = await fetch(detailUrl.toString(), {
+          method: "GET",
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        const detailData = await detailRes.json().catch(() => ({}));
+        if (!detailRes.ok) {
+          return {
+            id: messageId,
+            error: `Failed to load message (${detailRes.status})`
+          };
+        }
+
+        const headers = detailData?.payload?.headers;
+        const internalDateMs = Number(detailData?.internalDate || 0) || 0;
+
+        return {
+          id: String(detailData?.id || messageId),
+          threadId: String(detailData?.threadId || ""),
+          from: readGmailHeader(headers, "From") || "(sem remetente)",
+          subject: readGmailHeader(headers, "Subject") || "(sem assunto)",
+          date: readGmailHeader(headers, "Date") || "",
+          snippet: String(detailData?.snippet || "").trim(),
+          unread: Array.isArray(detailData?.labelIds) ? detailData.labelIds.includes("UNREAD") : false,
+          internalDate: internalDateMs
+        };
+      })
+    );
+
+    const rows = detailed
+      .filter(Boolean)
+      .sort((a, b) => (Number(b?.internalDate || 0) - Number(a?.internalDate || 0)));
+
+    return res.json({ ok: true, data: rows });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Google inbox fetch failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/api/consumiveis", async (req, res) => {
   if (!notionConsumiveisEnabled || !notionConsumiveis) {
     return res.status(503).json({
