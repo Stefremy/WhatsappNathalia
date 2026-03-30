@@ -41,6 +41,7 @@ const googleOauthSession = {
   scope: "",
   tokenType: "Bearer"
 };
+let googleOauthSessionHydrated = false;
 
 async function processScheduledMessages() {
   const now = Date.now();
@@ -408,6 +409,99 @@ function requiredEnv(name) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
+}
+
+function normalizeGoogleOauthSession(input) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    accessToken: String(source.accessToken || "").trim(),
+    refreshToken: String(source.refreshToken || "").trim(),
+    expiresAt: Number(source.expiresAt || 0) || 0,
+    scope: String(source.scope || "").trim(),
+    tokenType: String(source.tokenType || "Bearer").trim() || "Bearer"
+  };
+}
+
+function applyGoogleOauthSession(input) {
+  const next = normalizeGoogleOauthSession(input);
+  googleOauthSession.accessToken = next.accessToken;
+  googleOauthSession.refreshToken = next.refreshToken;
+  googleOauthSession.expiresAt = next.expiresAt;
+  googleOauthSession.scope = next.scope;
+  googleOauthSession.tokenType = next.tokenType;
+}
+
+async function persistGoogleOauthSession() {
+  const payload = {
+    accessToken: googleOauthSession.accessToken,
+    refreshToken: googleOauthSession.refreshToken,
+    expiresAt: googleOauthSession.expiresAt,
+    scope: googleOauthSession.scope,
+    tokenType: googleOauthSession.tokenType
+  };
+
+  if (supabaseEnabled && supabase) {
+    try {
+      const { error } = await supabase
+        .from("workspace_state")
+        .upsert([{ key: "google_oauth_session", value: payload }], { onConflict: "key" });
+      if (!error) {
+        return;
+      }
+    } catch {}
+  }
+
+  if (pgEnabled && pgPool) {
+    await ensurePersistentStateTable();
+    await pgPool.query(
+      `insert into public.workspace_state (key, value, updated_at)
+      values ($1, $2::jsonb, now())
+      on conflict (key) do update set value = excluded.value, updated_at = now()`,
+      ["google_oauth_session", JSON.stringify(payload)]
+    );
+  }
+}
+
+async function hydrateGoogleOauthSession() {
+  if (googleOauthSessionHydrated) {
+    return;
+  }
+
+  googleOauthSessionHydrated = true;
+
+  if (googleOauthSession.accessToken || googleOauthSession.refreshToken) {
+    return;
+  }
+
+  if (supabaseEnabled && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("workspace_state")
+        .select("value")
+        .eq("key", "google_oauth_session")
+        .limit(1)
+        .maybeSingle();
+
+      if (!error && data?.value) {
+        applyGoogleOauthSession(data.value);
+        return;
+      }
+    } catch {}
+  }
+
+  if (pgEnabled && pgPool) {
+    try {
+      await ensurePersistentStateTable();
+      const { rows } = await pgPool.query(
+        `select value from public.workspace_state where key = $1 limit 1`,
+        ["google_oauth_session"]
+      );
+      const value = Array.isArray(rows) && rows.length > 0 ? rows[0]?.value : null;
+      if (value && typeof value === "object") {
+        applyGoogleOauthSession(value);
+      }
+    } catch {}
+  }
 }
 
 function googleOauthStateSecret() {
@@ -2613,6 +2707,7 @@ app.get("/api/google/oauth/callback", async (req, res) => {
     googleOauthSession.tokenType = String(tokenData?.token_type || "Bearer").trim() || "Bearer";
     const expiresIn = Number(tokenData?.expires_in || 0) || 0;
     googleOauthSession.expiresAt = Date.now() + (expiresIn > 0 ? expiresIn * 1000 : 0);
+    await persistGoogleOauthSession();
 
     if (htmlResponse) {
       return sendOauthHtmlResponse(res, {
@@ -2649,16 +2744,26 @@ app.get("/api/google/oauth/callback", async (req, res) => {
 });
 
 app.get("/api/google/oauth/status", (_req, res) => {
-  const connected = Boolean(googleOauthSession.accessToken);
-  return res.json({
-    ok: true,
-    connected,
-    scope: googleOauthSession.scope || "",
-    expires_at: googleOauthSession.expiresAt || 0
-  });
+  return (async () => {
+    await hydrateGoogleOauthSession();
+    const connected = Boolean(googleOauthSession.accessToken);
+    return res.json({
+      ok: true,
+      connected,
+      scope: googleOauthSession.scope || "",
+      expires_at: googleOauthSession.expiresAt || 0
+    });
+  })().catch((error) =>
+    res.status(500).json({
+      error: "Google OAuth status failed",
+      details: error instanceof Error ? error.message : "Unknown error"
+    })
+  );
 });
 
 async function ensureGoogleAccessToken() {
+  await hydrateGoogleOauthSession();
+
   if (!googleOauthSession.accessToken) {
     throw new Error("Google account not connected. Authorize first at /api/google/oauth/start?mode=redirect");
   }
@@ -2697,6 +2802,7 @@ async function ensureGoogleAccessToken() {
   googleOauthSession.tokenType = String(refreshData.token_type || "Bearer").trim() || "Bearer";
   const expiresIn = Number(refreshData.expires_in || 0) || 0;
   googleOauthSession.expiresAt = Date.now() + (expiresIn > 0 ? expiresIn * 1000 : 0);
+  await persistGoogleOauthSession();
 
   return googleOauthSession.accessToken;
 }
