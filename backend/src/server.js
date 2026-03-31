@@ -191,7 +191,8 @@ const PERSISTENCE_KEYS = [
   "contact_notes",
   "team_reminders",
   "personal_notes",
-  "calendar_events"
+  "calendar_events",
+  "clientes_email_templates"
 ];
 
 const STATE_FALLBACK_CHANNEL = "workspace_state_snapshot";
@@ -217,7 +218,8 @@ function defaultWorkspaceState() {
     contact_notes: {},
     team_reminders: [],
     personal_notes: [],
-    calendar_events: []
+    calendar_events: [],
+    clientes_email_templates: []
   };
 }
 
@@ -246,6 +248,9 @@ function normalizeWorkspaceState(input) {
   }
   if (!Array.isArray(next.calendar_events)) {
     next.calendar_events = [];
+  }
+  if (!Array.isArray(next.clientes_email_templates)) {
+    next.clientes_email_templates = [];
   }
 
   return next;

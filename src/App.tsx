@@ -2033,6 +2033,9 @@ function App() {
         if (Array.isArray(data.calendar_events)) {
           setCalendarEvents(data.calendar_events as CalendarEvent[]);
         }
+        if (Array.isArray(data.clientes_email_templates)) {
+          setClientesEmailTemplates(data.clientes_email_templates as ClientesEmailTemplate[]);
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -2060,7 +2063,8 @@ function App() {
           contact_notes: contactNotes,
           team_reminders: teamReminders,
           personal_notes: personalNotes,
-          calendar_events: calendarEvents
+          calendar_events: calendarEvents,
+          clientes_email_templates: clientesEmailTemplates
         })
       }).catch(() => {});
     }, 700);
@@ -2071,6 +2075,7 @@ function App() {
   }, [
     apiUrl,
     calendarEvents,
+    clientesEmailTemplates,
     cloudStateReady,
     contactNotes,
     personalNotes,
