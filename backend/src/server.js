@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Pool } from "pg";
 import https from "https";
 import http from "http";
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -18,6 +18,22 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }
 });
+
+function normalizeNotionBlockId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return raw.toLowerCase();
+  }
+
+  const hex = raw.replace(/[^0-9a-f]/gi, "").toLowerCase();
+  if (hex.length !== 32) {
+    return "";
+  }
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 // ── Server-Sent Events (delivery status ticks) ─────────────────────────────
 const sseClients = new Set();
@@ -45,9 +61,14 @@ let googleOauthSessionHydrated = false;
 
 async function processScheduledMessages() {
   const now = Date.now();
+  let processed = 0;
+  let sent = 0;
+  let failed = 0;
+
   for (const item of scheduledMessages) {
     if (item.status !== "pending") continue;
     if (new Date(item.scheduledAt).getTime() > now) continue;
+    processed += 1;
     item.status = "sending";
     try {
       const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
@@ -105,14 +126,32 @@ async function processScheduledMessages() {
       }
 
       item.status = response.ok ? "sent" : "failed";
+      if (response.ok) {
+        sent += 1;
+      } else {
+        failed += 1;
+      }
     } catch {
       item.status = "failed";
+      failed += 1;
     }
     broadcastSSE("scheduled_sent", { id: item.id, status: item.status });
   }
+
+  return { processed, sent, failed };
 }
 
-setInterval(processScheduledMessages, 15000);
+// Avoid perpetual background timers in serverless environments.
+if (!process.env.VERCEL) {
+  setInterval(processScheduledMessages, 15000);
+}
+
+const logsResponseCache = {
+  key: "",
+  etag: "",
+  expiresAt: 0,
+  payload: null
+};
 
 const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
 const notionEnabled = String(process.env.NOTION_ENABLED || "false").toLowerCase() === "true";
@@ -123,7 +162,7 @@ const notionTrackerEnabled = Boolean(notionTracker && notionTrackerDatabaseId);
 const notionConsumiveisApiKey = String(process.env.NOTION_CONSUMIVEIS_API_KEY || process.env.NOTION_API_KEY || "").trim();
 const notionConsumiveis = notionConsumiveisApiKey ? new NotionClient({ auth: notionConsumiveisApiKey }) : null;
 const notionConsumiveisDatabaseId = String(process.env.NOTION_CONSUMIVEIS_DATABASE_ID || "").trim();
-const notionConsumiveisPageId = String(process.env.NOTION_CONSUMIVEIS_PAGE_ID || "").trim();
+const notionConsumiveisPageId = normalizeNotionBlockId(process.env.NOTION_CONSUMIVEIS_PAGE_ID);
 const notionConsumiveisEnabled = Boolean(notionConsumiveis && (notionConsumiveisDatabaseId || notionConsumiveisPageId));
 const notionFeedbackApiKey = String(process.env.NOTION_FEEDBACK_API_KEY || "").trim();
 const notionFeedback = notionFeedbackApiKey ? new NotionClient({ auth: notionFeedbackApiKey }) : null;
@@ -1578,14 +1617,18 @@ async function resolveConsumiveisDatabaseIdFromPage() {
     return "";
   }
 
-  const children = await notionConsumiveis.blocks.children.list({
-    block_id: notionConsumiveisPageId,
-    page_size: 100
-  });
+  try {
+    const children = await notionConsumiveis.blocks.children.list({
+      block_id: notionConsumiveisPageId,
+      page_size: 100
+    });
 
-  const blocks = Array.isArray(children?.results) ? children.results : [];
-  const childDatabase = blocks.find((block) => String(block?.type || "") === "child_database");
-  return childDatabase?.id ? String(childDatabase.id) : "";
+    const blocks = Array.isArray(children?.results) ? children.results : [];
+    const childDatabase = blocks.find((block) => String(block?.type || "") === "child_database");
+    return childDatabase?.id ? String(childDatabase.id) : "";
+  } catch {
+    return "";
+  }
 }
 
 async function queryFeedbackRows(databaseId, limit) {
@@ -2576,6 +2619,12 @@ async function updateNotionMessageStatus({ messageId, status, rawStatus }) {
 }
 
 app.get("/api/events", (req, res) => {
+  // Long-lived SSE connections are expensive on Vercel serverless.
+  // The frontend already polls logs; disable SSE on Vercel to reduce CPU usage.
+  if (process.env.VERCEL) {
+    return res.status(204).end();
+  }
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -4146,6 +4195,16 @@ app.post("/api/botpress/events", async (req, res) => {
 });
 
 // ── Scheduling endpoints ──────────────────────────────────────────────────
+function isCronAuthorized(req) {
+  const secret = String(process.env.CRON_SECRET || "").trim();
+  if (!secret) return true;
+
+  const authHeader = String(req.headers.authorization || "").trim();
+  if (!authHeader.toLowerCase().startsWith("bearer ")) return false;
+  const token = authHeader.slice("Bearer ".length).trim();
+  return token === secret;
+}
+
 app.post("/api/messages/schedule", async (req, res) => {
   try {
     const to = normalizeRecipient(req.body?.to || "");
@@ -4175,6 +4234,27 @@ app.post("/api/messages/schedule", async (req, res) => {
 
 app.get("/api/messages/scheduled", (_req, res) => {
   return res.json({ data: scheduledMessages });
+});
+
+app.post("/api/messages/process-scheduled", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized cron trigger" });
+  }
+
+  try {
+    const stats = await processScheduledMessages();
+    return res.json({
+      ok: true,
+      ...stats,
+      pending: scheduledMessages.filter((item) => item.status === "pending").length,
+      at: new Date().toISOString()
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to process scheduled messages",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 });
 
 // ── Send media message (upload + send in one call) ─────────────────────────
@@ -4312,6 +4392,25 @@ app.get("/api/logs", async (req, res) => {
       ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 500)
       : 100;
 
+    const cacheKey = `${supabaseEnabled ? "supabase" : "pg"}:${limit}`;
+    const now = Date.now();
+    const ifNoneMatch = String(req.headers["if-none-match"] || "").trim();
+
+    if (
+      logsResponseCache.payload &&
+      logsResponseCache.key === cacheKey &&
+      logsResponseCache.expiresAt > now
+    ) {
+      if (ifNoneMatch && ifNoneMatch === logsResponseCache.etag) {
+        return res.status(304).end();
+      }
+      res.setHeader("Cache-Control", "public, max-age=2, s-maxage=5, stale-while-revalidate=20");
+      if (logsResponseCache.etag) {
+        res.setHeader("ETag", logsResponseCache.etag);
+      }
+      return res.json(logsResponseCache.payload);
+    }
+
     if (supabaseEnabled && supabase) {
       const { data, error } = await supabase
         .from("whatsapp_logs")
@@ -4324,7 +4423,20 @@ app.get("/api/logs", async (req, res) => {
         return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
       }
 
-      return res.json({ data: Array.isArray(data) ? data : [] });
+      const payload = { data: Array.isArray(data) ? data : [] };
+      const etag = `"${createHash("sha1").update(JSON.stringify(payload)).digest("hex")}"`;
+
+      logsResponseCache.key = cacheKey;
+      logsResponseCache.payload = payload;
+      logsResponseCache.etag = etag;
+      logsResponseCache.expiresAt = now + 5000;
+
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        return res.status(304).end();
+      }
+      res.setHeader("Cache-Control", "public, max-age=2, s-maxage=5, stale-while-revalidate=20");
+      res.setHeader("ETag", etag);
+      return res.json(payload);
     }
 
     const { rows } = await pgPool.query(
@@ -4335,7 +4447,20 @@ app.get("/api/logs", async (req, res) => {
       limit $1`,
       [limit, STATE_FALLBACK_CHANNEL]
     );
-    return res.json({ data: rows || [] });
+    const payload = { data: rows || [] };
+    const etag = `"${createHash("sha1").update(JSON.stringify(payload)).digest("hex")}"`;
+
+    logsResponseCache.key = cacheKey;
+    logsResponseCache.payload = payload;
+    logsResponseCache.etag = etag;
+    logsResponseCache.expiresAt = now + 5000;
+
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      return res.status(304).end();
+    }
+    res.setHeader("Cache-Control", "public, max-age=2, s-maxage=5, stale-while-revalidate=20");
+    res.setHeader("ETag", etag);
+    return res.json(payload);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch logs",
