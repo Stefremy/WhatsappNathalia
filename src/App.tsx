@@ -1096,6 +1096,44 @@ function App() {
     [selectedNotificacaoEnvioTemplate]
   );
 
+  const notificacaoIncidenciaTemplateNames = ["notificacao_auto_incidencia"];
+  const selectedNotificacaoIncidenciaTemplate = useMemo(() => {
+    const candidates = metaTemplates.filter((template) => {
+      const templateName = String(template.name || "").trim().toLowerCase();
+      return notificacaoIncidenciaTemplateNames.includes(templateName);
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const preferredPor = candidates.find((template) => {
+      const language = String(template.language || "").trim().toLowerCase();
+      return language === "por" || language.includes("por");
+    });
+    if (preferredPor) {
+      return preferredPor;
+    }
+
+    const preferredPt = candidates.find((template) => {
+      const language = String(template.language || "").trim().toLowerCase();
+      return language === "pt_pt" || language.includes("pt");
+    });
+    return preferredPt || candidates[0] || null;
+  }, [metaTemplates]);
+
+  const selectedNotificacaoDefaultTemplate = useMemo(() => {
+    if (notificacaoEnvioSection === "entregue") {
+      return selectedNotificacaoIncidenciaTemplate || selectedNotificacaoEnvioTemplate;
+    }
+    return selectedNotificacaoEnvioTemplate || selectedNotificacaoIncidenciaTemplate;
+  }, [notificacaoEnvioSection, selectedNotificacaoEnvioTemplate, selectedNotificacaoIncidenciaTemplate]);
+
+  const selectedNotificacaoDefaultTemplateBody = useMemo(
+    () => extractBodyTemplateText(selectedNotificacaoDefaultTemplate),
+    [selectedNotificacaoDefaultTemplate]
+  );
+
   const selectedMetaTemplate = useMemo(
     () => metaTemplates.find((template) => template.name === genericTemplateName) || null,
     [genericTemplateName, metaTemplates]
@@ -1702,8 +1740,10 @@ function App() {
     const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
     const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
 
-    const templateName = selectedNotificacaoEnvioTemplate?.name || notificacaoEnvioTemplateNames[0];
-    const templateLanguage = selectedNotificacaoEnvioTemplate?.language || "pt_PT";
+    const templateName =
+      selectedNotificacaoDefaultTemplate?.name ||
+      (notificacaoEnvioSection === "entregue" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
+    const templateLanguage = selectedNotificacaoDefaultTemplate?.language || "pt_PT";
 
     setGenericTemplateName(templateName);
     setGenericLanguage(templateLanguage);
@@ -1735,8 +1775,10 @@ function App() {
     const sender = String(row.sender || "").trim();
     const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
     const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
-    const templateName = selectedNotificacaoEnvioTemplate?.name || notificacaoEnvioTemplateNames[0];
-    const templateLanguage = selectedNotificacaoEnvioTemplate?.language || "pt_PT";
+    const templateName =
+      selectedNotificacaoDefaultTemplate?.name ||
+      (notificacaoEnvioSection === "entregue" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
+    const templateLanguage = selectedNotificacaoDefaultTemplate?.language || "pt_PT";
 
     prefillNotificacaoEnvioTemplateFromRow(row);
 
@@ -1748,7 +1790,7 @@ function App() {
         languageCode: templateLanguage,
         bodyVariables: [destinatario, sender, tracking],
         requiredIndexes: [1, 2, 3],
-        templateBody: selectedNotificacaoEnvioTemplateBody,
+        templateBody: selectedNotificacaoDefaultTemplateBody,
         needsUrlButtonVariable: false
       }
     });
@@ -3778,17 +3820,17 @@ function App() {
     if (activeView !== "notificacao-envio") {
       return;
     }
-    if (!selectedNotificacaoEnvioTemplate) {
+    if (!selectedNotificacaoDefaultTemplate) {
       return;
     }
-    if (genericTemplateName !== selectedNotificacaoEnvioTemplate.name) {
-      setGenericTemplateName(selectedNotificacaoEnvioTemplate.name);
+    if (genericTemplateName !== selectedNotificacaoDefaultTemplate.name) {
+      setGenericTemplateName(selectedNotificacaoDefaultTemplate.name);
     }
-    const templateLanguage = selectedNotificacaoEnvioTemplate.language || "pt_PT";
+    const templateLanguage = selectedNotificacaoDefaultTemplate.language || "pt_PT";
     if (genericLanguage !== templateLanguage) {
       setGenericLanguage(templateLanguage);
     }
-  }, [activeView, selectedNotificacaoEnvioTemplate, genericTemplateName, genericLanguage]);
+  }, [activeView, selectedNotificacaoDefaultTemplate, genericTemplateName, genericLanguage]);
 
   useEffect(() => {
     if (activeView === "clientes" && clientesRows.length === 0 && !clientesLoading) {
