@@ -1094,6 +1094,108 @@ async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
   };
 }
 
+async function fetchTmsInDistributionShipmentsData({ page = 1, limit = 250 } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchInDistributionDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+    requestBody.set("status", "4");
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=4`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS in-distribution shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  // Datatable comes oldest -> newest; compute an offset from the end so page 1 is newest first.
+  const probePayload = await fetchInDistributionDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPage = Math.min(safePage, totalPages);
+  const sourceStart = Math.max(0, total - (boundedPage * safeLimit));
+  const sourceEndExclusive = Math.max(0, total - ((boundedPage - 1) * safeLimit));
+  const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+
+  const payload = await fetchInDistributionDatatablePage(boundedPage, sourceStart, sourceLength);
+  const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
+
+  return {
+    rows,
+    meta: {
+      page: boundedPage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin/shipments?filter=1&status=4`
+    }
+  };
+}
+
 function parseTmsStatusFromLink(html, linkClassName, fallbackStatus = "") {
   const escapedClass = String(linkClassName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`${escapedClass}[\\s\\S]*?href=\\"([^\\"]+)\\"`, "i");
@@ -4649,6 +4751,25 @@ app.get("/api/tms/delivered", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch delivered TMS shipments",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/in-distribution", async (req, res) => {
+  try {
+    const requestedPage = Number(req.query?.page || 1);
+    const requestedLimit = Number(req.query?.limit || 250);
+
+    const data = await fetchTmsInDistributionShipmentsData({
+      page: requestedPage,
+      limit: requestedLimit
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch in-distribution TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }

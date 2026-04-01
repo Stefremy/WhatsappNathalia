@@ -369,7 +369,7 @@ function humanizeUsername(username: string) {
     .join(" ");
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" }) {
   switch (name) {
     case "overview":
       return (
@@ -399,6 +399,13 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 3.75a4 4 0 0 1 4 4v.55a3.7 3.7 0 0 0 1.05 2.6l.42.43a1.8 1.8 0 0 1-1.28 3.07H7.8a1.8 1.8 0 0 1-1.28-3.07l.42-.43A3.7 3.7 0 0 0 8 8.3v-.55a4 4 0 0 1 4-4Zm1.9 12.65a2 2 0 0 1-3.8 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "notificacao":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.75 7.25A2.5 2.5 0 0 1 7.25 4.75h9.5a2.5 2.5 0 0 1 2.5 2.5v9.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m6.5 8.25 5.5 4.5 5.5-4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "calling":
@@ -853,6 +860,11 @@ function App() {
   const [deliveredDateTo, setDeliveredDateTo] = useState("");
   const [deliveredSearchQuery, setDeliveredSearchQuery] = useState("");
   const [deliveredRangeMode, setDeliveredRangeMode] = useState(false);
+  const [inDistributionRows, setInDistributionRows] = useState<TmsDeliveredShipment[]>([]);
+  const [inDistributionLoading, setInDistributionLoading] = useState(false);
+  const [inDistributionError, setInDistributionError] = useState("");
+  const [inDistributionPage, setInDistributionPage] = useState(1);
+  const [inDistributionTotal, setInDistributionTotal] = useState(0);
   const [feedbackStoreLookup, setFeedbackStoreLookup] = useState("");
   const [feedbackLookupStatus, setFeedbackLookupStatus] = useState("");
   const [feedbackCreateOpen, setFeedbackCreateOpen] = useState(false);
@@ -927,7 +939,7 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback" | "clientes">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback" | "clientes">("workspace");
 
   // ── WhatsApp Calling page state ─────────────────────────────────────────
   const [callingPermPhone, setCallingPermPhone] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
@@ -1054,6 +1066,21 @@ function App() {
     [activeConversationId, conversations]
   );
 
+  const notificacaoEnvioTemplateNames = ["notificao_de_envio", "notificacao_de_envio"];
+  const selectedNotificacaoEnvioTemplate = useMemo(
+    () =>
+      metaTemplates.find((template) => {
+        const templateName = String(template.name || "").trim().toLowerCase();
+        return notificacaoEnvioTemplateNames.includes(templateName);
+      }) || null,
+    [metaTemplates]
+  );
+
+  const selectedNotificacaoEnvioTemplateBody = useMemo(
+    () => extractBodyTemplateText(selectedNotificacaoEnvioTemplate),
+    [selectedNotificacaoEnvioTemplate]
+  );
+
   const selectedMetaTemplate = useMemo(
     () => metaTemplates.find((template) => template.name === genericTemplateName) || null,
     [genericTemplateName, metaTemplates]
@@ -1117,6 +1144,7 @@ function App() {
   const detailsPageSize = 25;
   const feedbackPageSize = 100;
   const deliveredPageSize = 250;
+  const inDistributionPageSize = 250;
 
   const filteredSortedFeedbackRows = useMemo(() => {
     const withEntregaDate = feedbackRows.filter((row) =>
@@ -1143,6 +1171,11 @@ function App() {
   const deliveredTotalPages = useMemo(
     () => Math.max(1, Math.ceil((deliveredTotal || deliveredRows.length) / deliveredPageSize)),
     [deliveredRows.length, deliveredTotal]
+  );
+
+  const inDistributionTotalPages = useMemo(
+    () => Math.max(1, Math.ceil((inDistributionTotal || inDistributionRows.length) / inDistributionPageSize)),
+    [inDistributionRows.length, inDistributionTotal]
   );
 
   const filteredDeliveredRows = useMemo(() => {
@@ -2414,6 +2447,8 @@ function App() {
     const templateEntries = templateHistory.map((item) => ({
       id: item.id,
       channel: "template",
+      templateName: String(item.templateName || "").trim(),
+      languageCode: "",
       to: item.to,
       content: item.previewText,
       status: item.status,
@@ -2429,6 +2464,8 @@ function App() {
       return sharedLogs.map((item) => ({
         id: String(item.id),
         channel: String(item.channel || "chat"),
+        templateName: String(item.template_name || "").trim(),
+        languageCode: String((item.payload as { languageCode?: string } | null)?.languageCode || "").trim(),
         to: item.contact_name
           ? `${item.contact_name} (${String(item.to_number || "")})`
           : String(item.to_number || ""),
@@ -2562,6 +2599,28 @@ function App() {
 
   const feedbackBridgeHistory = useMemo(() => {
     return displayedHistory.slice(0, 12);
+  }, [displayedHistory]);
+
+  const notificacaoEnvioHistory = useMemo(() => {
+    const targetNames = new Set(notificacaoEnvioTemplateNames.map((name) => String(name || "").trim().toLowerCase()));
+    const ptLanguageCodes = new Set(["pt_pt", "pt-pt", "pt"]);
+
+    return displayedHistory
+      .filter((item) => String(item.channel || "").toLowerCase() === "template")
+      .filter((item) => {
+        const templateName = String((item as { templateName?: string }).templateName || "").trim().toLowerCase();
+        if (!templateName || !targetNames.has(templateName)) {
+          return false;
+        }
+
+        const languageCode = String((item as { languageCode?: string }).languageCode || "").trim().toLowerCase();
+        if (!languageCode) {
+          return true;
+        }
+
+        return ptLanguageCodes.has(languageCode);
+      })
+      .slice(0, 12);
   }, [displayedHistory]);
 
   const trackerRows = useMemo(() => {
@@ -2903,6 +2962,33 @@ function App() {
       })
       .finally(() => {
         setDeliveredLoading(false);
+      });
+  }
+
+  function loadInDistributionShipments(page = inDistributionPage) {
+    const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+
+    setInDistributionLoading(true);
+    setInDistributionError("");
+
+    fetch(apiUrl(`/api/tms/in-distribution?page=${targetPage}&limit=${inDistributionPageSize}`))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha TMS Em distribuicao (${response.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const total = Number(data?.meta?.total || rows.length) || rows.length;
+        setInDistributionRows(rows as TmsDeliveredShipment[]);
+        setInDistributionTotal(total);
+        setInDistributionPage(targetPage);
+      })
+      .catch((error) => {
+        setInDistributionError(error instanceof Error ? error.message : "Nao foi possivel carregar envios em distribuicao.");
+      })
+      .finally(() => {
+        setInDistributionLoading(false);
       });
   }
 
@@ -3500,6 +3586,41 @@ function App() {
       }
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "notificacao-envio" && inDistributionRows.length === 0 && !inDistributionLoading) {
+      loadInDistributionShipments(1);
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView !== "notificacao-envio") {
+      return;
+    }
+    if (metaTemplatesLoading) {
+      return;
+    }
+    if (metaTemplates.length > 0) {
+      return;
+    }
+    void fetchMetaTemplates();
+  }, [activeView, metaTemplatesLoading, metaTemplates.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView !== "notificacao-envio") {
+      return;
+    }
+    if (!selectedNotificacaoEnvioTemplate) {
+      return;
+    }
+    if (genericTemplateName !== selectedNotificacaoEnvioTemplate.name) {
+      setGenericTemplateName(selectedNotificacaoEnvioTemplate.name);
+    }
+    const templateLanguage = selectedNotificacaoEnvioTemplate.language || "pt_PT";
+    if (genericLanguage !== templateLanguage) {
+      setGenericLanguage(templateLanguage);
+    }
+  }, [activeView, selectedNotificacaoEnvioTemplate, genericTemplateName, genericLanguage]);
 
   useEffect(() => {
     if (activeView === "clientes" && clientesRows.length === 0 && !clientesLoading) {
@@ -4738,6 +4859,14 @@ function App() {
               <span className="workspace-nav-icon"><SidebarIcon name="upload" /></span>
               <span>Media Upload</span>
             </a>
+            <button
+              type="button"
+              className={`workspace-nav-separator workspace-nav-separator-button${activeView === "notificacao-envio" ? " active" : ""}`}
+              onClick={() => setActiveView("notificacao-envio")}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="notificacao" /></span>
+              <span className="workspace-nav-separator-label">Notificação de Envio</span>
+            </button>
             <a href="#generic-template-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
               <span>Template Notifications</span>
@@ -5883,6 +6012,266 @@ function App() {
         </button>
       </section>
             </div>
+          ) : activeView === "notificacao-envio" ? (
+            <section className="panel tracker-page" id="notificacao-envio-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Notificação de Envio</h2>
+                  <p>Envios em distribuicao do Linke Portal (status=4).</p>
+                </div>
+                <div className="tracker-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => loadInDistributionShipments(inDistributionPage)}
+                    disabled={inDistributionLoading}
+                  >
+                    {inDistributionLoading ? "A atualizar..." : "Atualizar em distribuicao"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setActiveView("workspace");
+                      window.location.hash = "generic-template-console";
+                    }}
+                  >
+                    Abrir Template Notifications
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    Voltar ao Workspace
+                  </button>
+                </div>
+              </div>
+
+              <section className="panel">
+                <h3>Em distribuicao (status=4)</h3>
+                <p>Vista explicita apenas para envios em distribuicao.</p>
+
+                {inDistributionError ? <p className="status">{inDistributionError}</p> : null}
+
+                <div className="tracker-table-wrap delivered-scroll-wrap delivered-table-wrap">
+                  <table className="tracker-table delivered-table">
+                    <thead>
+                      <tr>
+                        <th>Parcel ID</th>
+                        <th>Tracking Number</th>
+                        <th>Service</th>
+                        <th>Sender</th>
+                        <th>Destinatário</th>
+                        <th>Final Client Phone</th>
+                        <th>Data Recolha</th>
+                        <th>Data Entrega</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inDistributionRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="tracker-empty">
+                            {inDistributionLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar."}
+                          </td>
+                        </tr>
+                      ) : (
+                        inDistributionRows.map((row, index) => (
+                          <tr key={`in-distribution-${row.parcelId || row.providerTrackingCode || index}-${index}`}>
+                            <td>{row.parcelId || "-"}</td>
+                            <td>{row.providerTrackingCode || "-"}</td>
+                            <td>{row.service || "-"}</td>
+                            <td>{row.sender || "-"}</td>
+                            <td>{row.recipient || "-"}</td>
+                            <td>{row.finalClientPhone || "-"}</td>
+                            <td>{row.pickupDate || "-"}</td>
+                            <td>{row.deliveryDate || "-"}</td>
+                            <td>{row.status || "-"}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="tracker-pagination delivered-pagination">
+                  <div className="tracker-page-size">
+                    <span>Rows per page</span>
+                    <span>250</span>
+                  </div>
+
+                  <span className="tracker-page-label">
+                    {(inDistributionTotal || inDistributionRows.length) === 0
+                      ? "0 results"
+                      : `${(inDistributionPage - 1) * inDistributionPageSize + 1}-${Math.min(inDistributionPage * inDistributionPageSize, inDistributionTotal || inDistributionRows.length)} of ${inDistributionTotal || inDistributionRows.length}`}
+                  </span>
+
+                  <div className="tracker-page-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary tracker-page-btn"
+                      onClick={() => loadInDistributionShipments(Math.max(1, inDistributionPage - 1))}
+                      disabled={inDistributionPage <= 1 || inDistributionLoading}
+                    >
+                      Previous
+                    </button>
+                    <span>Page {inDistributionPage} / {inDistributionTotalPages}</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary tracker-page-btn"
+                      onClick={() => loadInDistributionShipments(Math.min(inDistributionTotalPages, inDistributionPage + 1))}
+                      disabled={inDistributionPage >= inDistributionTotalPages || inDistributionLoading}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+
+                <section className="tms-panel tracker-console-panel" style={{ marginTop: "1rem" }}>
+                  <div className="tracker-console-grid">
+                    <article id="notificacao-template-console" className="tms-block tracker-console-card">
+                      <div className="tracker-console-card-head">
+                        <h4>Template</h4>
+                        <button
+                          className="btn btn-secondary"
+                          type="button"
+                          onClick={fetchMetaTemplates}
+                          disabled={metaTemplatesLoading}
+                        >
+                          {metaTemplatesLoading ? "A carregar..." : "Atualizar templates"}
+                        </button>
+                      </div>
+
+                      <article className="template-chat-box tracker-template-chat-box">
+                        <header>
+                          <strong>{genericTemplateName || notificacaoEnvioTemplateNames[0]}</strong>
+                          <span>{genericLanguage || "pt_PT"}</span>
+                        </header>
+                        <div className="template-thread">
+                          <article className="wa-msg in">
+                            <p>{genericTo || "Número (E.164)"}</p>
+                            <time>{metaTemplatesStatus}</time>
+                          </article>
+                          <article className="wa-msg out">
+                            <p>
+                              {selectedTemplatePreview || selectedNotificacaoEnvioTemplateBody || "Template notificao_de_envio/notificacao_de_envio não encontrado entre os templates aprovados."}
+                            </p>
+                            <time>{metaTemplatesLoading ? "a carregar templates" : genericLoading ? "a enviar" : genericStatus}</time>
+                          </article>
+                        </div>
+                      </article>
+
+                      <form className="api-form tracker-template-form" onSubmit={sendGenericTemplate}>
+                        <label>
+                          Número (E.164)
+                          <input
+                            value={genericTo}
+                            onChange={(event) => setGenericTo(event.target.value)}
+                            placeholder="+351912858229"
+                          />
+                        </label>
+
+                        <label>
+                          Template
+                          <select
+                            value={genericTemplateName}
+                            onChange={(event) => {
+                              const chosen = metaTemplates.find((item) => item.name === event.target.value) || null;
+                              setGenericTemplateName(event.target.value);
+                              if (chosen?.language) {
+                                setGenericLanguage(chosen.language);
+                              }
+                            }}
+                          >
+                            {metaTemplates.length === 0 ? <option value="">Sem templates carregados</option> : null}
+                            {metaTemplates.map((template) => (
+                              <option key={template.id || template.name} value={template.name}>
+                                {template.name} ({template.language || "pt_PT"})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Idioma
+                          <input
+                            value={genericLanguage}
+                            onChange={(event) => setGenericLanguage(event.target.value)}
+                            placeholder="pt_PT"
+                          />
+                        </label>
+
+                        {requiredBodyVarCount > 0 ? (
+                          <div className="template-var-grid">
+                            {requiredBodyIndexes.map((index) => (
+                              <label key={`notificacao-var-${index}`}>
+                                Variável {`{{${index}}}`}
+                                <input
+                                  value={genericBodyVars[index] || ""}
+                                  onChange={(event) =>
+                                    setGenericBodyVars((current) => ({
+                                      ...current,
+                                      [index]: event.target.value
+                                    }))
+                                  }
+                                  placeholder={`Valor para {{${index}}}`}
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {needsUrlButtonVariable ? (
+                          <label>
+                            Variável do botão URL
+                            <input
+                              value={genericButtonUrlVariable}
+                              onChange={(event) => setGenericButtonUrlVariable(event.target.value)}
+                              placeholder="variável dinâmica de URL"
+                            />
+                          </label>
+                        ) : null}
+
+                        <div className="api-actions">
+                          <button className="wa-send" type="submit" disabled={genericLoading}>
+                            {genericLoading ? "A enviar..." : "Enviar template"}
+                          </button>
+                          <span className={`wa-live-status ${genericLoading ? "busy" : ""}`}>
+                            {genericLoading ? "A enviar" : "Inativo"}
+                          </span>
+                        </div>
+                        <span className="status">{metaTemplatesStatus}</span>
+                      </form>
+                    </article>
+
+                    <article className="tms-block tracker-console-history">
+                      <h4>Histórico recente</h4>
+                      {notificacaoEnvioHistory.length === 0 ? (
+                        <p className="tms-empty">Sem histórico disponível.</p>
+                      ) : (
+                        <div className="sent-history-list">
+                          {notificacaoEnvioHistory.map((item) => (
+                            <article key={`notificacao-history-${item.channel}-${item.id}`} className="sent-history-item">
+                              <header>
+                                <strong>{item.channel === "template" ? "Template" : "Mensagem"}</strong>
+                                <span>{item.time}</span>
+                              </header>
+                              <p>Para: {item.to}</p>
+                              <p>{item.content}</p>
+                              <span className={`status sent-history-status sent-history-status-${statusTone(item.status, item.channel)}`}>
+                                <span className="sent-history-dot" aria-hidden="true" />
+                                Estado: {item.status}
+                              </span>
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  </div>
+                </section>
+              </section>
+            </section>
           ) : activeView === "tracker" ? (
             <section className="panel tracker-page" id="client-tracker-page">
               <div className="tracker-header">

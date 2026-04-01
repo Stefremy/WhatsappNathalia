@@ -203,6 +203,55 @@ body {
   gap: 0.35rem;
 }
 
+.workspace-nav-separator {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin: 0.35rem 0 0.15rem;
+  padding: 0.45rem 0.55rem 0.35rem;
+  color: rgba(218, 232, 224, 0.82);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.workspace-nav-separator span {
+  display: inline-flex;
+}
+
+.workspace-nav-separator .workspace-nav-icon {
+  width: 18px;
+  min-width: 18px;
+  text-align: center;
+  opacity: 0.9;
+}
+
+.workspace-nav-separator .workspace-nav-separator-label {
+  display: block;
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  padding-top: 0.42rem;
+}
+
+.workspace-nav-separator-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.workspace-nav-separator-button:hover,
+.workspace-nav-separator-button.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateX(2px);
+}
+
 .workspace-nav-link {
   display: flex;
   align-items: center;
