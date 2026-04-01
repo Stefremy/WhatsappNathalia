@@ -286,6 +286,26 @@ body {
   cursor: pointer;
 }
 
+.workspace-nav-sublink {
+  margin-left: 1.25rem;
+  width: calc(100% - 1.25rem);
+  padding-top: 0.64rem;
+  padding-bottom: 0.64rem;
+  font-size: 0.9rem;
+  color: rgba(224, 238, 230, 0.76);
+}
+
+.workspace-nav-sublink .workspace-nav-icon {
+  font-size: 0.9rem;
+  width: 10px;
+  min-width: 10px;
+  opacity: 0.9;
+}
+
+.workspace-nav-sublink.active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
 .workspace-content {
   padding: 1.4rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(239, 245, 240, 0.3));

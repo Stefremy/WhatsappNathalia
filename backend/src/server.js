@@ -51,6 +51,8 @@ function broadcastSSE(event, data) {
 const scheduledMessages = [];
 const recentCallEvents = [];
 const MAX_CALL_EVENTS = 100;
+let autoNotificacaoEnvioRunning = false;
+let autoNotificacaoEnvioLastRunDateKey = "";
 const GOOGLE_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const googleOauthSession = {
   accessToken: "",
@@ -143,9 +145,138 @@ async function processScheduledMessages() {
   return { processed, sent, failed };
 }
 
+function getLisbonClockParts() {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Lisbon",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(new Date());
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const dateKey = `${lookup.year || "0000"}-${lookup.month || "00"}-${lookup.day || "00"}`;
+
+  return {
+    dateKey,
+    weekday: String(lookup.weekday || ""),
+    hour: Number(lookup.hour || 0),
+    minute: Number(lookup.minute || 0)
+  };
+}
+
+async function fetchAllTmsInDistributionShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+  const allRows = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const pageData = await fetchTmsInDistributionShipmentsData({ page, limit });
+    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
+    allRows.push(...rows);
+
+    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
+    page += 1;
+  }
+
+  return allRows;
+}
+
+async function runAutoNotificacaoEnvioForInDistribution() {
+  const templateName = String(process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE || "notificacao_de_envio").trim();
+  const languageCode = String(process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE || "pt_PT").trim() || "pt_PT";
+
+  // Refresh source data first (equivalent to clicking "Atualizar em distribuicao").
+  const rows = await fetchAllTmsInDistributionShipmentsData({ limit: 250, maxPages: 40 });
+
+  let processed = 0;
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const to = normalizeRecipient(String(row?.finalClientPhone || ""));
+    if (!to) {
+      continue;
+    }
+
+    const var1 = String(row?.recipient || "").trim();
+    const var2 = String(row?.sender || "").trim();
+    const var3 = String(row?.providerTrackingCode || row?.parcelId || "").trim();
+
+    processed += 1;
+
+    const result = await sendGenericTemplateMessage({
+      to,
+      templateName,
+      languageCode,
+      bodyVariables: [var1, var2, var3],
+      trackerContext: {
+        clientName: var1,
+        parcelId: var3,
+        messageType: "Em distribuicao",
+        notes: var2
+      }
+    });
+
+    if (result.ok) {
+      sent += 1;
+    } else {
+      failed += 1;
+    }
+  }
+
+  return {
+    processed,
+    sent,
+    failed,
+    fetchedRows: rows.length,
+    templateName,
+    languageCode
+  };
+}
+
+async function maybeRunAutoNotificacaoEnvioSchedule() {
+  const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
+  const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
+  if (!enabled) {
+    return;
+  }
+
+  const parts = getLisbonClockParts();
+  const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
+  const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
+  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
+
+  if (!isWeekday || parts.hour !== targetHour || parts.minute !== targetMinute) {
+    return;
+  }
+
+  if (autoNotificacaoEnvioLastRunDateKey === parts.dateKey || autoNotificacaoEnvioRunning) {
+    return;
+  }
+
+  autoNotificacaoEnvioRunning = true;
+  try {
+    const summary = await runAutoNotificacaoEnvioForInDistribution();
+    autoNotificacaoEnvioLastRunDateKey = parts.dateKey;
+    console.log("[auto-notificacao-envio]", summary);
+  } catch (error) {
+    console.error("[auto-notificacao-envio] failed", error instanceof Error ? error.message : error);
+  } finally {
+    autoNotificacaoEnvioRunning = false;
+  }
+}
+
 // Avoid perpetual background timers in serverless environments.
 if (!process.env.VERCEL) {
   setInterval(processScheduledMessages, 15000);
+  setInterval(() => {
+    void maybeRunAutoNotificacaoEnvioSchedule();
+  }, 30_000);
 }
 
 const logsResponseCache = {
@@ -1047,14 +1178,14 @@ async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
     requestBody.set("start", String(Math.max(0, Math.trunc(start))));
     requestBody.set("length", String(Math.max(1, Math.trunc(length))));
     requestBody.set("filter", "1");
-    requestBody.set("status", "5");
+    requestBody.set("status", "9");
 
     const shipmentsRes = await fetch(shipmentsEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
-        Referer: `${baseUrl}/admin/shipments?filter=1&status=5`,
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=9`,
         Cookie: cookieJarHeader(cookieJar)
       },
       body: requestBody.toString(),
@@ -1089,7 +1220,7 @@ async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
       total,
       totalPages,
       fetchedAt: new Date().toISOString(),
-      source: `${baseUrl}/admin/shipments?filter=1&status=5`
+      source: `${baseUrl}/admin/shipments?filter=1&status=9`
     }
   };
 }
@@ -1192,6 +1323,107 @@ async function fetchTmsInDistributionShipmentsData({ page = 1, limit = 250 } = {
       totalPages,
       fetchedAt: new Date().toISOString(),
       source: `${baseUrl}/admin/shipments?filter=1&status=4`
+    }
+  };
+}
+
+async function fetchTmsIncidenceShipmentsData({ page = 1, limit = 250 } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchIncidenceDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+    requestBody.set("status", "5");
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=5`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS incidence shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  const probePayload = await fetchIncidenceDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPage = Math.min(safePage, totalPages);
+  const sourceStart = Math.max(0, total - (boundedPage * safeLimit));
+  const sourceEndExclusive = Math.max(0, total - ((boundedPage - 1) * safeLimit));
+  const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+
+  const payload = await fetchIncidenceDatatablePage(boundedPage, sourceStart, sourceLength);
+  const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
+
+  return {
+    rows,
+    meta: {
+      page: boundedPage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin/shipments?filter=1&status=5`
     }
   };
 }
@@ -1301,14 +1533,14 @@ async function fetchTmsDashboardData() {
     incidenceShipmentsBody.set("draw", "1");
     incidenceShipmentsBody.set("start", "0");
     incidenceShipmentsBody.set("length", "100");
-    incidenceShipmentsBody.set("status", "9");
+    incidenceShipmentsBody.set("status", "5");
 
     const incidenceShipmentsRes = await fetch(incidenceShipmentsEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
-        Referer: `${baseUrl}/admin/shipments?status=9`,
+        Referer: `${baseUrl}/admin/shipments?status=5`,
         Cookie: cookieJarHeader(cookieJar)
       },
       body: incidenceShipmentsBody.toString(),
@@ -3770,35 +4002,39 @@ app.post("/api/templates/send-return-to-sender", async (req, res) => {
   }
 });
 
-app.post("/api/templates/send-generic", async (req, res) => {
+async function sendGenericTemplateMessage({
+  to,
+  templateName,
+  languageCode,
+  bodyVariables = [],
+  buttonUrlVariable = "",
+  trackerContext = null
+}) {
   try {
-    const to = normalizeRecipient(req.body?.to || "");
-    const templateName = String(req.body?.templateName || "").trim();
-    const languageCode = String(
-      req.body?.languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT"
-    ).trim();
-
-    const bodyVariablesInput = Array.isArray(req.body?.bodyVariables)
-      ? req.body.bodyVariables
+    const normalizedTo = normalizeRecipient(to || "");
+    const cleanTemplateName = String(templateName || "").trim();
+    const cleanLanguageCode = String(languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || "pt_PT").trim() || "pt_PT";
+    const cleanBodyVariables = Array.isArray(bodyVariables)
+      ? bodyVariables.map((value) => String(value ?? "").trim()).filter(Boolean)
       : [];
-    const bodyVariables = bodyVariablesInput
-      .map((value) => String(value ?? "").trim())
-      .filter(Boolean);
-
-    const buttonUrlVariable = String(req.body?.buttonUrlVariable || "").trim();
-    const trackerContext = req.body?.trackerContext && typeof req.body.trackerContext === "object"
+    const cleanButtonUrlVariable = String(buttonUrlVariable || "").trim();
+    const cleanTrackerContext = trackerContext && typeof trackerContext === "object"
       ? {
-          clientName: String(req.body.trackerContext.clientName || "").trim(),
-          parcelId: String(req.body.trackerContext.parcelId || "").trim(),
-          messageType: String(req.body.trackerContext.messageType || "").trim(),
-          notes: String(req.body.trackerContext.notes || "").trim()
+          clientName: String(trackerContext.clientName || "").trim(),
+          parcelId: String(trackerContext.parcelId || "").trim(),
+          messageType: String(trackerContext.messageType || "").trim(),
+          notes: String(trackerContext.notes || "").trim()
         }
       : null;
 
-    if (!to || !templateName) {
-      return res.status(400).json({
-        error: "Fields 'to' and 'templateName' are required."
-      });
+    if (!normalizedTo || !cleanTemplateName) {
+      return {
+        ok: false,
+        status: 400,
+        finalBody: {
+          error: "Fields 'to' and 'templateName' are required."
+        }
+      };
     }
 
     const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
@@ -3808,26 +4044,26 @@ app.post("/api/templates/send-generic", async (req, res) => {
     const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
     const components = [];
 
-    if (bodyVariables.length > 0) {
+    if (cleanBodyVariables.length > 0) {
       components.push({
         type: "body",
-        parameters: bodyVariables.map((text) => ({ type: "text", text }))
+        parameters: cleanBodyVariables.map((text) => ({ type: "text", text }))
       });
     }
 
-    if (buttonUrlVariable) {
+    if (cleanButtonUrlVariable) {
       components.push({
         type: "button",
         sub_type: "url",
         index: "0",
-        parameters: [{ type: "text", text: buttonUrlVariable }]
+        parameters: [{ type: "text", text: cleanButtonUrlVariable }]
       });
     }
 
     const templatePayload = {
-      name: templateName,
+      name: cleanTemplateName,
       language: {
-        code: languageCode
+        code: cleanLanguageCode
       }
     };
 
@@ -3838,7 +4074,7 @@ app.post("/api/templates/send-generic", async (req, res) => {
     const payload = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
-      to,
+      to: normalizedTo,
       type: "template",
       template: templatePayload
     };
@@ -3857,8 +4093,8 @@ app.post("/api/templates/send-generic", async (req, res) => {
 
     const notionWarning = await safeNotionLog(() =>
       createNotionMessageRow({
-        to,
-        text: `Template ${templateName} | Vars: ${bodyVariables.join(" | ")}`,
+        to: normalizedTo,
+        text: `Template ${cleanTemplateName} | Vars: ${cleanBodyVariables.join(" | ")}`,
         status: response.ok ? "accepted" : `failed_${response.status}`,
         messageId,
         rawResponse: responseBody
@@ -3867,11 +4103,11 @@ app.post("/api/templates/send-generic", async (req, res) => {
 
     const notionTrackerWarning = await safeNotionTrackerLog(() =>
       createNotionTrackerRow({
-        to,
-        templateName,
-        bodyVariables,
+        to: normalizedTo,
+        templateName: cleanTemplateName,
+        bodyVariables: cleanBodyVariables,
         status: response.ok ? "accepted" : `failed_${response.status}`,
-        trackerContext,
+        trackerContext: cleanTrackerContext,
         rawResponse: responseBody
       })
     );
@@ -3880,9 +4116,9 @@ app.post("/api/templates/send-generic", async (req, res) => {
       createSupabaseLogRow({
         direction: "out",
         channel: "template",
-        to,
-        messageText: bodyVariables.join(" | "),
-        templateName,
+        to: normalizedTo,
+        messageText: cleanBodyVariables.join(" | "),
+        templateName: cleanTemplateName,
         status: response.ok ? "accepted" : `failed_${response.status}`,
         apiMessageId: messageId,
         payload: responseBody
@@ -3890,17 +4126,17 @@ app.post("/api/templates/send-generic", async (req, res) => {
     );
 
     const smsFallbackMessage = buildTemplateFallbackText({
-      templateName,
-      bodyVariables,
-      buttonUrlVariable
+      templateName: cleanTemplateName,
+      bodyVariables: cleanBodyVariables,
+      buttonUrlVariable: cleanButtonUrlVariable
     });
 
     const smsFallback = !response.ok
       ? await maybeSendAutomaticSmsFallback({
-          to,
+          to: normalizedTo,
           message: smsFallbackMessage,
           source: "wa_template_failure",
-          templateName,
+          templateName: cleanTemplateName,
           waStatus: `failed_${response.status}`,
           waResponse: responseBody
         })
@@ -3923,13 +4159,34 @@ app.post("/api/templates/send-generic", async (req, res) => {
       finalBody._smsFallback = smsFallback;
     }
 
-    return res.status(response.ok ? 200 : response.status).json(finalBody);
+    return {
+      ok: response.ok,
+      status: response.ok ? 200 : response.status,
+      finalBody
+    };
   } catch (error) {
-    return res.status(500).json({
-      error: "Failed to send generic template message",
-      details: error instanceof Error ? error.message : "Unknown error"
-    });
+    return {
+      ok: false,
+      status: 500,
+      finalBody: {
+        error: "Failed to send generic template message",
+        details: error instanceof Error ? error.message : "Unknown error"
+      }
+    };
   }
+}
+
+app.post("/api/templates/send-generic", async (req, res) => {
+  const result = await sendGenericTemplateMessage({
+    to: req.body?.to,
+    templateName: req.body?.templateName,
+    languageCode: req.body?.languageCode,
+    bodyVariables: req.body?.bodyVariables,
+    buttonUrlVariable: req.body?.buttonUrlVariable,
+    trackerContext: req.body?.trackerContext
+  });
+
+  return res.status(result.status).json(result.finalBody);
 });
 
 app.post("/api/sms/clicksend", async (req, res) => {
@@ -4770,6 +5027,25 @@ app.get("/api/tms/in-distribution", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch in-distribution TMS shipments",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/incidencias", async (req, res) => {
+  try {
+    const requestedPage = Number(req.query?.page || 1);
+    const requestedLimit = Number(req.query?.limit || 250);
+
+    const data = await fetchTmsIncidenceShipmentsData({
+      page: requestedPage,
+      limit: requestedLimit
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch incidence TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }

@@ -369,6 +369,14 @@ function humanizeUsername(username: string) {
     .join(" ");
 }
 
+function formatE164FromPortugalPhone(phoneInput: string) {
+  const phoneDigits = digitsOnly(phoneInput || "");
+  if (!phoneDigits) return "";
+  if (phoneDigits.length === 9) return `+351${phoneDigits}`;
+  if (phoneDigits.startsWith("351")) return `+${phoneDigits}`;
+  return `+${phoneDigits}`;
+}
+
 function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" }) {
   switch (name) {
     case "overview":
@@ -865,6 +873,13 @@ function App() {
   const [inDistributionError, setInDistributionError] = useState("");
   const [inDistributionPage, setInDistributionPage] = useState(1);
   const [inDistributionTotal, setInDistributionTotal] = useState(0);
+  const [incidenciasRows, setIncidenciasRows] = useState<TmsDeliveredShipment[]>([]);
+  const [incidenciasLoading, setIncidenciasLoading] = useState(false);
+  const [incidenciasError, setIncidenciasError] = useState("");
+  const [incidenciasPage, setIncidenciasPage] = useState(1);
+  const [incidenciasTotal, setIncidenciasTotal] = useState(0);
+  const [notificacaoEnvioSection, setNotificacaoEnvioSection] = useState<"distribuicao" | "entregue" | "incidencias">("distribuicao");
+  const [notificacaoHistoryPage, setNotificacaoHistoryPage] = useState(1);
   const [feedbackStoreLookup, setFeedbackStoreLookup] = useState("");
   const [feedbackLookupStatus, setFeedbackLookupStatus] = useState("");
   const [feedbackCreateOpen, setFeedbackCreateOpen] = useState(false);
@@ -1145,6 +1160,7 @@ function App() {
   const feedbackPageSize = 100;
   const deliveredPageSize = 250;
   const inDistributionPageSize = 250;
+  const notificacaoHistoryPageSize = 50;
 
   const filteredSortedFeedbackRows = useMemo(() => {
     const withEntregaDate = feedbackRows.filter((row) =>
@@ -1177,6 +1193,52 @@ function App() {
     () => Math.max(1, Math.ceil((inDistributionTotal || inDistributionRows.length) / inDistributionPageSize)),
     [inDistributionRows.length, inDistributionTotal]
   );
+
+  const incidenciasTotalPages = useMemo(
+    () => Math.max(1, Math.ceil((incidenciasTotal || incidenciasRows.length) / inDistributionPageSize)),
+    [incidenciasRows.length, incidenciasTotal]
+  );
+  const notificacaoRows = useMemo(
+    () => (
+      notificacaoEnvioSection === "distribuicao"
+        ? inDistributionRows
+        : notificacaoEnvioSection === "entregue"
+          ? deliveredRows
+          : incidenciasRows
+    ),
+    [notificacaoEnvioSection, inDistributionRows, deliveredRows, incidenciasRows]
+  );
+  const notificacaoLoading =
+    notificacaoEnvioSection === "distribuicao"
+      ? inDistributionLoading
+      : notificacaoEnvioSection === "entregue"
+        ? deliveredLoading
+        : incidenciasLoading;
+  const notificacaoError =
+    notificacaoEnvioSection === "distribuicao"
+      ? inDistributionError
+      : notificacaoEnvioSection === "entregue"
+        ? deliveredError
+        : incidenciasError;
+  const notificacaoTotal =
+    notificacaoEnvioSection === "distribuicao"
+      ? (inDistributionTotal || inDistributionRows.length)
+      : notificacaoEnvioSection === "entregue"
+        ? (deliveredTotal || deliveredRows.length)
+        : (incidenciasTotal || incidenciasRows.length);
+  const notificacaoPage =
+    notificacaoEnvioSection === "distribuicao"
+      ? inDistributionPage
+      : notificacaoEnvioSection === "entregue"
+        ? deliveredPage
+        : incidenciasPage;
+  const notificacaoTotalPages =
+    notificacaoEnvioSection === "distribuicao"
+      ? inDistributionTotalPages
+      : notificacaoEnvioSection === "entregue"
+        ? deliveredTotalPages
+        : incidenciasTotalPages;
+  const notificacaoPageSize = notificacaoEnvioSection === "entregue" ? deliveredPageSize : inDistributionPageSize;
 
   const filteredDeliveredRows = useMemo(() => {
     const query = deliveredSearchQuery.trim().toLowerCase();
@@ -1632,6 +1694,64 @@ function App() {
       trackerTemplateToInputRef.current?.focus();
       trackerTemplateToInputRef.current?.select();
     }, 80);
+  }
+
+  function prefillNotificacaoEnvioTemplateFromRow(row: TmsDeliveredShipment) {
+    const destinatario = String(row.recipient || "").trim();
+    const sender = String(row.sender || "").trim();
+    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
+    const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
+
+    const templateName = selectedNotificacaoEnvioTemplate?.name || notificacaoEnvioTemplateNames[0];
+    const templateLanguage = selectedNotificacaoEnvioTemplate?.language || "pt_PT";
+
+    setGenericTemplateName(templateName);
+    setGenericLanguage(templateLanguage);
+    setGenericTo(to);
+    setGenericBodyVars((prev) => ({
+      ...prev,
+      1: destinatario,
+      2: sender,
+      3: tracking
+    }));
+    setGenericTrackerContext({
+      clientName: destinatario,
+      parcelId: tracking,
+      messageType: "Em distribuicao",
+      notes: sender
+    });
+    setGenericStatus("Template pré-preenchido com dados da tabela.");
+
+    window.setTimeout(() => {
+      const templateCard = document.getElementById("notificacao-template-console");
+      if (templateCard) {
+        templateCard.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 80);
+  }
+
+  async function autoSendNotificacaoEnvioFromRow(row: TmsDeliveredShipment) {
+    const destinatario = String(row.recipient || "").trim();
+    const sender = String(row.sender || "").trim();
+    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
+    const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
+    const templateName = selectedNotificacaoEnvioTemplate?.name || notificacaoEnvioTemplateNames[0];
+    const templateLanguage = selectedNotificacaoEnvioTemplate?.language || "pt_PT";
+
+    prefillNotificacaoEnvioTemplateFromRow(row);
+
+    await executeGenericTemplateSend({
+      allowSchedule: false,
+      overrides: {
+        to,
+        templateName,
+        languageCode: templateLanguage,
+        bodyVariables: [destinatario, sender, tracking],
+        requiredIndexes: [1, 2, 3],
+        templateBody: selectedNotificacaoEnvioTemplateBody,
+        needsUrlButtonVariable: false
+      }
+    });
   }
 
   // Feature 1: Contact book
@@ -2619,9 +2739,18 @@ function App() {
         }
 
         return ptLanguageCodes.has(languageCode);
-      })
-      .slice(0, 12);
+      });
   }, [displayedHistory]);
+
+  const notificacaoHistoryTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(notificacaoEnvioHistory.length / notificacaoHistoryPageSize)),
+    [notificacaoEnvioHistory.length]
+  );
+
+  const paginatedNotificacaoHistory = useMemo(() => {
+    const start = (notificacaoHistoryPage - 1) * notificacaoHistoryPageSize;
+    return notificacaoEnvioHistory.slice(start, start + notificacaoHistoryPageSize);
+  }, [notificacaoEnvioHistory, notificacaoHistoryPage]);
 
   const trackerRows = useMemo(() => {
     if (sharedLogs.length > 0) {
@@ -2989,6 +3118,33 @@ function App() {
       })
       .finally(() => {
         setInDistributionLoading(false);
+      });
+  }
+
+  function loadIncidenciasShipments(page = incidenciasPage) {
+    const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+
+    setIncidenciasLoading(true);
+    setIncidenciasError("");
+
+    fetch(apiUrl(`/api/tms/incidencias?page=${targetPage}&limit=${inDistributionPageSize}`))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha TMS Incidencias (${response.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const total = Number(data?.meta?.total || rows.length) || rows.length;
+        setIncidenciasRows(rows as TmsDeliveredShipment[]);
+        setIncidenciasTotal(total);
+        setIncidenciasPage(targetPage);
+      })
+      .catch((error) => {
+        setIncidenciasError(error instanceof Error ? error.message : "Nao foi possivel carregar envios em incidencias.");
+      })
+      .finally(() => {
+        setIncidenciasLoading(false);
       });
   }
 
@@ -3594,6 +3750,18 @@ function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (activeView === "notificacao-envio" && notificacaoEnvioSection === "entregue" && deliveredRows.length === 0 && !deliveredLoading) {
+      loadDeliveredShipments(1);
+    }
+  }, [activeView, notificacaoEnvioSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "notificacao-envio" && notificacaoEnvioSection === "incidencias" && incidenciasRows.length === 0 && !incidenciasLoading) {
+      loadIncidenciasShipments(1);
+    }
+  }, [activeView, notificacaoEnvioSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (activeView !== "notificacao-envio") {
       return;
     }
@@ -3640,6 +3808,12 @@ function App() {
       setFeedbackPage(feedbackTotalPages);
     }
   }, [feedbackPage, feedbackTotalPages]);
+
+  useEffect(() => {
+    if (notificacaoHistoryPage > notificacaoHistoryTotalPages) {
+      setNotificacaoHistoryPage(notificacaoHistoryTotalPages);
+    }
+  }, [notificacaoHistoryPage, notificacaoHistoryTotalPages]);
 
   const endpoint = useMemo(() => {
     const cleanVersion = apiVersion.trim() || "v23.0";
@@ -4867,6 +5041,48 @@ function App() {
               <span className="workspace-nav-icon"><SidebarIcon name="notificacao" /></span>
               <span className="workspace-nav-separator-label">Notificação de Envio</span>
             </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button workspace-nav-sublink${
+                activeView === "notificacao-envio" && notificacaoEnvioSection === "distribuicao" ? " active" : ""
+              }`}
+              onClick={() => {
+                setActiveView("notificacao-envio");
+                setNotificacaoEnvioSection("distribuicao");
+              }}
+            >
+              <span className="workspace-nav-icon" aria-hidden="true">•</span>
+              <span>Em distribuicao</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button workspace-nav-sublink${
+                activeView === "notificacao-envio" && notificacaoEnvioSection === "entregue" ? " active" : ""
+              }`}
+              onClick={() => {
+                setActiveView("notificacao-envio");
+                setNotificacaoEnvioSection("entregue");
+              }}
+            >
+              <span className="workspace-nav-icon" aria-hidden="true">•</span>
+              <span>Incidencias</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button workspace-nav-sublink${
+                activeView === "notificacao-envio" && notificacaoEnvioSection === "incidencias" ? " active" : ""
+              }`}
+              onClick={() => {
+                setActiveView("notificacao-envio");
+                setNotificacaoEnvioSection("incidencias");
+                if (incidenciasRows.length === 0 && !incidenciasLoading) {
+                  loadIncidenciasShipments(1);
+                }
+              }}
+            >
+              <span className="workspace-nav-icon" aria-hidden="true">•</span>
+              <span>Entregue</span>
+            </button>
             <a href="#generic-template-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
               <span>Template Notifications</span>
@@ -6049,15 +6265,56 @@ function App() {
               </div>
 
               <section className="panel">
-                <h3>Em distribuicao (status=4)</h3>
-                <p>Vista explicita apenas para envios em distribuicao.</p>
+                <div className="tracker-filter-buttons" role="group" aria-label="Secoes Notificacao de Envio">
+                  <button
+                    type="button"
+                    className={`tracker-filter-btn${notificacaoEnvioSection === "distribuicao" ? " active" : ""}`}
+                    onClick={() => setNotificacaoEnvioSection("distribuicao")}
+                  >
+                    Em distribuicao
+                  </button>
+                  <button
+                    type="button"
+                    className={`tracker-filter-btn${notificacaoEnvioSection === "entregue" ? " active" : ""}`}
+                    onClick={() => {
+                      setNotificacaoEnvioSection("entregue");
+                      if (deliveredRows.length === 0 && !deliveredLoading) {
+                        loadDeliveredShipments(1);
+                      }
+                    }}
+                  >
+                    Incidencias
+                  </button>
+                  <button
+                    type="button"
+                    className={`tracker-filter-btn${notificacaoEnvioSection === "incidencias" ? " active" : ""}`}
+                    onClick={() => {
+                      setNotificacaoEnvioSection("incidencias");
+                      if (incidenciasRows.length === 0 && !incidenciasLoading) {
+                        loadIncidenciasShipments(1);
+                      }
+                    }}
+                  >
+                    Entregue
+                  </button>
+                </div>
 
-                {inDistributionError ? <p className="status">{inDistributionError}</p> : null}
+                <h3>{notificacaoEnvioSection === "distribuicao" ? "Em distribuicao (status=4)" : notificacaoEnvioSection === "entregue" ? "Incidencias (status=5)" : "Entregue (status=9)"}</h3>
+                <p>
+                  {notificacaoEnvioSection === "distribuicao"
+                    ? "Vista explicita apenas para envios em distribuicao."
+                    : notificacaoEnvioSection === "entregue"
+                      ? "Vista explicita apenas para envios em incidencias."
+                      : "Vista explicita apenas para envios em entregue."}
+                </p>
+
+                {notificacaoError ? <p className="status">{notificacaoError}</p> : null}
 
                 <div className="tracker-table-wrap delivered-scroll-wrap delivered-table-wrap">
                   <table className="tracker-table delivered-table">
                     <thead>
                       <tr>
+                        <th>Ação</th>
                         <th>Parcel ID</th>
                         <th>Tracking Number</th>
                         <th>Service</th>
@@ -6070,15 +6327,41 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {inDistributionRows.length === 0 ? (
+                      {notificacaoRows.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="tracker-empty">
-                            {inDistributionLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar."}
+                          <td colSpan={10} className="tracker-empty">
+                            {notificacaoEnvioSection === "distribuicao"
+                              ? (notificacaoLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar.")
+                              : notificacaoEnvioSection === "entregue"
+                                ? (notificacaoLoading ? "A carregar envios em incidencias..." : "Sem envios em incidencias para mostrar.")
+                                : (notificacaoLoading ? "A carregar envios em entregue..." : "Sem envios em entregue para mostrar.")}
                           </td>
                         </tr>
                       ) : (
-                        inDistributionRows.map((row, index) => (
+                        notificacaoRows.map((row, index) => (
                           <tr key={`in-distribution-${row.parcelId || row.providerTrackingCode || index}-${index}`}>
+                            <td>
+                              <div className="tracker-pudo-actions">
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary tms-mini-btn"
+                                  onClick={() => prefillNotificacaoEnvioTemplateFromRow(row)}
+                                  disabled={!digitsOnly(row.finalClientPhone || "")}
+                                >
+                                  Preencher
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary tms-mini-btn"
+                                  onClick={() => {
+                                    void autoSendNotificacaoEnvioFromRow(row);
+                                  }}
+                                  disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading}
+                                >
+                                  Enviar auto
+                                </button>
+                              </div>
+                            </td>
                             <td>{row.parcelId || "-"}</td>
                             <td>{row.providerTrackingCode || "-"}</td>
                             <td>{row.service || "-"}</td>
@@ -6102,26 +6385,44 @@ function App() {
                   </div>
 
                   <span className="tracker-page-label">
-                    {(inDistributionTotal || inDistributionRows.length) === 0
+                    {notificacaoTotal === 0
                       ? "0 results"
-                      : `${(inDistributionPage - 1) * inDistributionPageSize + 1}-${Math.min(inDistributionPage * inDistributionPageSize, inDistributionTotal || inDistributionRows.length)} of ${inDistributionTotal || inDistributionRows.length}`}
+                      : `${(notificacaoPage - 1) * notificacaoPageSize + 1}-${Math.min(notificacaoPage * notificacaoPageSize, notificacaoTotal)} of ${notificacaoTotal}`}
                   </span>
 
                   <div className="tracker-page-actions">
                     <button
                       type="button"
                       className="btn btn-secondary tracker-page-btn"
-                      onClick={() => loadInDistributionShipments(Math.max(1, inDistributionPage - 1))}
-                      disabled={inDistributionPage <= 1 || inDistributionLoading}
+                      onClick={() => {
+                        if (notificacaoEnvioSection === "distribuicao") {
+                          loadInDistributionShipments(Math.max(1, inDistributionPage - 1));
+                        } else if (notificacaoEnvioSection === "entregue") {
+                          loadDeliveredShipments(Math.max(1, deliveredPage - 1));
+                        } else {
+                          loadIncidenciasShipments(Math.max(1, incidenciasPage - 1));
+                        }
+                      }}
+                      disabled={notificacaoPage <= 1 || notificacaoLoading}
                     >
                       Previous
                     </button>
-                    <span>Page {inDistributionPage} / {inDistributionTotalPages}</span>
+                    <span>
+                      Page {notificacaoPage} / {notificacaoTotalPages}
+                    </span>
                     <button
                       type="button"
                       className="btn btn-secondary tracker-page-btn"
-                      onClick={() => loadInDistributionShipments(Math.min(inDistributionTotalPages, inDistributionPage + 1))}
-                      disabled={inDistributionPage >= inDistributionTotalPages || inDistributionLoading}
+                      onClick={() => {
+                        if (notificacaoEnvioSection === "distribuicao") {
+                          loadInDistributionShipments(Math.min(inDistributionTotalPages, inDistributionPage + 1));
+                        } else if (notificacaoEnvioSection === "entregue") {
+                          loadDeliveredShipments(Math.min(deliveredTotalPages, deliveredPage + 1));
+                        } else {
+                          loadIncidenciasShipments(Math.min(incidenciasTotalPages, incidenciasPage + 1));
+                        }
+                      }}
+                      disabled={notificacaoPage >= notificacaoTotalPages || notificacaoLoading}
                     >
                       Next
                     </button>
@@ -6247,11 +6548,15 @@ function App() {
 
                     <article className="tms-block tracker-console-history">
                       <h4>Histórico recente</h4>
+                      <span className="status">
+                        {notificacaoEnvioHistory.length} mensagens do template
+                      </span>
                       {notificacaoEnvioHistory.length === 0 ? (
                         <p className="tms-empty">Sem histórico disponível.</p>
                       ) : (
+                        <>
                         <div className="sent-history-list">
-                          {notificacaoEnvioHistory.map((item) => (
+                          {paginatedNotificacaoHistory.map((item) => (
                             <article key={`notificacao-history-${item.channel}-${item.id}`} className="sent-history-item">
                               <header>
                                 <strong>{item.channel === "template" ? "Template" : "Mensagem"}</strong>
@@ -6266,6 +6571,39 @@ function App() {
                             </article>
                           ))}
                         </div>
+                        <div className="tracker-pagination">
+                          <div className="tracker-page-size">
+                            <span>Rows per page</span>
+                            <span>{notificacaoHistoryPageSize}</span>
+                          </div>
+
+                          <span className="tracker-page-label">
+                            {notificacaoEnvioHistory.length === 0
+                              ? "0 results"
+                              : `${(notificacaoHistoryPage - 1) * notificacaoHistoryPageSize + 1}-${Math.min(notificacaoHistoryPage * notificacaoHistoryPageSize, notificacaoEnvioHistory.length)} of ${notificacaoEnvioHistory.length}`}
+                          </span>
+
+                          <div className="tracker-page-actions">
+                            <button
+                              type="button"
+                              className="btn btn-secondary tracker-page-btn"
+                              onClick={() => setNotificacaoHistoryPage((page) => Math.max(1, page - 1))}
+                              disabled={notificacaoHistoryPage <= 1}
+                            >
+                              Previous
+                            </button>
+                            <span>Page {notificacaoHistoryPage} / {notificacaoHistoryTotalPages}</span>
+                            <button
+                              type="button"
+                              className="btn btn-secondary tracker-page-btn"
+                              onClick={() => setNotificacaoHistoryPage((page) => Math.min(notificacaoHistoryTotalPages, page + 1))}
+                              disabled={notificacaoHistoryPage >= notificacaoHistoryTotalPages}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                        </>
                       )}
                     </article>
                   </div>
