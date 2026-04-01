@@ -11,9 +11,11 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const jsonBodyLimit = String(process.env.JSON_BODY_LIMIT || "2mb").trim() || "2mb";
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: jsonBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }
@@ -2904,10 +2906,27 @@ async function ensureGoogleAccessToken() {
   return googleOauthSession.accessToken;
 }
 
+function sanitizeMimeHeaderValue(value) {
+  return String(value || "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeMimeHeaderUtf8(value) {
+  const cleanValue = sanitizeMimeHeaderValue(value);
+  if (!cleanValue) return "";
+  if (/^[\x00-\x7F]*$/.test(cleanValue)) return cleanValue;
+  return `=?UTF-8?B?${Buffer.from(cleanValue, "utf8").toString("base64")}?=`;
+}
+
+function encodeMimeBodyBase64Utf8(value) {
+  const base64 = Buffer.from(String(value ?? ""), "utf8").toString("base64");
+  const chunks = base64.match(/.{1,76}/g);
+  return chunks ? chunks.join("\r\n") : "";
+}
+
 app.post("/api/google/email/send", async (req, res) => {
   try {
-    const to = String(req.body?.to || "").trim();
-    const subject = String(req.body?.subject || "").trim();
+    const to = sanitizeMimeHeaderValue(req.body?.to || "");
+    const subject = sanitizeMimeHeaderValue(req.body?.subject || "");
     const body = String(req.body?.body || "").trim();
     const htmlBodyInput = String(req.body?.htmlBody || "").trim();
     const requestedHtml = Boolean(req.body?.sendAsHtml);
@@ -2926,10 +2945,13 @@ app.post("/api/google/email/send", async (req, res) => {
       : escapeHtml(effectiveHtmlBody).replace(/\r?\n/g, "<br>");
     const plainBodyFromHtml = stripHtml(normalizedHtml) || "(mensagem vazia)";
     const plainBody = body || plainBodyFromHtml || "(mensagem vazia)";
+    const encodedSubject = encodeMimeHeaderUtf8(subject || "(sem assunto)");
+    const encodedPlainBody = encodeMimeBodyBase64Utf8(plainBody);
+    const encodedHtmlBody = encodeMimeBodyBase64Utf8(normalizedHtml || "<p>(mensagem vazia)</p>");
 
     const mimeLines = [
       `To: ${to}`,
-      `Subject: ${subject || "(sem assunto)"}`,
+      `Subject: ${encodedSubject}`,
       "MIME-Version: 1.0"
     ];
 
@@ -2939,21 +2961,22 @@ app.post("/api/google/email/send", async (req, res) => {
       mimeLines.push("");
       mimeLines.push(`--${boundary}`);
       mimeLines.push("Content-Type: text/plain; charset=UTF-8");
-      mimeLines.push("Content-Transfer-Encoding: 7bit");
+      mimeLines.push("Content-Transfer-Encoding: base64");
       mimeLines.push("");
-      mimeLines.push(plainBody);
+      mimeLines.push(encodedPlainBody);
       mimeLines.push("");
       mimeLines.push(`--${boundary}`);
       mimeLines.push("Content-Type: text/html; charset=UTF-8");
-      mimeLines.push("Content-Transfer-Encoding: 7bit");
+      mimeLines.push("Content-Transfer-Encoding: base64");
       mimeLines.push("");
-      mimeLines.push(normalizedHtml || "<p>(mensagem vazia)</p>");
+      mimeLines.push(encodedHtmlBody);
       mimeLines.push("");
       mimeLines.push(`--${boundary}--`);
     } else {
       mimeLines.push("Content-Type: text/plain; charset=UTF-8");
+      mimeLines.push("Content-Transfer-Encoding: base64");
       mimeLines.push("");
-      mimeLines.push(plainBody);
+      mimeLines.push(encodedPlainBody);
     }
 
     const raw = Buffer.from(mimeLines.join("\r\n"), "utf8")
@@ -4977,6 +5000,17 @@ app.post("/api/calls/manage", async (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: "Failed to manage call", details: error instanceof Error ? error.message : "Unknown error" });
   }
+});
+
+app.use((error, _req, res, next) => {
+  if (error?.type === "entity.too.large" || Number(error?.status) === 413) {
+    return res.status(413).json({
+      error: "Payload too large",
+      details: "Email demasiado grande. Reduz o conteúdo e tenta novamente."
+    });
+  }
+
+  return next(error);
 });
 
 if (!process.env.VERCEL) {

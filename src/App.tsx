@@ -2995,7 +2995,10 @@ function App() {
 
       const data = await parseResponse(response);
       if (!response.ok) {
-        throw new Error(String(data?.details?.error?.message || data?.details || data?.error || `Falha Email (${response.status})`));
+        const fallbackError = response.status === 413
+          ? "Email demasiado grande (413). Reduz o conteúdo e tenta novamente."
+          : `Falha Email (${response.status})`;
+        throw new Error(String(data?.details?.error?.message || data?.details || data?.error || fallbackError));
       }
 
       setClientesEmailStatus("Email enviado ✓");
