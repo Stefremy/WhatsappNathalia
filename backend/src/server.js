@@ -8,6 +8,9 @@ import { Pool } from "pg";
 import https from "https";
 import http from "http";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+import { readFile, writeFile } from "fs/promises";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -53,6 +56,19 @@ const recentCallEvents = [];
 const MAX_CALL_EVENTS = 100;
 let autoNotificacaoEnvioRunning = false;
 let autoNotificacaoEnvioLastRunDateKey = "";
+let autoNotificacaoIncidenciaRunning = false;
+let autoNotificacaoIncidenciaLastRunSlotKey = "";
+let autoNotificacaoIncidenciaStateHydrated = false;
+let autoNotificacaoIncidenciaInitialized = false;
+const autoNotificacaoIncidenciaKnownKeys = new Set();
+const autoNotificacaoIncidenciaSentKeys = new Set();
+const autoNotificacaoIncidenciaPendingEntries = new Map();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const autoNotificacaoIncidenciaStateFile = resolve(
+  __dirname,
+  "../.auto_notificacao_incidencia_state.json"
+);
 const GOOGLE_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const googleOauthSession = {
   accessToken: "",
@@ -62,6 +78,76 @@ const googleOauthSession = {
   tokenType: "Bearer"
 };
 let googleOauthSessionHydrated = false;
+
+function buildIncidenciaShipmentKey(row) {
+  const parcelId = String(row?.parcelId || "").trim();
+  const tracking = String(row?.providerTrackingCode || "").trim();
+  return `${parcelId}|${tracking}`;
+}
+
+async function hydrateAutoNotificacaoIncidenciaState() {
+  if (autoNotificacaoIncidenciaStateHydrated) {
+    return;
+  }
+
+  try {
+    const raw = await readFile(autoNotificacaoIncidenciaStateFile, "utf8");
+    const parsed = JSON.parse(raw || "{}") || {};
+
+    autoNotificacaoIncidenciaInitialized = Boolean(parsed.initialized);
+
+    for (const key of Array.isArray(parsed.knownKeys) ? parsed.knownKeys : []) {
+      const clean = String(key || "").trim();
+      if (clean) autoNotificacaoIncidenciaKnownKeys.add(clean);
+    }
+
+    for (const key of Array.isArray(parsed.sentKeys) ? parsed.sentKeys : []) {
+      const clean = String(key || "").trim();
+      if (clean) autoNotificacaoIncidenciaSentKeys.add(clean);
+    }
+
+    const pending = parsed.pendingEntries && typeof parsed.pendingEntries === "object"
+      ? parsed.pendingEntries
+      : {};
+    for (const [key, value] of Object.entries(pending)) {
+      const clean = String(key || "").trim();
+      if (!clean || !value || typeof value !== "object") continue;
+      autoNotificacaoIncidenciaPendingEntries.set(clean, {
+        to: String(value.to || "").trim(),
+        destinatario: String(value.destinatario || "").trim(),
+        parcelId: String(value.parcelId || "").trim(),
+        sender: String(value.sender || "").trim()
+      });
+    }
+  } catch {
+    // Ignore missing or invalid persisted state; scheduler will bootstrap.
+  } finally {
+    autoNotificacaoIncidenciaStateHydrated = true;
+  }
+}
+
+async function persistAutoNotificacaoIncidenciaState() {
+  const pendingEntries = {};
+  for (const [key, value] of autoNotificacaoIncidenciaPendingEntries.entries()) {
+    pendingEntries[key] = value;
+  }
+
+  const payload = {
+    initialized: autoNotificacaoIncidenciaInitialized,
+    knownKeys: Array.from(autoNotificacaoIncidenciaKnownKeys),
+    sentKeys: Array.from(autoNotificacaoIncidenciaSentKeys),
+    pendingEntries
+  };
+
+  try {
+    await writeFile(autoNotificacaoIncidenciaStateFile, JSON.stringify(payload, null, 2), "utf8");
+  } catch (error) {
+    console.error(
+      "[auto-notificacao-incidencia] failed to persist state",
+      error instanceof Error ? error.message : error
+    );
+  }
+}
 
 async function processScheduledMessages() {
   const now = Date.now();
@@ -186,6 +272,162 @@ async function fetchAllTmsInDistributionShipmentsData({ limit = 250, maxPages = 
   return allRows;
 }
 
+async function fetchAllTmsIncidenceShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+  const allRows = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const pageData = await fetchTmsIncidenceShipmentsData({ page, limit });
+    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
+    allRows.push(...rows);
+
+    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
+    page += 1;
+  }
+
+  return allRows;
+}
+
+function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
+  const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
+
+  if (isWeekend) {
+    // Weekend: every 6 hours (00:00, 06:00, 12:00, 18:00 Lisbon time).
+    return parts.minute === 0 && (parts.hour % 6) === 0;
+  }
+
+  // Weekdays: every 30 minutes from 09:00 to 19:30 Lisbon time.
+  if (parts.hour < 9 || parts.hour > 19) {
+    return false;
+  }
+
+  if (parts.minute !== 0 && parts.minute !== 30) {
+    return false;
+  }
+
+  if (parts.hour === 19 && parts.minute !== 30) {
+    return false;
+  }
+
+  return true;
+}
+
+async function maybeRunAutoNotificacaoIncidenciaSchedule() {
+  const enabledRaw = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_ENABLED || "true").trim().toLowerCase();
+  const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
+  if (!enabled || autoNotificacaoIncidenciaRunning) {
+    return;
+  }
+
+  const parts = getLisbonClockParts();
+  if (!shouldRunAutoNotificacaoIncidenciaAtClock(parts)) {
+    return;
+  }
+
+  const slotKey = `${parts.dateKey} ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+  if (autoNotificacaoIncidenciaLastRunSlotKey === slotKey) {
+    return;
+  }
+
+  autoNotificacaoIncidenciaLastRunSlotKey = slotKey;
+
+  autoNotificacaoIncidenciaRunning = true;
+  try {
+    await hydrateAutoNotificacaoIncidenciaState();
+
+    // Refresh source data each cycle to detect newly appeared incidence rows.
+    const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
+    const templateName = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_TEMPLATE || "notificacao_auto_incidencia").trim();
+    const languageCode = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_LANGUAGE || "POR").trim() || "POR";
+
+    const freshEntries = [];
+    for (const row of rows) {
+      const shipmentKey = buildIncidenciaShipmentKey(row);
+      if (!shipmentKey) continue;
+
+      const to = normalizeRecipient(String(row?.finalClientPhone || ""));
+      const destinatario = String(row?.recipient || "").trim();
+      const parcelId = String(row?.parcelId || "").trim();
+      const sender = String(row?.sender || "").trim();
+
+      if (!to) continue;
+
+      if (!autoNotificacaoIncidenciaKnownKeys.has(shipmentKey)) {
+        autoNotificacaoIncidenciaKnownKeys.add(shipmentKey);
+        freshEntries.push({
+          shipmentKey,
+          to,
+          destinatario,
+          parcelId,
+          sender
+        });
+      }
+    }
+
+    if (!autoNotificacaoIncidenciaInitialized) {
+      autoNotificacaoIncidenciaInitialized = true;
+      await persistAutoNotificacaoIncidenciaState();
+      console.log("[auto-notificacao-incidencia] bootstrap complete", {
+        trackedKeys: autoNotificacaoIncidenciaKnownKeys.size,
+        fetchedRows: rows.length
+      });
+      return;
+    }
+
+    let processed = 0;
+    let sent = 0;
+    let failed = 0;
+
+    for (const entry of freshEntries) {
+      if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
+      autoNotificacaoIncidenciaPendingEntries.set(entry.shipmentKey, entry);
+    }
+
+    for (const [shipmentKey, entry] of autoNotificacaoIncidenciaPendingEntries.entries()) {
+      processed += 1;
+      const result = await sendGenericTemplateMessage({
+        to: entry.to,
+        templateName,
+        languageCode,
+        bodyVariables: [entry.destinatario, entry.parcelId, entry.sender],
+        trackerContext: {
+          clientName: entry.destinatario,
+          parcelId: entry.parcelId,
+          messageType: "Incidencia",
+          notes: entry.sender
+        }
+      });
+
+      if (result.ok) {
+        sent += 1;
+        autoNotificacaoIncidenciaSentKeys.add(shipmentKey);
+        autoNotificacaoIncidenciaPendingEntries.delete(shipmentKey);
+      } else {
+        failed += 1;
+      }
+    }
+
+    await persistAutoNotificacaoIncidenciaState();
+    if (processed > 0 || freshEntries.length > 0) {
+      console.log("[auto-notificacao-incidencia]", {
+        processed,
+        sent,
+        failed,
+        pending: autoNotificacaoIncidenciaPendingEntries.size,
+        freshEntries: freshEntries.length,
+        fetchedRows: rows.length,
+        templateName,
+        languageCode
+      });
+    }
+  } catch (error) {
+    console.error("[auto-notificacao-incidencia] failed", error instanceof Error ? error.message : error);
+  } finally {
+    autoNotificacaoIncidenciaRunning = false;
+  }
+}
+
 async function runAutoNotificacaoEnvioForInDistribution() {
   const templateName = String(process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE || "notificacao_de_envio").trim();
   const languageCode = String(process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE || "pt_PT").trim() || "pt_PT";
@@ -276,6 +518,7 @@ if (!process.env.VERCEL) {
   setInterval(processScheduledMessages, 15000);
   setInterval(() => {
     void maybeRunAutoNotificacaoEnvioSchedule();
+    void maybeRunAutoNotificacaoIncidenciaSchedule();
   }, 30_000);
 }
 
@@ -1178,14 +1421,14 @@ async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
     requestBody.set("start", String(Math.max(0, Math.trunc(start))));
     requestBody.set("length", String(Math.max(1, Math.trunc(length))));
     requestBody.set("filter", "1");
-    requestBody.set("status", "9");
+    requestBody.set("status", "5");
 
     const shipmentsRes = await fetch(shipmentsEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
-        Referer: `${baseUrl}/admin/shipments?filter=1&status=9`,
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=5`,
         Cookie: cookieJarHeader(cookieJar)
       },
       body: requestBody.toString(),
@@ -1220,7 +1463,7 @@ async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
       total,
       totalPages,
       fetchedAt: new Date().toISOString(),
-      source: `${baseUrl}/admin/shipments?filter=1&status=9`
+      source: `${baseUrl}/admin/shipments?filter=1&status=5`
     }
   };
 }
@@ -1382,14 +1625,14 @@ async function fetchTmsIncidenceShipmentsData({ page = 1, limit = 250 } = {}) {
     requestBody.set("start", String(Math.max(0, Math.trunc(start))));
     requestBody.set("length", String(Math.max(1, Math.trunc(length))));
     requestBody.set("filter", "1");
-    requestBody.set("status", "5");
+    requestBody.set("status", "9");
 
     const shipmentsRes = await fetch(shipmentsEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
-        Referer: `${baseUrl}/admin/shipments?filter=1&status=5`,
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=9`,
         Cookie: cookieJarHeader(cookieJar)
       },
       body: requestBody.toString(),
@@ -1423,7 +1666,7 @@ async function fetchTmsIncidenceShipmentsData({ page = 1, limit = 250 } = {}) {
       total,
       totalPages,
       fetchedAt: new Date().toISOString(),
-      source: `${baseUrl}/admin/shipments?filter=1&status=5`
+      source: `${baseUrl}/admin/shipments?filter=1&status=9`
     }
   };
 }
