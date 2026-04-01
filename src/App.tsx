@@ -691,6 +691,20 @@ function templateNeedsUrlButtonVariable(template: MetaTemplate | null) {
   return hasUrlButton && hasUrlPlaceholder;
 }
 
+function fixCommonMojibake(value: string) {
+  const text = String(value || "");
+  if (!text) return "";
+  const looksBroken = /(?:Ã.|Â.|â.|ð)/.test(text);
+  if (!looksBroken) return text;
+
+  try {
+    const repaired = decodeURIComponent(escape(text));
+    return repaired.includes("\uFFFD") ? text : repaired;
+  } catch {
+    return text;
+  }
+}
+
 function App() {
   const [apiVersion, setApiVersion] = useState(
     import.meta.env.VITE_WHATSAPP_API_VERSION ?? "v23.0"
@@ -2951,8 +2965,8 @@ function App() {
       return;
     }
 
-    const subject = String(clientesEmailSubject || "").trim();
-    const body = String(clientesEmailBody || "").trim();
+    const subject = fixCommonMojibake(String(clientesEmailSubject || "").trim());
+    const body = fixCommonMojibake(String(clientesEmailBody || "").trim());
 
     if (mode === "gmail") {
       const url = new URL("https://mail.google.com/mail/");
@@ -2978,6 +2992,9 @@ function App() {
       return;
     }
 
+    const normalizedSubject = fixCommonMojibake(String(clientesEmailSubject || "").trim());
+    const normalizedBody = fixCommonMojibake(String(clientesEmailBody || "").trim());
+
     setClientesEmailSending(true);
     setClientesEmailStatus("A enviar email...");
     try {
@@ -2986,10 +3003,10 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to,
-          subject: clientesEmailSubject,
-          body: clientesEmailBody,
+          subject: normalizedSubject,
+          body: normalizedBody,
           sendAsHtml: clientesEmailAsHtml,
-          htmlBody: clientesEmailAsHtml ? clientesEmailBody : undefined
+          htmlBody: clientesEmailAsHtml ? normalizedBody : undefined
         })
       });
 

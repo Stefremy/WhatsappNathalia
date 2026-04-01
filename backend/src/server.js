@@ -2923,12 +2923,27 @@ function encodeMimeBodyBase64Utf8(value) {
   return chunks ? chunks.join("\r\n") : "";
 }
 
+function fixCommonMojibake(value) {
+  const text = String(value ?? "");
+  if (!text) return "";
+
+  // Heuristic for UTF-8 bytes previously decoded as latin1 (e.g., "negÃ³cio").
+  const looksBroken = /(?:Ã.|Â.|â.|ð)/.test(text);
+  if (!looksBroken) {
+    return text;
+  }
+
+  const repaired = Buffer.from(text, "latin1").toString("utf8");
+  const hasReplacementChar = repaired.includes("\uFFFD");
+  return hasReplacementChar ? text : repaired;
+}
+
 app.post("/api/google/email/send", async (req, res) => {
   try {
     const to = sanitizeMimeHeaderValue(req.body?.to || "");
-    const subject = sanitizeMimeHeaderValue(req.body?.subject || "");
-    const body = String(req.body?.body || "").trim();
-    const htmlBodyInput = String(req.body?.htmlBody || "").trim();
+    const subject = sanitizeMimeHeaderValue(fixCommonMojibake(req.body?.subject || ""));
+    const body = fixCommonMojibake(String(req.body?.body || "").trim());
+    const htmlBodyInput = fixCommonMojibake(String(req.body?.htmlBody || "").trim());
     const requestedHtml = Boolean(req.body?.sendAsHtml);
 
     if (!to) {
