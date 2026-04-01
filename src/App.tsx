@@ -944,6 +944,14 @@ function App() {
       return {};
     }
   });
+  const [notificacaoSendingKey, setNotificacaoSendingKey] = useState("");
+  const [notificacaoSentKeys, setNotificacaoSentKeys] = useState<Record<string, true>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wa_notificacao_sent_keys") || "{}") as Record<string, true>;
+    } catch {
+      return {};
+    }
+  });
   const [consumiveisForm, setConsumiveisForm] = useState({
     clientName: "",
     dateSent: "",
@@ -1737,7 +1745,7 @@ function App() {
   function prefillNotificacaoEnvioTemplateFromRow(row: TmsDeliveredShipment) {
     const destinatario = String(row.recipient || "").trim();
     const sender = String(row.sender || "").trim();
-    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
+    const parcelId = String(row.parcelId || "").trim();
     const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
 
     const templateName =
@@ -1751,12 +1759,12 @@ function App() {
     setGenericBodyVars((prev) => ({
       ...prev,
       1: destinatario,
-      2: sender,
-      3: tracking
+      2: parcelId,
+      3: sender
     }));
     setGenericTrackerContext({
       clientName: destinatario,
-      parcelId: tracking,
+      parcelId,
       messageType: "Em distribuicao",
       notes: sender
     });
@@ -1771,29 +1779,52 @@ function App() {
   }
 
   async function autoSendNotificacaoEnvioFromRow(row: TmsDeliveredShipment) {
+    const shipmentKey = String(row.parcelId || row.providerTrackingCode || "").trim();
+    if (shipmentKey && notificacaoSentKeys[shipmentKey]) {
+      setGenericStatus("Esta encomenda já foi notificada anteriormente.");
+      return;
+    }
+
     const destinatario = String(row.recipient || "").trim();
     const sender = String(row.sender || "").trim();
-    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
+    const parcelId = String(row.parcelId || "").trim();
     const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
     const templateName =
       selectedNotificacaoDefaultTemplate?.name ||
       (notificacaoEnvioSection === "entregue" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
     const templateLanguage = selectedNotificacaoDefaultTemplate?.language || "pt_PT";
 
+    if (shipmentKey) {
+      setNotificacaoSendingKey(shipmentKey);
+    }
+
     prefillNotificacaoEnvioTemplateFromRow(row);
 
-    await executeGenericTemplateSend({
-      allowSchedule: false,
-      overrides: {
-        to,
-        templateName,
-        languageCode: templateLanguage,
-        bodyVariables: [destinatario, sender, tracking],
-        requiredIndexes: [1, 2, 3],
-        templateBody: selectedNotificacaoDefaultTemplateBody,
-        needsUrlButtonVariable: false
+    try {
+      const sendResult = await executeGenericTemplateSend({
+        allowSchedule: false,
+        overrides: {
+          to,
+          templateName,
+          languageCode: templateLanguage,
+          bodyVariables: [destinatario, parcelId, sender],
+          requiredIndexes: [1, 2, 3],
+          templateBody: selectedNotificacaoDefaultTemplateBody,
+          needsUrlButtonVariable: false
+        }
+      });
+
+      if (sendResult?.ok && shipmentKey) {
+        setNotificacaoSentKeys((current) => ({
+          ...current,
+          [shipmentKey]: true
+        }));
       }
-    });
+    } finally {
+      if (shipmentKey) {
+        setNotificacaoSendingKey("");
+      }
+    }
   }
 
   // Feature 1: Contact book
@@ -2353,6 +2384,10 @@ function App() {
     try { localStorage.setItem("wa_delivered_sent_keys", JSON.stringify(deliveredSentKeys)); } catch {}
   }, [deliveredSentKeys]);
 
+  useEffect(() => {
+    try { localStorage.setItem("wa_notificacao_sent_keys", JSON.stringify(notificacaoSentKeys)); } catch {}
+  }, [notificacaoSentKeys]);
+
   // SSE – delivery status ticks & scheduled_sent events
   useEffect(() => {
     const url = apiUrl("/api/events");
@@ -2764,8 +2799,14 @@ function App() {
   }, [displayedHistory]);
 
   const notificacaoEnvioHistory = useMemo(() => {
-    const targetNames = new Set(notificacaoEnvioTemplateNames.map((name) => String(name || "").trim().toLowerCase()));
-    const ptLanguageCodes = new Set(["pt_pt", "pt-pt", "pt"]);
+    const targetNames =
+      notificacaoEnvioSection === "entregue"
+        ? new Set(notificacaoIncidenciaTemplateNames.map((name) => String(name || "").trim().toLowerCase()))
+        : new Set(notificacaoEnvioTemplateNames.map((name) => String(name || "").trim().toLowerCase()));
+    const acceptedLanguageCodes =
+      notificacaoEnvioSection === "entregue"
+        ? new Set(["por", "portuguese (por)"])
+        : new Set(["pt_pt", "pt-pt", "pt"]);
 
     return displayedHistory
       .filter((item) => String(item.channel || "").toLowerCase() === "template")
@@ -2780,9 +2821,13 @@ function App() {
           return true;
         }
 
-        return ptLanguageCodes.has(languageCode);
+        if (notificacaoEnvioSection === "entregue") {
+          return acceptedLanguageCodes.has(languageCode) || languageCode.includes("por");
+        }
+
+        return acceptedLanguageCodes.has(languageCode);
       });
-  }, [displayedHistory]);
+  }, [displayedHistory, notificacaoEnvioSection]);
 
   const notificacaoHistoryTotalPages = useMemo(
     () => Math.max(1, Math.ceil(notificacaoEnvioHistory.length / notificacaoHistoryPageSize)),
@@ -6392,16 +6437,23 @@ function App() {
                                 >
                                   Preencher
                                 </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary tms-mini-btn"
-                                  onClick={() => {
-                                    void autoSendNotificacaoEnvioFromRow(row);
-                                  }}
-                                  disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading}
-                                >
-                                  Enviar auto
-                                </button>
+                                {(() => {
+                                  const shipmentKey = String(row.parcelId || row.providerTrackingCode || "").trim();
+                                  const isSending = shipmentKey ? notificacaoSendingKey === shipmentKey : false;
+                                  const isSent = shipmentKey ? Boolean(notificacaoSentKeys[shipmentKey]) : false;
+                                  return (
+                                    <button
+                                      type="button"
+                                      className={`btn btn-secondary tms-mini-btn ${isSending ? "is-sending" : ""} ${isSent ? "is-sent" : ""}`}
+                                      onClick={() => {
+                                        void autoSendNotificacaoEnvioFromRow(row);
+                                      }}
+                                      disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading || isSending || isSent}
+                                    >
+                                      {isSending ? "A enviar..." : isSent ? "Enviado" : "Enviar auto"}
+                                    </button>
+                                  );
+                                })()}
                               </div>
                             </td>
                             <td>{row.parcelId || "-"}</td>
