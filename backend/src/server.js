@@ -1896,12 +1896,44 @@ function isIncidenciaMessageType(value) {
   return normalized.includes("incid");
 }
 
+const SMS_FALLBACK_TEMPLATE_BODIES = {
+  notificaoc_de_incidencia:
+    "Ola {{1}}, houve um atraso/problema na entrega da sua encomenda no {{2}}. Encomenda da loja {{3}}. Estamos a trabalhar para resolver o problema o mais rapidamente possivel. Lamentamos qualquer inconveniente. Enviaremos o estado atualizado da entrega assim que possivel.",
+  notificacao_de_incidencia:
+    "Ola {{1}}, houve um atraso/problema na entrega da sua encomenda no {{2}}. Encomenda da loja {{3}}. Estamos a trabalhar para resolver o problema o mais rapidamente possivel. Lamentamos qualquer inconveniente. Enviaremos o estado atualizado da entrega assim que possivel.",
+  notificacao_auto_incidencia:
+    "Ola {{1}}, houve um atraso/problema na entrega da sua encomenda no {{2}}. Encomenda da loja {{3}}. Estamos a trabalhar para resolver o problema o mais rapidamente possivel. Lamentamos qualquer inconveniente. Enviaremos o estado atualizado da entrega assim que possivel."
+};
+
+function renderTemplateBodyWithVariables(templateBody, bodyVariables = []) {
+  const safeBody = String(templateBody || "").trim();
+  if (!safeBody) return "";
+
+  return safeBody
+    .replace(/{{\s*(\d+)\s*}}/g, (_match, indexText) => {
+      const idx = Number(indexText);
+      if (!Number.isFinite(idx) || idx < 1) return "";
+      return String(bodyVariables[idx - 1] ?? "").trim();
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildTemplateFallbackText({ templateName, bodyVariables = [], buttonUrlVariable = "" }) {
   const cleanTemplateName = String(templateName || "").trim();
   const cleanVars = Array.isArray(bodyVariables)
     ? bodyVariables.map((value) => String(value ?? "").trim()).filter(Boolean)
     : [];
   const cleanButtonVar = String(buttonUrlVariable || "").trim();
+
+  const templateKey = cleanTemplateName.toLowerCase();
+  const knownTemplateBody = SMS_FALLBACK_TEMPLATE_BODIES[templateKey] || "";
+  const renderedKnownBody = renderTemplateBodyWithVariables(knownTemplateBody, cleanVars);
+
+  if (renderedKnownBody) {
+    return cleanButtonVar ? `${renderedKnownBody} Link: ${cleanButtonVar}`.trim() : renderedKnownBody;
+  }
+
   const parts = [`Template ${cleanTemplateName}`];
 
   if (cleanVars.length > 0) {

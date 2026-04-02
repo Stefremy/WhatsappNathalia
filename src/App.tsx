@@ -1783,6 +1783,11 @@ function App() {
   }
 
   async function autoSendNotificacaoEnvioFromRow(row: TmsDeliveredShipment) {
+    if (notificacaoEnvioSection === "entregue") {
+      setGenericStatus("Envio automático no separador Entregue está desativado temporariamente.");
+      return;
+    }
+
     const shipmentKey = String(row.parcelId || row.providerTrackingCode || "").trim();
     if (shipmentKey && notificacaoSentKeys[shipmentKey]) {
       setGenericStatus("Esta encomenda já foi notificada anteriormente.");
@@ -6445,6 +6450,7 @@ function App() {
                                   const shipmentKey = String(row.parcelId || row.providerTrackingCode || "").trim();
                                   const isSending = shipmentKey ? notificacaoSendingKey === shipmentKey : false;
                                   const isSent = shipmentKey ? Boolean(notificacaoSentKeys[shipmentKey]) : false;
+                                  const isEntregueSection = notificacaoEnvioSection === "entregue";
                                   return (
                                     <button
                                       type="button"
@@ -6452,9 +6458,9 @@ function App() {
                                       onClick={() => {
                                         void autoSendNotificacaoEnvioFromRow(row);
                                       }}
-                                      disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading || isSending || isSent}
+                                      disabled={!digitsOnly(row.finalClientPhone || "") || genericLoading || isSending || isSent || isEntregueSection}
                                     >
-                                      {isSending ? "A enviar..." : isSent ? "Enviado" : "Enviar auto"}
+                                      {isEntregueSection ? "Desativado" : isSending ? "A enviar..." : isSent ? "Enviado" : "Enviar auto"}
                                     </button>
                                   );
                                 })()}
