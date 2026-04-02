@@ -290,14 +290,7 @@ async function fetchAllTmsIncidenceShipmentsData({ limit = 250, maxPages = 40 } 
 }
 
 function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
-  const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
-
-  if (isWeekend) {
-    // Weekend: every 6 hours (00:00, 06:00, 12:00, 18:00 Lisbon time).
-    return parts.minute === 0 && (parts.hour % 6) === 0;
-  }
-
-  // Weekdays: every 30 minutes from 09:00 to 19:30 Lisbon time.
+  // Every day: every 30 minutes from 09:00 to 19:30 Lisbon time.
   if (parts.hour < 9 || parts.hour > 19) {
     return false;
   }
@@ -335,6 +328,12 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
   autoNotificacaoIncidenciaRunning = true;
   try {
     await hydrateAutoNotificacaoIncidenciaState();
+
+    // From now on, only new entries are sent. Drop any legacy pending queue.
+    if (autoNotificacaoIncidenciaPendingEntries.size > 0) {
+      autoNotificacaoIncidenciaPendingEntries.clear();
+      await persistAutoNotificacaoIncidenciaState();
+    }
 
     // Refresh source data each cycle to detect newly appeared incidence rows.
     const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
@@ -381,10 +380,8 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
 
     for (const entry of freshEntries) {
       if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
-      autoNotificacaoIncidenciaPendingEntries.set(entry.shipmentKey, entry);
-    }
 
-    for (const [shipmentKey, entry] of autoNotificacaoIncidenciaPendingEntries.entries()) {
+      const shipmentKey = entry.shipmentKey;
       processed += 1;
       const result = await sendGenericTemplateMessage({
         to: entry.to,
@@ -402,7 +399,6 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
       if (result.ok) {
         sent += 1;
         autoNotificacaoIncidenciaSentKeys.add(shipmentKey);
-        autoNotificacaoIncidenciaPendingEntries.delete(shipmentKey);
       } else {
         failed += 1;
       }
@@ -414,7 +410,6 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
         processed,
         sent,
         failed,
-        pending: autoNotificacaoIncidenciaPendingEntries.size,
         freshEntries: freshEntries.length,
         fetchedRows: rows.length,
         templateName,

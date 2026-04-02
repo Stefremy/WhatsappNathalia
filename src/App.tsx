@@ -1104,7 +1104,11 @@ function App() {
     [selectedNotificacaoEnvioTemplate]
   );
 
-  const notificacaoIncidenciaTemplateNames = ["notificacao_auto_incidencia"];
+  const notificacaoIncidenciaTemplateNames = [
+    "notificaoc_de_incidencia",
+    "notificacao_de_incidencia",
+    "notificacao_auto_incidencia"
+  ];
   const selectedNotificacaoIncidenciaTemplate = useMemo(() => {
     const candidates = metaTemplates.filter((template) => {
       const templateName = String(template.name || "").trim().toLowerCase();
@@ -1131,7 +1135,7 @@ function App() {
   }, [metaTemplates]);
 
   const selectedNotificacaoDefaultTemplate = useMemo(() => {
-    if (notificacaoEnvioSection === "entregue") {
+    if (notificacaoEnvioSection === "incidencias") {
       return selectedNotificacaoIncidenciaTemplate || selectedNotificacaoEnvioTemplate;
     }
     return selectedNotificacaoEnvioTemplate || selectedNotificacaoIncidenciaTemplate;
@@ -1750,7 +1754,7 @@ function App() {
 
     const templateName =
       selectedNotificacaoDefaultTemplate?.name ||
-      (notificacaoEnvioSection === "entregue" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
+      (notificacaoEnvioSection === "incidencias" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
     const templateLanguage = selectedNotificacaoDefaultTemplate?.language || "pt_PT";
 
     setGenericTemplateName(templateName);
@@ -1791,7 +1795,7 @@ function App() {
     const to = formatE164FromPortugalPhone(String(row.finalClientPhone || ""));
     const templateName =
       selectedNotificacaoDefaultTemplate?.name ||
-      (notificacaoEnvioSection === "entregue" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
+      (notificacaoEnvioSection === "incidencias" ? notificacaoIncidenciaTemplateNames[0] : notificacaoEnvioTemplateNames[0]);
     const templateLanguage = selectedNotificacaoDefaultTemplate?.language || "pt_PT";
 
     if (shipmentKey) {
@@ -2800,11 +2804,11 @@ function App() {
 
   const notificacaoEnvioHistory = useMemo(() => {
     const targetNames =
-      notificacaoEnvioSection === "entregue"
+      notificacaoEnvioSection === "incidencias"
         ? new Set(notificacaoIncidenciaTemplateNames.map((name) => String(name || "").trim().toLowerCase()))
         : new Set(notificacaoEnvioTemplateNames.map((name) => String(name || "").trim().toLowerCase()));
     const acceptedLanguageCodes =
-      notificacaoEnvioSection === "entregue"
+      notificacaoEnvioSection === "incidencias"
         ? new Set(["por", "portuguese (por)"])
         : new Set(["pt_pt", "pt-pt", "pt"]);
 
@@ -2821,7 +2825,7 @@ function App() {
           return true;
         }
 
-        if (notificacaoEnvioSection === "entregue") {
+        if (notificacaoEnvioSection === "incidencias") {
           return acceptedLanguageCodes.has(languageCode) || languageCode.includes("por");
         }
 
@@ -5152,7 +5156,7 @@ function App() {
               }}
             >
               <span className="workspace-nav-icon" aria-hidden="true">•</span>
-              <span>Incidencias</span>
+              <span>Entregue</span>
             </button>
             <button
               type="button"
@@ -5168,7 +5172,7 @@ function App() {
               }}
             >
               <span className="workspace-nav-icon" aria-hidden="true">•</span>
-              <span>Entregue</span>
+              <span>Incidencias</span>
             </button>
             <a href="#generic-template-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
@@ -6370,7 +6374,7 @@ function App() {
                       }
                     }}
                   >
-                    Incidencias
+                    Entregue
                   </button>
                   <button
                     type="button"
@@ -6382,17 +6386,17 @@ function App() {
                       }
                     }}
                   >
-                    Entregue
+                    Incidencias
                   </button>
                 </div>
 
-                <h3>{notificacaoEnvioSection === "distribuicao" ? "Em distribuicao (status=4)" : notificacaoEnvioSection === "entregue" ? "Incidencias (status=5)" : "Entregue (status=9)"}</h3>
+                <h3>{notificacaoEnvioSection === "distribuicao" ? "Em distribuicao (status=4)" : notificacaoEnvioSection === "entregue" ? "Entregue (status=5)" : "Incidencias (status=9)"}</h3>
                 <p>
                   {notificacaoEnvioSection === "distribuicao"
                     ? "Vista explicita apenas para envios em distribuicao."
                     : notificacaoEnvioSection === "entregue"
-                      ? "Vista explicita apenas para envios em incidencias."
-                      : "Vista explicita apenas para envios em entregue."}
+                      ? "Vista explicita apenas para envios em entregue."
+                      : "Vista explicita apenas para envios em incidencias."}
                 </p>
 
                 {notificacaoError ? <p className="status">{notificacaoError}</p> : null}
@@ -6420,8 +6424,8 @@ function App() {
                             {notificacaoEnvioSection === "distribuicao"
                               ? (notificacaoLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar.")
                               : notificacaoEnvioSection === "entregue"
-                                ? (notificacaoLoading ? "A carregar envios em incidencias..." : "Sem envios em incidencias para mostrar.")
-                                : (notificacaoLoading ? "A carregar envios em entregue..." : "Sem envios em entregue para mostrar.")}
+                                ? (notificacaoLoading ? "A carregar envios em entregue..." : "Sem envios em entregue para mostrar.")
+                                : (notificacaoLoading ? "A carregar envios em incidencias..." : "Sem envios em incidencias para mostrar.")}
                           </td>
                         </tr>
                       ) : (
