@@ -2182,6 +2182,16 @@ function isAutoSmsFallbackEnabled() {
   return !["0", "false", "no", "off"].includes(rawValue);
 }
 
+function isSmsSendingEnabled() {
+  const rawValue = String(process.env.SMS_SENDING_ENABLED || "true").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(rawValue);
+}
+
+function isIncidenciaSmsFallbackEnabled() {
+  const rawValue = String(process.env.AUTO_SMS_FALLBACK_INCIDENCIA_ENABLED || "true").trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(rawValue);
+}
+
 function isIncidenciaMessageType(value) {
   const normalized = String(value || "")
     .normalize("NFD")
@@ -2248,6 +2258,14 @@ async function sendClickSendSms({
   waStatus = "",
   waResponse = null
 }) {
+  if (!isSmsSendingEnabled()) {
+    return {
+      attempted: false,
+      status: "skipped_globally_disabled",
+      reason: "SMS_SENDING_ENABLED=false"
+    };
+  }
+
   const normalizedTo = normalizeRecipient(to);
   const cleanMessage = String(message || "").trim();
 
@@ -4748,7 +4766,9 @@ async function sendGenericTemplateMessage({
       buttonUrlVariable: cleanButtonUrlVariable
     });
 
-    const smsFallbackDisabledForIncidencia = isIncidenciaMessageType(cleanTrackerContext?.messageType);
+    const smsFallbackDisabledForIncidencia =
+      isIncidenciaMessageType(cleanTrackerContext?.messageType) &&
+      !isIncidenciaSmsFallbackEnabled();
 
     const smsFallback = !response.ok && !smsFallbackDisabledForIncidencia
       ? await maybeSendAutomaticSmsFallback({
