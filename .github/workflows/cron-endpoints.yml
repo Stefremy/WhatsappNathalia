@@ -1,0 +1,39 @@
+name: Trigger backend cron endpoints
+
+on:
+  schedule:
+    # Runs every 30 minutes on weekdays (UTC). Backend keeps its own Lisbon-time guard.
+    - cron: '*/30 * * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate required secrets
+        run: |
+          if [[ -z "${{ secrets.CRON_BASE_URL }}" ]]; then
+            echo "CRON_BASE_URL secret is required"
+            exit 1
+          fi
+          if [[ -z "${{ secrets.CRON_SECRET }}" ]]; then
+            echo "CRON_SECRET secret is required"
+            exit 1
+          fi
+
+      - name: Trigger scheduled messages processor
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.CRON_BASE_URL }}/api/messages/process-scheduled"
+
+      - name: Trigger AUTO_NOTIFICACAO_ENVIO cron endpoint
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent \
+            -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio"
