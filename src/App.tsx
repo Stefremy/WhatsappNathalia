@@ -878,7 +878,12 @@ function App() {
   const [incidenciasError, setIncidenciasError] = useState("");
   const [incidenciasPage, setIncidenciasPage] = useState(1);
   const [incidenciasTotal, setIncidenciasTotal] = useState(0);
-  const [notificacaoEnvioSection, setNotificacaoEnvioSection] = useState<"distribuicao" | "entregue" | "incidencias">("distribuicao");
+  const [inTransportRows, setInTransportRows] = useState<TmsDeliveredShipment[]>([]);
+  const [inTransportLoading, setInTransportLoading] = useState(false);
+  const [inTransportError, setInTransportError] = useState("");
+  const [inTransportPage, setInTransportPage] = useState(1);
+  const [inTransportTotal, setInTransportTotal] = useState(0);
+  const [notificacaoEnvioSection, setNotificacaoEnvioSection] = useState<"distribuicao" | "entregue" | "incidencias" | "em-transporte">("distribuicao");
   const [notificacaoHistoryPage, setNotificacaoHistoryPage] = useState(1);
   const [feedbackStoreLookup, setFeedbackStoreLookup] = useState("");
   const [feedbackLookupStatus, setFeedbackLookupStatus] = useState("");
@@ -1089,13 +1094,27 @@ function App() {
     [activeConversationId, conversations]
   );
 
-  const notificacaoEnvioTemplateNames = ["notificao_de_envio", "notificacao_de_envio"];
+  const notificacaoEnvioTemplateNames = ["notifcao_de_envio", "notificao_de_envio", "notificacao_de_envio"];
   const selectedNotificacaoEnvioTemplate = useMemo(
-    () =>
-      metaTemplates.find((template) => {
+    () => {
+      const candidates = metaTemplates.filter((template) => {
         const templateName = String(template.name || "").trim().toLowerCase();
         return notificacaoEnvioTemplateNames.includes(templateName);
-      }) || null,
+      });
+
+      if (candidates.length === 0) {
+        return null;
+      }
+
+      for (const preferredName of notificacaoEnvioTemplateNames) {
+        const match = candidates.find((template) => String(template.name || "").trim().toLowerCase() === preferredName);
+        if (match) {
+          return match;
+        }
+      }
+
+      return candidates[0] || null;
+    },
     [metaTemplates]
   );
 
@@ -1248,46 +1267,63 @@ function App() {
     () => Math.max(1, Math.ceil((incidenciasTotal || incidenciasRows.length) / inDistributionPageSize)),
     [incidenciasRows.length, incidenciasTotal]
   );
+
+  const inTransportTotalPages = useMemo(
+    () => Math.max(1, Math.ceil((inTransportTotal || inTransportRows.length) / inDistributionPageSize)),
+    [inTransportRows.length, inTransportTotal]
+  );
   const notificacaoRows = useMemo(
     () => (
       notificacaoEnvioSection === "distribuicao"
         ? inDistributionRows
         : notificacaoEnvioSection === "entregue"
           ? deliveredRows
-          : incidenciasRows
+          : notificacaoEnvioSection === "incidencias"
+            ? incidenciasRows
+            : inTransportRows
     ),
-    [notificacaoEnvioSection, inDistributionRows, deliveredRows, incidenciasRows]
+    [notificacaoEnvioSection, inDistributionRows, deliveredRows, incidenciasRows, inTransportRows]
   );
   const notificacaoLoading =
     notificacaoEnvioSection === "distribuicao"
       ? inDistributionLoading
       : notificacaoEnvioSection === "entregue"
         ? deliveredLoading
-        : incidenciasLoading;
+        : notificacaoEnvioSection === "incidencias"
+          ? incidenciasLoading
+          : inTransportLoading;
   const notificacaoError =
     notificacaoEnvioSection === "distribuicao"
       ? inDistributionError
       : notificacaoEnvioSection === "entregue"
         ? deliveredError
-        : incidenciasError;
+        : notificacaoEnvioSection === "incidencias"
+          ? incidenciasError
+          : inTransportError;
   const notificacaoTotal =
     notificacaoEnvioSection === "distribuicao"
       ? (inDistributionTotal || inDistributionRows.length)
       : notificacaoEnvioSection === "entregue"
         ? (deliveredTotal || deliveredRows.length)
-        : (incidenciasTotal || incidenciasRows.length);
+        : notificacaoEnvioSection === "incidencias"
+          ? (incidenciasTotal || incidenciasRows.length)
+          : (inTransportTotal || inTransportRows.length);
   const notificacaoPage =
     notificacaoEnvioSection === "distribuicao"
       ? inDistributionPage
       : notificacaoEnvioSection === "entregue"
         ? deliveredPage
-        : incidenciasPage;
+        : notificacaoEnvioSection === "incidencias"
+          ? incidenciasPage
+          : inTransportPage;
   const notificacaoTotalPages =
     notificacaoEnvioSection === "distribuicao"
       ? inDistributionTotalPages
       : notificacaoEnvioSection === "entregue"
         ? deliveredTotalPages
-        : incidenciasTotalPages;
+        : notificacaoEnvioSection === "incidencias"
+          ? incidenciasTotalPages
+          : inTransportTotalPages;
   const notificacaoPageSize = notificacaoEnvioSection === "entregue" ? deliveredPageSize : inDistributionPageSize;
 
   const filteredDeliveredRows = useMemo(() => {
@@ -3244,6 +3280,40 @@ function App() {
       });
   }
 
+  function loadInTransportShipments(page = inTransportPage) {
+    const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+
+    setInTransportLoading(true);
+    setInTransportError("");
+
+    fetch(apiUrl(`/api/tms/in-transport?page=${targetPage}&limit=${inDistributionPageSize}`))
+      .then(async (response) => {
+        let effectiveResponse = response;
+        let data = await parseResponse(effectiveResponse);
+
+        if (effectiveResponse.status === 404) {
+          effectiveResponse = await fetch(apiUrl(`/api/tms/em-transporte?page=${targetPage}&limit=${inDistributionPageSize}`));
+          data = await parseResponse(effectiveResponse);
+        }
+
+        if (!effectiveResponse.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha TMS Em Transporte (${effectiveResponse.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        const total = Number(data?.meta?.total || rows.length) || rows.length;
+        setInTransportRows(rows as TmsDeliveredShipment[]);
+        setInTransportTotal(total);
+        setInTransportPage(targetPage);
+      })
+      .catch((error) => {
+        setInTransportError(error instanceof Error ? error.message : "Nao foi possivel carregar envios em transporte.");
+      })
+      .finally(() => {
+        setInTransportLoading(false);
+      });
+  }
+
   function applyClientesTemplateText(text: string, clientName: string) {
     const safeName = String(clientName || "").trim();
     return String(text || "").replace(/\{\{\s*name\s*\}\}/gi, safeName || "Cliente");
@@ -3854,6 +3924,12 @@ function App() {
   useEffect(() => {
     if (activeView === "notificacao-envio" && notificacaoEnvioSection === "incidencias" && incidenciasRows.length === 0 && !incidenciasLoading) {
       loadIncidenciasShipments(1);
+    }
+  }, [activeView, notificacaoEnvioSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeView === "notificacao-envio" && notificacaoEnvioSection === "em-transporte" && inTransportRows.length === 0 && !inTransportLoading) {
+      loadInTransportShipments(1);
     }
   }, [activeView, notificacaoEnvioSection]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -5179,6 +5255,22 @@ function App() {
               <span className="workspace-nav-icon" aria-hidden="true">•</span>
               <span>Incidencias</span>
             </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button workspace-nav-sublink${
+                activeView === "notificacao-envio" && notificacaoEnvioSection === "em-transporte" ? " active" : ""
+              }`}
+              onClick={() => {
+                setActiveView("notificacao-envio");
+                setNotificacaoEnvioSection("em-transporte");
+                if (inTransportRows.length === 0 && !inTransportLoading) {
+                  loadInTransportShipments(1);
+                }
+              }}
+            >
+              <span className="workspace-nav-icon" aria-hidden="true">•</span>
+              <span>Em Transporte</span>
+            </button>
             <a href="#generic-template-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
               <span>Template Notifications</span>
@@ -6329,16 +6421,42 @@ function App() {
               <div className="tracker-header">
                 <div>
                   <h2>Notificação de Envio</h2>
-                  <p>Envios em distribuicao do Linke Portal (status=4).</p>
+                  <p>
+                    {notificacaoEnvioSection === "distribuicao"
+                      ? "Envios em distribuicao do Linke Portal (status=4)."
+                      : notificacaoEnvioSection === "entregue"
+                        ? "Envios entregues do Linke Portal (status=5)."
+                        : notificacaoEnvioSection === "incidencias"
+                          ? "Envios em incidencias do Linke Portal (status=9)."
+                          : "Envios em transporte do Linke Portal (status=3)."}
+                  </p>
                 </div>
                 <div className="tracker-actions">
                   <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={() => loadInDistributionShipments(inDistributionPage)}
-                    disabled={inDistributionLoading}
+                    onClick={() => {
+                      if (notificacaoEnvioSection === "distribuicao") {
+                        loadInDistributionShipments(inDistributionPage);
+                      } else if (notificacaoEnvioSection === "entregue") {
+                        loadDeliveredShipments(deliveredPage);
+                      } else if (notificacaoEnvioSection === "incidencias") {
+                        loadIncidenciasShipments(incidenciasPage);
+                      } else {
+                        loadInTransportShipments(inTransportPage);
+                      }
+                    }}
+                    disabled={notificacaoLoading}
                   >
-                    {inDistributionLoading ? "A atualizar..." : "Atualizar em distribuicao"}
+                    {notificacaoLoading
+                      ? "A atualizar..."
+                      : notificacaoEnvioSection === "distribuicao"
+                        ? "Atualizar em distribuicao"
+                        : notificacaoEnvioSection === "entregue"
+                          ? "Atualizar entregue"
+                          : notificacaoEnvioSection === "incidencias"
+                            ? "Atualizar incidencias"
+                            : "Atualizar em transporte"}
                   </button>
                   <button
                     type="button"
@@ -6393,15 +6511,37 @@ function App() {
                   >
                     Incidencias
                   </button>
+                  <button
+                    type="button"
+                    className={`tracker-filter-btn${notificacaoEnvioSection === "em-transporte" ? " active" : ""}`}
+                    onClick={() => {
+                      setNotificacaoEnvioSection("em-transporte");
+                      if (inTransportRows.length === 0 && !inTransportLoading) {
+                        loadInTransportShipments(1);
+                      }
+                    }}
+                  >
+                    Em Transporte
+                  </button>
                 </div>
 
-                <h3>{notificacaoEnvioSection === "distribuicao" ? "Em distribuicao (status=4)" : notificacaoEnvioSection === "entregue" ? "Entregue (status=5)" : "Incidencias (status=9)"}</h3>
+                <h3>
+                  {notificacaoEnvioSection === "distribuicao"
+                    ? "Em distribuicao (status=4)"
+                    : notificacaoEnvioSection === "entregue"
+                      ? "Entregue (status=5)"
+                      : notificacaoEnvioSection === "incidencias"
+                        ? "Incidencias (status=9)"
+                        : "Em Transporte (status=3)"}
+                </h3>
                 <p>
                   {notificacaoEnvioSection === "distribuicao"
                     ? "Vista explicita apenas para envios em distribuicao."
                     : notificacaoEnvioSection === "entregue"
                       ? "Vista explicita apenas para envios em entregue."
-                      : "Vista explicita apenas para envios em incidencias."}
+                      : notificacaoEnvioSection === "incidencias"
+                        ? "Vista explicita apenas para envios em incidencias."
+                        : "Vista explicita apenas para envios em transporte."}
                 </p>
 
                 {notificacaoError ? <p className="status">{notificacaoError}</p> : null}
@@ -6430,7 +6570,9 @@ function App() {
                               ? (notificacaoLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar.")
                               : notificacaoEnvioSection === "entregue"
                                 ? (notificacaoLoading ? "A carregar envios em entregue..." : "Sem envios em entregue para mostrar.")
-                                : (notificacaoLoading ? "A carregar envios em incidencias..." : "Sem envios em incidencias para mostrar.")}
+                                : notificacaoEnvioSection === "incidencias"
+                                  ? (notificacaoLoading ? "A carregar envios em incidencias..." : "Sem envios em incidencias para mostrar.")
+                                  : (notificacaoLoading ? "A carregar envios em transporte..." : "Sem envios em transporte para mostrar.")}
                           </td>
                         </tr>
                       ) : (
@@ -6503,8 +6645,10 @@ function App() {
                           loadInDistributionShipments(Math.max(1, inDistributionPage - 1));
                         } else if (notificacaoEnvioSection === "entregue") {
                           loadDeliveredShipments(Math.max(1, deliveredPage - 1));
-                        } else {
+                        } else if (notificacaoEnvioSection === "incidencias") {
                           loadIncidenciasShipments(Math.max(1, incidenciasPage - 1));
+                        } else {
+                          loadInTransportShipments(Math.max(1, inTransportPage - 1));
                         }
                       }}
                       disabled={notificacaoPage <= 1 || notificacaoLoading}
@@ -6522,8 +6666,10 @@ function App() {
                           loadInDistributionShipments(Math.min(inDistributionTotalPages, inDistributionPage + 1));
                         } else if (notificacaoEnvioSection === "entregue") {
                           loadDeliveredShipments(Math.min(deliveredTotalPages, deliveredPage + 1));
-                        } else {
+                        } else if (notificacaoEnvioSection === "incidencias") {
                           loadIncidenciasShipments(Math.min(incidenciasTotalPages, incidenciasPage + 1));
+                        } else {
+                          loadInTransportShipments(Math.min(inTransportTotalPages, inTransportPage + 1));
                         }
                       }}
                       disabled={notificacaoPage >= notificacaoTotalPages || notificacaoLoading}

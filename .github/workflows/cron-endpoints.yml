@@ -37,3 +37,11 @@ jobs:
             -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio"
+
+      - name: Trigger AUTO_NOTIFICACAO_ENVIO_EM_TRANSPORTE cron endpoint
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent \
+            -X GET \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio-em-transporte"

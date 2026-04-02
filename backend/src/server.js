@@ -56,6 +56,8 @@ const recentCallEvents = [];
 const MAX_CALL_EVENTS = 100;
 let autoNotificacaoEnvioRunning = false;
 let autoNotificacaoEnvioLastRunDateKey = "";
+let autoNotificacaoEnvioTransporteRunning = false;
+let autoNotificacaoEnvioTransporteLastRunDateKey = "";
 let autoNotificacaoIncidenciaRunning = false;
 let autoNotificacaoIncidenciaLastRunSlotKey = "";
 let autoNotificacaoIncidenciaStateHydrated = false;
@@ -279,6 +281,23 @@ async function fetchAllTmsIncidenceShipmentsData({ limit = 250, maxPages = 40 } 
 
   while (page <= totalPages && page <= maxPages) {
     const pageData = await fetchTmsIncidenceShipmentsData({ page, limit });
+    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
+    allRows.push(...rows);
+
+    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
+    page += 1;
+  }
+
+  return allRows;
+}
+
+async function fetchAllTmsInTransportShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+  const allRows = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const pageData = await fetchTmsInTransportShipmentsData({ page, limit });
     const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
     allRows.push(...rows);
 
@@ -530,6 +549,67 @@ async function runAutoNotificacaoEnvioForInDistribution() {
   };
 }
 
+async function runAutoNotificacaoEnvioForInTransport() {
+  const templateName = String(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_TEMPLATE ||
+    process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
+    "notifcao_de_envio"
+  ).trim();
+  const languageCode = String(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_LANGUAGE ||
+    process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE ||
+    "pt_PT"
+  ).trim() || "pt_PT";
+
+  // Refresh source data first (equivalent to clicking "Atualizar em transporte").
+  const rows = await fetchAllTmsInTransportShipmentsData({ limit: 250, maxPages: 40 });
+
+  let processed = 0;
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const to = normalizeRecipient(String(row?.finalClientPhone || ""));
+    if (!to) {
+      continue;
+    }
+
+    const var1 = String(row?.recipient || "").trim();
+    const var2 = String(row?.sender || "").trim();
+    const var3 = String(row?.providerTrackingCode || row?.parcelId || "").trim();
+
+    processed += 1;
+
+    const result = await sendGenericTemplateMessage({
+      to,
+      templateName,
+      languageCode,
+      bodyVariables: [var1, var2, var3],
+      trackerContext: {
+        clientName: var1,
+        parcelId: var3,
+        messageType: "Em transporte",
+        notes: var2
+      }
+    });
+
+    if (result.ok) {
+      sent += 1;
+    } else {
+      failed += 1;
+    }
+  }
+
+  return {
+    processed,
+    sent,
+    failed,
+    fetchedRows: rows.length,
+    templateName,
+    languageCode
+  };
+}
+
 async function buildAutoNotificacaoEnvioDryRunSummary(options = {}) {
   const templateName = String(process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE || "notificacao_de_envio").trim();
   const languageCode = String(process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE || "pt_PT").trim() || "pt_PT";
@@ -579,6 +659,13 @@ function shouldRunAutoNotificacaoEnvioAtClock(parts) {
   return isWeekday && parts.hour === targetHour && parts.minute === targetMinute;
 }
 
+function shouldRunAutoNotificacaoEnvioTransporteAtClock(parts) {
+  const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
+  const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_HOUR || 10);
+  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_MINUTE || 0);
+  return isWeekday && parts.hour === targetHour && parts.minute === targetMinute;
+}
+
 async function maybeRunAutoNotificacaoEnvioSchedule() {
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
@@ -607,11 +694,40 @@ async function maybeRunAutoNotificacaoEnvioSchedule() {
   }
 }
 
+async function maybeRunAutoNotificacaoEnvioTransporteSchedule() {
+  const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_ENABLED || "true").trim().toLowerCase();
+  const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
+  if (!enabled) {
+    return;
+  }
+
+  const parts = getLisbonClockParts();
+  if (!shouldRunAutoNotificacaoEnvioTransporteAtClock(parts)) {
+    return;
+  }
+
+  if (autoNotificacaoEnvioTransporteLastRunDateKey === parts.dateKey || autoNotificacaoEnvioTransporteRunning) {
+    return;
+  }
+
+  autoNotificacaoEnvioTransporteRunning = true;
+  try {
+    const summary = await runAutoNotificacaoEnvioForInTransport();
+    autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
+    console.log("[auto-notificacao-envio-em-transporte]", summary);
+  } catch (error) {
+    console.error("[auto-notificacao-envio-em-transporte] failed", error instanceof Error ? error.message : error);
+  } finally {
+    autoNotificacaoEnvioTransporteRunning = false;
+  }
+}
+
 // Avoid perpetual background timers in serverless environments.
 if (!process.env.VERCEL) {
   setInterval(processScheduledMessages, 15000);
   setInterval(() => {
     void maybeRunAutoNotificacaoEnvioSchedule();
+    void maybeRunAutoNotificacaoEnvioTransporteSchedule();
     void maybeRunAutoNotificacaoIncidenciaSchedule();
   }, 30_000);
 }
@@ -1761,6 +1877,110 @@ async function fetchTmsIncidenceShipmentsData({ page = 1, limit = 250 } = {}) {
       totalPages,
       fetchedAt: new Date().toISOString(),
       source: `${baseUrl}/admin/shipments?filter=1&status=9`
+    }
+  };
+}
+
+async function fetchTmsInTransportShipmentsData({ page = 1, limit = 250 } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const transportStatus = "3";
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchInTransportDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+    requestBody.set("status", transportStatus);
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1&status=${encodeURIComponent(transportStatus)}`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS in-transport shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  // Datatable comes oldest -> newest; compute an offset from the end so page 1 is newest first.
+  const probePayload = await fetchInTransportDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPage = Math.min(safePage, totalPages);
+  const sourceStart = Math.max(0, total - (boundedPage * safeLimit));
+  const sourceEndExclusive = Math.max(0, total - ((boundedPage - 1) * safeLimit));
+  const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+
+  const payload = await fetchInTransportDatatablePage(boundedPage, sourceStart, sourceLength);
+  const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
+
+  return {
+    rows,
+    meta: {
+      page: boundedPage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin/shipments?filter=1&status=${encodeURIComponent(transportStatus)}`
     }
   };
 }
@@ -5093,6 +5313,53 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
   }
 });
 
+app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized cron trigger" });
+  }
+
+  const forceRaw = String(req.query?.force || "").trim().toLowerCase();
+  const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+
+  const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_ENABLED || "true").trim().toLowerCase();
+  const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
+  if (!enabled) {
+    return res.json({ ok: true, skipped: true, reason: "AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_ENABLED=false" });
+  }
+
+  const parts = getLisbonClockParts();
+  if (!forceRun && !shouldRunAutoNotificacaoEnvioTransporteAtClock(parts)) {
+    return res.json({
+      ok: true,
+      skipped: true,
+      reason: "outside_schedule_window",
+      lisbonClock: {
+        dateKey: parts.dateKey,
+        weekday: parts.weekday,
+        hour: parts.hour,
+        minute: parts.minute
+      }
+    });
+  }
+
+  if (autoNotificacaoEnvioTransporteRunning) {
+    return res.json({ ok: true, skipped: true, reason: "already_running" });
+  }
+
+  try {
+    autoNotificacaoEnvioTransporteRunning = true;
+    const summary = await runAutoNotificacaoEnvioForInTransport();
+    return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to run auto notificacao envio em transporte cron",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  } finally {
+    autoNotificacaoEnvioTransporteRunning = false;
+  }
+});
+
 app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
@@ -5572,6 +5839,44 @@ app.get("/api/tms/incidencias", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch incidence TMS shipments",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/in-transport", async (req, res) => {
+  try {
+    const requestedPage = Number(req.query?.page || 1);
+    const requestedLimit = Number(req.query?.limit || 250);
+
+    const data = await fetchTmsInTransportShipmentsData({
+      page: requestedPage,
+      limit: requestedLimit
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch in-transport TMS shipments",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/em-transporte", async (req, res) => {
+  try {
+    const requestedPage = Number(req.query?.page || 1);
+    const requestedLimit = Number(req.query?.limit || 250);
+
+    const data = await fetchTmsInTransportShipmentsData({
+      page: requestedPage,
+      limit: requestedLimit
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch in-transport TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
