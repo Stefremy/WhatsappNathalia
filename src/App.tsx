@@ -1094,7 +1094,7 @@ function App() {
     [activeConversationId, conversations]
   );
 
-  const notificacaoEnvioTemplateNames = ["notifcao_de_envio", "notificao_de_envio", "notificacao_de_envio"];
+  const notificacaoEnvioTemplateNames = ["notificacao_de_envio", "notificao_de_envio", "notifcao_de_envio"];
   const selectedNotificacaoEnvioTemplate = useMemo(
     () => {
       const candidates = metaTemplates.filter((template) => {
@@ -6706,7 +6706,7 @@ function App() {
                           </article>
                           <article className="wa-msg out">
                             <p>
-                              {selectedTemplatePreview || selectedNotificacaoEnvioTemplateBody || "Template notificao_de_envio/notificacao_de_envio não encontrado entre os templates aprovados."}
+                              {selectedTemplatePreview || selectedNotificacaoEnvioTemplateBody || "Template notificacao_de_envio não encontrado entre os templates aprovados."}
                             </p>
                             <time>{metaTemplatesLoading ? "a carregar templates" : genericLoading ? "a enviar" : genericStatus}</time>
                           </article>

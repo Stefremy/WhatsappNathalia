@@ -553,7 +553,7 @@ async function runAutoNotificacaoEnvioForInTransport() {
   const templateName = String(
     process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_TEMPLATE ||
     process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
-    "notifcao_de_envio"
+    "notificacao_de_envio"
   ).trim();
   const fallbackTemplateName = String(
     process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
