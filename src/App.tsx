@@ -510,6 +510,24 @@ function extractParcelCode(input: string) {
   return match?.[1] || "-";
 }
 
+function isIncidenciaTemplateName(templateName: string) {
+  const normalized = String(templateName || "").trim().toLowerCase();
+  return ["notificaoc_de_incidencia", "notificacao_de_incidencia", "notificacao_auto_incidencia"].includes(normalized);
+}
+
+function extractParcelIdFromTemplateVariable2(templateName: string, message: string) {
+  if (!isIncidenciaTemplateName(templateName)) {
+    return "";
+  }
+
+  const parts = String(message || "")
+    .split(/\s\|\s/)
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return String(parts[1] || "").trim();
+}
+
 function formatMessageType(channel?: string) {
   const normalized = String(channel || "").toLowerCase();
   if (normalized === "template") return "Template";
@@ -2889,17 +2907,19 @@ function App() {
       return sharedLogs.map((item) => {
         const message = String(item.message_text || item.template_name || "[sem conteúdo]");
         const status = String(item.status || "unknown");
+        const templateName = String(item.template_name || "").trim();
+        const templateVariable2ParcelId = extractParcelIdFromTemplateVariable2(templateName, message);
         return {
           id: String(item.id),
           clientName: String(item.contact_name || resolveContactName(String(item.to_number || ""), savedContacts) || "-"),
           message,
           clientPhone: String(item.to_number || "-"),
-          parcelId: extractParcelCode(message),
+          parcelId: templateVariable2ParcelId || extractParcelCode(message),
           messageType: formatMessageType(item.channel),
           dateSent: item.created_at ? new Date(item.created_at).toLocaleString("pt-PT") : "-",
           smsClicksend: String(item.channel || "").toLowerCase() === "sms" ? "Yes" : "No",
           status,
-          messageTitle: String(item.template_name || "WhatsApp Message")
+          messageTitle: String(templateName || "WhatsApp Message")
         };
       });
     }
