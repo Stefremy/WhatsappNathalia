@@ -49,56 +49,15 @@
   "sentKeys": [
     "001002197019|EQ406290845PT",
     "001002175279|EQ405908867PT",
-    "001002175123|EQ405908853PT"
+    "001002175123|EQ405908853PT",
+    "001002198387|EQ406290956PT",
+    "001002161914|EQ405907699PT",
+    "001002159113|EQ405907416PT",
+    "001002148939|DB236186280PT",
+    "001002166510|EQ405908102PT",
+    "001002194428|EQ406290647PT",
+    "001002189193|EQ406290219PT",
+    "001002188022|EQ406290103PT"
   ],
-  "pendingEntries": {
-    "001002198387|EQ406290956PT": {
-      "to": "351962643140",
-      "destinatario": "AMÉLIO JOÃO OLIVEIRA PIRES",
-      "parcelId": "001002198387",
-      "sender": "COD- 2"
-    },
-    "001002161914|EQ405907699PT": {
-      "to": "351918727692",
-      "destinatario": "MARIA FERNANDA BARBOSA",
-      "parcelId": "001002161914",
-      "sender": "MARIA LUISA FILIPE"
-    },
-    "001002159113|EQ405907416PT": {
-      "to": "351912739678",
-      "destinatario": "Norberta Amaro",
-      "parcelId": "001002159113",
-      "sender": "MARIA LUISA FILIPE"
-    },
-    "001002148939|DB236186280PT": {
-      "to": "351969009695",
-      "destinatario": "Tiago Godinho Unipessoal Lda",
-      "parcelId": "001002148939",
-      "sender": "BRINDELTA"
-    },
-    "001002166510|EQ405908102PT": {
-      "to": "351961404253",
-      "destinatario": "Juliana Lavaredas",
-      "parcelId": "001002166510",
-      "sender": "BORDADO INOVADOR"
-    },
-    "001002194428|EQ406290647PT": {
-      "to": "351961357249",
-      "destinatario": "MANJAKINHA",
-      "parcelId": "001002194428",
-      "sender": "CHICCA STORE"
-    },
-    "001002189193|EQ406290219PT": {
-      "to": "351961088214",
-      "destinatario": "JACKELYNE IARA RODRIGUES DA SILVA",
-      "parcelId": "001002189193",
-      "sender": "MARIA LUISA FILIPE"
-    },
-    "001002188022|EQ406290103PT": {
-      "to": "351964216158",
-      "destinatario": "CIDáLIA NOBRE",
-      "parcelId": "001002188022",
-      "sender": "MARIA LUISA FILIPE"
-    }
-  }
+  "pendingEntries": {}
 }

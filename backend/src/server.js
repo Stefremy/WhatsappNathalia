@@ -5382,6 +5382,10 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
     });
   }
 
+  if (!forceRun && autoNotificacaoEnvioTransporteLastRunDateKey === parts.dateKey) {
+    return res.json({ ok: true, skipped: true, reason: "already_ran_today", dateKey: parts.dateKey });
+  }
+
   if (autoNotificacaoEnvioTransporteRunning) {
     return res.json({ ok: true, skipped: true, reason: "already_running" });
   }
@@ -5389,6 +5393,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
   try {
     autoNotificacaoEnvioTransporteRunning = true;
     const summary = await runAutoNotificacaoEnvioForInTransport();
+    autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
     return res.status(500).json({
