@@ -555,6 +555,10 @@ async function runAutoNotificacaoEnvioForInTransport() {
     process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
     "notifcao_de_envio"
   ).trim();
+  const fallbackTemplateName = String(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
+    "notificacao_de_envio"
+  ).trim() || "notificacao_de_envio";
   const languageCode = String(
     process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_LANGUAGE ||
     process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE ||
@@ -580,7 +584,7 @@ async function runAutoNotificacaoEnvioForInTransport() {
 
     processed += 1;
 
-    const result = await sendGenericTemplateMessage({
+    let result = await sendGenericTemplateMessage({
       to,
       templateName,
       languageCode,
@@ -592,6 +596,21 @@ async function runAutoNotificacaoEnvioForInTransport() {
         notes: var2
       }
     });
+
+    if (!result.ok && fallbackTemplateName && fallbackTemplateName !== templateName) {
+      result = await sendGenericTemplateMessage({
+        to,
+        templateName: fallbackTemplateName,
+        languageCode,
+        bodyVariables: [var1, var2, var3],
+        trackerContext: {
+          clientName: var1,
+          parcelId: var3,
+          messageType: "Em transporte",
+          notes: var2
+        }
+      });
+    }
 
     if (result.ok) {
       sent += 1;
@@ -606,6 +625,7 @@ async function runAutoNotificacaoEnvioForInTransport() {
     failed,
     fetchedRows: rows.length,
     templateName,
+    fallbackTemplateName,
     languageCode
   };
 }
