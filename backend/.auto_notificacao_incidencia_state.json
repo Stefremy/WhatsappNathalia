@@ -20,7 +20,8 @@
     "001001076328|EQ400362875PT",
     "001000868807|EQ392132578PT",
     "001000573395|DB214800580PT",
-    "001000335037|DD305682763PT"
+    "001000335037|DD305682763PT",
+    "001002142449|6330002873603746"
   ],
   "sentKeys": [],
   "pendingEntries": {
@@ -29,6 +30,13 @@
       "destinatario": "LIGIA MARIA MOREIRA",
       "parcelId": "001002183305",
       "sender": "SUPER BONITAS"
+    },
+    "001002142449|6330002873603746": {
+      "shipmentKey": "001002142449|6330002873603746",
+      "to": "351918516405",
+      "destinatario": "VÍTOR MANUEL JORGE",
+      "parcelId": "001002142449",
+      "sender": "COD- 2"
     }
   }
 }
