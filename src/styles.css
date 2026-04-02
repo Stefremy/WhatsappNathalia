@@ -885,6 +885,7 @@ p {
   border: 1px solid rgba(14, 27, 57, 0.22);
   border-radius: 14px;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   background: #0d1528;
 }
 
@@ -2820,11 +2821,21 @@ p {
   .workspace-sidebar-nav {
     padding: 0.75rem;
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .workspace-nav {
     grid-auto-flow: column;
     grid-auto-columns: max-content;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    padding-bottom: 0.2rem;
+    margin-bottom: -0.2rem;
+  }
+
+  .workspace-nav-link,
+  .workspace-nav-separator-button {
+    scroll-snap-align: start;
   }
 
   .workspace-nav-link {
@@ -2903,6 +2914,155 @@ p {
 
   .workspace-brand-divider {
     display: none;
+  }
+
+  .workspace-sidebar-nav {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    background: linear-gradient(180deg, #244a37 0%, #173928 100%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+}
+
+@media (max-width: 1100px) {
+  .wa-console {
+    grid-template-columns: 1fr;
+  }
+
+  .wa-sidebar {
+    order: 2;
+    max-height: 300px;
+  }
+
+  .wa-phone {
+    order: 1;
+    max-width: 100%;
+  }
+
+  .tms-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace-app-shell {
+    width: 100%;
+    margin: 0;
+  }
+
+  .workspace-frame {
+    min-height: auto;
+    border-radius: 0;
+  }
+
+  .workspace-content {
+    padding: 0.8rem;
+  }
+
+  .panel,
+  .hero {
+    padding: 1rem;
+    border-radius: 14px;
+  }
+
+  .tracker-header {
+    gap: 0.6rem;
+  }
+
+  .tracker-actions {
+    width: 100%;
+  }
+
+  .tracker-actions .btn {
+    width: 100%;
+    text-align: center;
+  }
+
+  .template-toolbar input,
+  .feedback-template-bridge select,
+  .feedback-template-bridge input,
+  .delivered-section .tracker-actions select,
+  .delivered-section .tracker-actions input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .tracker-page-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .tracker-page-actions .btn {
+    min-width: 92px;
+  }
+
+  .sent-history-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .facts,
+  .wa-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .tracker-table th,
+  .tracker-table td,
+  .tms-table th,
+  .tms-table td,
+  .tms-incidences-table th,
+  .tms-incidences-table td {
+    font-size: 0.76rem;
+  }
+
+  .tracker-table th:first-child,
+  .tracker-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+  }
+
+  .tracker-table th:first-child {
+    z-index: 3;
+    background: #14213f;
+  }
+
+  .tracker-table td:first-child {
+    background: #0d1528;
+    box-shadow: 8px 0 12px rgba(4, 10, 22, 0.18);
+  }
+
+  .delivered-table td:first-child {
+    background: #ffffff;
+    box-shadow: 8px 0 12px rgba(20, 95, 56, 0.1);
+  }
+
+  .tracker-table tbody tr:hover td:first-child {
+    background: #162544;
+  }
+
+  .delivered-table tbody tr:hover td:first-child {
+    background: rgba(52, 178, 104, 0.12);
+  }
+
+  .tracker-filter-btn {
+    font-size: 0.74rem;
+    padding: 0.24rem 0.55rem;
+  }
+
+  .wa-thread {
+    min-height: 200px;
+    padding: 0.7rem;
+  }
+
+  .wa-msg {
+    max-width: 94%;
+  }
+
+  .api-actions .btn,
+  .sms-fallback-actions .btn {
+    width: 100%;
+    text-align: center;
   }
 }
 

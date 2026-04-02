@@ -571,8 +571,26 @@ async function runAutoNotificacaoEnvioForInTransport() {
   let processed = 0;
   let sent = 0;
   let failed = 0;
+  let skippedMaritimoIlhas = 0;
 
   for (const row of rows) {
+    const serviceName = String(row?.service || "")
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .toLowerCase();
+    const compactServiceName = serviceName.replace(/\s+/g, "");
+    const isMaritimoIlhasService =
+      compactServiceName.includes("cttmaritimoilhas") ||
+      (serviceName.includes("maritimo") && serviceName.includes("ilhas"));
+    const isAereoIlhasService =
+      compactServiceName.includes("cttaereoilhas") ||
+      (serviceName.includes("aereo") && serviceName.includes("ilhas"));
+
+    if (isMaritimoIlhasService || isAereoIlhasService) {
+      skippedMaritimoIlhas += 1;
+      continue;
+    }
+
     const to = normalizeRecipient(String(row?.finalClientPhone || ""));
     if (!to) {
       continue;
@@ -623,6 +641,7 @@ async function runAutoNotificacaoEnvioForInTransport() {
     processed,
     sent,
     failed,
+    skippedMaritimoIlhas,
     fetchedRows: rows.length,
     templateName,
     fallbackTemplateName,
