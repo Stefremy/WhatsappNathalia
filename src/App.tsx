@@ -2936,7 +2936,7 @@ function App() {
     setSharedLogsError("");
     sharedLogsInFlightRef.current = true;
 
-    fetch(apiUrl("/api/logs?limit=500"))
+    fetch(apiUrl("/api/logs?limit=all"))
       .then((response) => response.json())
       .then((data) => {
         const rows = Array.isArray(data?.data) ? (data.data as SharedLogItem[]) : [];

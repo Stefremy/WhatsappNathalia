@@ -115,3 +115,23 @@ npm run dev
 npm run build
 npm run preview
 ```
+
+## Cron via GitHub Actions (recommended for Vercel Hobby)
+
+This project can trigger backend cron endpoints from GitHub Actions, avoiding Vercel Hobby cron limits.
+
+Workflow file:
+
+- `.github/workflows/cron-endpoints.yml`
+
+Required GitHub repository secrets:
+
+- `CRON_BASE_URL` (example: `https://your-app.vercel.app`)
+- `CRON_SECRET` (must match `CRON_SECRET` in backend environment)
+
+Behavior:
+
+- Runs every 30 minutes on weekdays (UTC).
+- Calls POST /api/messages/process-scheduled.
+- Calls GET /api/cron/auto-notificacao-envio.
+- The backend itself enforces Lisbon-time checks for `AUTO_NOTIFICACAO_ENVIO` (09:30 on weekdays by env), so calling every 30 minutes is safe.

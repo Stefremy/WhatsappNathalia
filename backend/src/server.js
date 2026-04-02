@@ -1888,6 +1888,14 @@ function isAutoSmsFallbackEnabled() {
   return !["0", "false", "no", "off"].includes(rawValue);
 }
 
+function isIncidenciaMessageType(value) {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+  return normalized.includes("incid");
+}
+
 function buildTemplateFallbackText({ templateName, bodyVariables = [], buttonUrlVariable = "" }) {
   const cleanTemplateName = String(templateName || "").trim();
   const cleanVars = Array.isArray(bodyVariables)
@@ -4414,7 +4422,9 @@ async function sendGenericTemplateMessage({
       buttonUrlVariable: cleanButtonUrlVariable
     });
 
-    const smsFallback = !response.ok
+    const smsFallbackDisabledForIncidencia = isIncidenciaMessageType(cleanTrackerContext?.messageType);
+
+    const smsFallback = !response.ok && !smsFallbackDisabledForIncidencia
       ? await maybeSendAutomaticSmsFallback({
           to: normalizedTo,
           message: smsFallbackMessage,
@@ -4423,7 +4433,13 @@ async function sendGenericTemplateMessage({
           waStatus: `failed_${response.status}`,
           waResponse: responseBody
         })
-      : null;
+      : (!response.ok && smsFallbackDisabledForIncidencia
+        ? {
+            attempted: false,
+            status: "skipped_for_incidencia",
+            reason: "sms_fallback_disabled_for_incidencia"
+          }
+        : null);
 
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
@@ -4949,6 +4965,9 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
 
+  const forceRaw = String(req.query?.force || "").trim().toLowerCase();
+  const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
   if (!enabled) {
@@ -4956,7 +4975,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
   }
 
   const parts = getLisbonClockParts();
-  if (!shouldRunAutoNotificacaoEnvioAtClock(parts)) {
+  if (!forceRun && !shouldRunAutoNotificacaoEnvioAtClock(parts)) {
     return res.json({
       ok: true,
       skipped: true,
@@ -4977,7 +4996,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
   try {
     autoNotificacaoEnvioRunning = true;
     const summary = await runAutoNotificacaoEnvioForInDistribution();
-    return res.json({ ok: true, triggeredBy: "cron", ...summary, at: new Date().toISOString() });
+    return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
     return res.status(500).json({
       error: "Failed to run auto notificacao envio cron",
@@ -5164,12 +5183,14 @@ app.get("/api/logs", async (req, res) => {
   }
 
   try {
-    const requestedLimit = Number(req.query?.limit || 100);
-    const limit = Number.isFinite(requestedLimit)
-      ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 500)
-      : 100;
+    const rawLimit = String(req.query?.limit || "100").trim().toLowerCase();
+    const fetchAll = rawLimit === "all" || rawLimit === "unlimited";
+    const requestedLimit = Number(rawLimit);
+    const limit = fetchAll
+      ? null
+      : (Number.isFinite(requestedLimit) ? Math.max(Math.trunc(requestedLimit), 1) : 100);
 
-    const cacheKey = `${supabaseEnabled ? "supabase" : "pg"}:${limit}`;
+    const cacheKey = `${supabaseEnabled ? "supabase" : "pg"}:${fetchAll ? "all" : String(limit)}`;
     const now = Date.now();
     const ifNoneMatch = String(req.headers["if-none-match"] || "").trim();
 
@@ -5189,18 +5210,53 @@ app.get("/api/logs", async (req, res) => {
     }
 
     if (supabaseEnabled && supabase) {
-      const { data, error } = await supabase
-        .from("whatsapp_logs")
-        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
-        .neq("channel", STATE_FALLBACK_CHANNEL)
-        .order("created_at", { ascending: false })
-        .limit(limit);
+      let rows = [];
 
-      if (error) {
-        return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
+      if (fetchAll) {
+        // Use a conservative page size so this works even when Supabase API max rows is configured to 100.
+        const batchSize = 100;
+        let offset = 0;
+
+        while (true) {
+          const { data, error } = await supabase
+            .from("whatsapp_logs")
+            .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
+            .neq("channel", STATE_FALLBACK_CHANNEL)
+            .order("created_at", { ascending: false })
+            .range(offset, offset + batchSize - 1);
+
+          if (error) {
+            return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
+          }
+
+          const chunk = Array.isArray(data) ? data : [];
+          if (chunk.length === 0) {
+            break;
+          }
+
+          rows.push(...chunk);
+          offset += chunk.length;
+
+          if (chunk.length < batchSize) {
+            break;
+          }
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("whatsapp_logs")
+          .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
+          .neq("channel", STATE_FALLBACK_CHANNEL)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (error) {
+          return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
+        }
+
+        rows = Array.isArray(data) ? data : [];
       }
 
-      const payload = { data: Array.isArray(data) ? data : [] };
+      const payload = { data: rows };
       const etag = `"${createHash("sha1").update(JSON.stringify(payload)).digest("hex")}"`;
 
       logsResponseCache.key = cacheKey;
@@ -5216,15 +5272,24 @@ app.get("/api/logs", async (req, res) => {
       return res.json(payload);
     }
 
-    const { rows } = await pgPool.query(
-      `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
-      from public.whatsapp_logs
-      where channel is distinct from $2
-      order by created_at desc
-      limit $1`,
-      [limit, STATE_FALLBACK_CHANNEL]
-    );
-    const payload = { data: rows || [] };
+    const pgResult = fetchAll
+      ? await pgPool.query(
+        `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
+        from public.whatsapp_logs
+        where channel is distinct from $1
+        order by created_at desc`,
+        [STATE_FALLBACK_CHANNEL]
+      )
+      : await pgPool.query(
+        `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
+        from public.whatsapp_logs
+        where channel is distinct from $2
+        order by created_at desc
+        limit $1`,
+        [limit, STATE_FALLBACK_CHANNEL]
+      );
+
+    const payload = { data: pgResult.rows || [] };
     const etag = `"${createHash("sha1").update(JSON.stringify(payload)).digest("hex")}"`;
 
     logsResponseCache.key = cacheKey;

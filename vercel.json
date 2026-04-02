@@ -8,16 +8,6 @@
       "maxDuration": 60
     }
   },
-  "crons": [
-    {
-      "path": "/api/messages/process-scheduled",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-envio",
-      "schedule": "* * * * *"
-    }
-  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
