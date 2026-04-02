@@ -363,7 +363,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
     // Refresh source data each cycle to detect newly appeared incidence rows.
     const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
     const templateName = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_TEMPLATE || "notificacao_auto_incidencia").trim();
-    const languageCode = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_LANGUAGE || "POR").trim() || "POR";
+    const languageCode = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_LANGUAGE || "pt_PT").trim() || "pt_PT";
 
     const freshEntries = [];
     for (const row of rows) {
