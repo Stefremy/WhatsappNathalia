@@ -476,6 +476,55 @@ async function runAutoNotificacaoEnvioForInDistribution() {
   };
 }
 
+async function buildAutoNotificacaoEnvioDryRunSummary(options = {}) {
+  const templateName = String(process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE || "notificacao_de_envio").trim();
+  const languageCode = String(process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE || "pt_PT").trim() || "pt_PT";
+  const limit = Number.isFinite(Number(options?.limit)) ? Math.max(1, Number(options.limit)) : 250;
+  const maxPages = Number.isFinite(Number(options?.maxPages)) ? Math.max(1, Number(options.maxPages)) : 40;
+  const sampleSize = Number.isFinite(Number(options?.sampleSize)) ? Math.max(1, Number(options.sampleSize)) : 15;
+
+  // Fetch source data exactly like the real auto run, but do not send anything.
+  const rows = await fetchAllTmsInDistributionShipmentsData({ limit, maxPages });
+
+  let eligibleToSend = 0;
+  let skippedMissingPhone = 0;
+  const sample = [];
+
+  for (const row of rows) {
+    const to = normalizeRecipient(String(row?.finalClientPhone || ""));
+    if (!to) {
+      skippedMissingPhone += 1;
+      continue;
+    }
+
+    eligibleToSend += 1;
+    if (sample.length < sampleSize) {
+      sample.push({
+        to,
+        recipient: String(row?.recipient || "").trim(),
+        sender: String(row?.sender || "").trim(),
+        parcelId: String(row?.providerTrackingCode || row?.parcelId || "").trim()
+      });
+    }
+  }
+
+  return {
+    templateName,
+    languageCode,
+    fetchedRows: rows.length,
+    eligibleToSend,
+    skippedMissingPhone,
+    sample
+  };
+}
+
+function shouldRunAutoNotificacaoEnvioAtClock(parts) {
+  const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
+  const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
+  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
+  return isWeekday && parts.hour === targetHour && parts.minute === targetMinute;
+}
+
 async function maybeRunAutoNotificacaoEnvioSchedule() {
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
@@ -484,11 +533,7 @@ async function maybeRunAutoNotificacaoEnvioSchedule() {
   }
 
   const parts = getLisbonClockParts();
-  const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
-  const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
-  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
-
-  if (!isWeekday || parts.hour !== targetHour || parts.minute !== targetMinute) {
+  if (!shouldRunAutoNotificacaoEnvioAtClock(parts)) {
     return;
   }
 
@@ -4837,6 +4882,8 @@ app.post("/api/botpress/events", async (req, res) => {
 // ── Scheduling endpoints ──────────────────────────────────────────────────
 function isCronAuthorized(req) {
   const secret = String(process.env.CRON_SECRET || "").trim();
+  const isVercelCron = String(req.headers["x-vercel-cron"] || "").trim() === "1";
+  if (isVercelCron) return true;
   if (!secret) return true;
 
   const authHeader = String(req.headers.authorization || "").trim();
@@ -4892,6 +4939,96 @@ app.post("/api/messages/process-scheduled", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to process scheduled messages",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized cron trigger" });
+  }
+
+  const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
+  const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
+  if (!enabled) {
+    return res.json({ ok: true, skipped: true, reason: "AUTO_NOTIFICACAO_ENVIO_ENABLED=false" });
+  }
+
+  const parts = getLisbonClockParts();
+  if (!shouldRunAutoNotificacaoEnvioAtClock(parts)) {
+    return res.json({
+      ok: true,
+      skipped: true,
+      reason: "outside_schedule_window",
+      lisbonClock: {
+        dateKey: parts.dateKey,
+        weekday: parts.weekday,
+        hour: parts.hour,
+        minute: parts.minute
+      }
+    });
+  }
+
+  if (autoNotificacaoEnvioRunning) {
+    return res.json({ ok: true, skipped: true, reason: "already_running" });
+  }
+
+  try {
+    autoNotificacaoEnvioRunning = true;
+    const summary = await runAutoNotificacaoEnvioForInDistribution();
+    return res.json({ ok: true, triggeredBy: "cron", ...summary, at: new Date().toISOString() });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to run auto notificacao envio cron",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  } finally {
+    autoNotificacaoEnvioRunning = false;
+  }
+});
+
+app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized cron trigger" });
+  }
+
+  try {
+    const previewHourRaw = req.query?.hour;
+    const previewMinuteRaw = req.query?.minute;
+    const previewHour = Number.isFinite(Number(previewHourRaw)) ? Number(previewHourRaw) : Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
+    const previewMinute = Number.isFinite(Number(previewMinuteRaw)) ? Number(previewMinuteRaw) : Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
+
+    const now = getLisbonClockParts();
+    const wouldRunAtPreviewTime = shouldRunAutoNotificacaoEnvioAtClock({
+      ...now,
+      hour: previewHour,
+      minute: previewMinute
+    });
+
+    const summary = await buildAutoNotificacaoEnvioDryRunSummary({
+      limit: req.query?.limit,
+      maxPages: req.query?.maxPages,
+      sampleSize: req.query?.sampleSize
+    });
+
+    return res.json({
+      ok: true,
+      dryRun: true,
+      message: "No messages were sent.",
+      previewClock: {
+        timezone: "Europe/Lisbon",
+        weekday: now.weekday,
+        hour: previewHour,
+        minute: previewMinute,
+        wouldRunAtPreviewTime
+      },
+      ...summary,
+      at: new Date().toISOString()
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to run auto notificacao envio dry-run",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
