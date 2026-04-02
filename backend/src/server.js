@@ -290,7 +290,18 @@ async function fetchAllTmsIncidenceShipmentsData({ limit = 250, maxPages = 40 } 
 }
 
 function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
-  // Every day: every 30 minutes from 09:00 to 19:30 Lisbon time.
+  const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
+  const configuredWeekendScanHoursRaw = Number(process.env.AUTO_NOTIFICACAO_INCIDENCIA_WEEKEND_SCAN_HOURS || 6);
+  const configuredWeekendScanHours = Number.isFinite(configuredWeekendScanHoursRaw)
+    ? Math.max(1, Math.min(24, Math.trunc(configuredWeekendScanHoursRaw)))
+    : 6;
+
+  // Weekend: scan every N hours (default 6), no sends.
+  if (isWeekend) {
+    return parts.minute === 0 && parts.hour % configuredWeekendScanHours === 0;
+  }
+
+  // Weekdays: every 30 minutes from 09:00 to 19:30 Lisbon time.
   if (parts.hour < 9 || parts.hour > 19) {
     return false;
   }
@@ -318,6 +329,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
     return;
   }
 
+  const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
   const slotKey = `${parts.dateKey} ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
   if (autoNotificacaoIncidenciaLastRunSlotKey === slotKey) {
     return;
@@ -328,12 +340,6 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
   autoNotificacaoIncidenciaRunning = true;
   try {
     await hydrateAutoNotificacaoIncidenciaState();
-
-    // From now on, only new entries are sent. Drop any legacy pending queue.
-    if (autoNotificacaoIncidenciaPendingEntries.size > 0) {
-      autoNotificacaoIncidenciaPendingEntries.clear();
-      await persistAutoNotificacaoIncidenciaState();
-    }
 
     // Refresh source data each cycle to detect newly appeared incidence rows.
     const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
@@ -374,11 +380,52 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
       return;
     }
 
+    if (isWeekend) {
+      let queued = 0;
+      for (const entry of freshEntries) {
+        if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
+        autoNotificacaoIncidenciaPendingEntries.set(entry.shipmentKey, {
+          to: entry.to,
+          destinatario: entry.destinatario,
+          parcelId: entry.parcelId,
+          sender: entry.sender
+        });
+        queued += 1;
+      }
+
+      await persistAutoNotificacaoIncidenciaState();
+      if (freshEntries.length > 0 || queued > 0) {
+        console.log("[auto-notificacao-incidencia-weekend-scan]", {
+          queued,
+          freshEntries: freshEntries.length,
+          pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
+          fetchedRows: rows.length
+        });
+      }
+      return;
+    }
+
     let processed = 0;
     let sent = 0;
     let failed = 0;
 
+    const queueByShipmentKey = new Map();
+    for (const [shipmentKey, value] of autoNotificacaoIncidenciaPendingEntries.entries()) {
+      queueByShipmentKey.set(shipmentKey, {
+        shipmentKey,
+        to: value.to,
+        destinatario: value.destinatario,
+        parcelId: value.parcelId,
+        sender: value.sender
+      });
+    }
     for (const entry of freshEntries) {
+      if (!queueByShipmentKey.has(entry.shipmentKey)) {
+        queueByShipmentKey.set(entry.shipmentKey, entry);
+      }
+    }
+
+    for (const entry of queueByShipmentKey.values()) {
       if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
 
       const shipmentKey = entry.shipmentKey;
@@ -399,8 +446,15 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
       if (result.ok) {
         sent += 1;
         autoNotificacaoIncidenciaSentKeys.add(shipmentKey);
+        autoNotificacaoIncidenciaPendingEntries.delete(shipmentKey);
       } else {
         failed += 1;
+        autoNotificacaoIncidenciaPendingEntries.set(shipmentKey, {
+          to: entry.to,
+          destinatario: entry.destinatario,
+          parcelId: entry.parcelId,
+          sender: entry.sender
+        });
       }
     }
 
