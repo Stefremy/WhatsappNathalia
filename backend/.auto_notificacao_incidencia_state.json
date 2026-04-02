@@ -41,7 +41,10 @@
     "001002161914|EQ405907699PT",
     "001002159113|EQ405907416PT",
     "001002148939|DB236186280PT",
-    "001002166510|EQ405908102PT"
+    "001002166510|EQ405908102PT",
+    "001002194428|EQ406290647PT",
+    "001002189193|EQ406290219PT",
+    "001002188022|EQ406290103PT"
   ],
   "sentKeys": [
     "001002197019|EQ406290845PT",
@@ -78,6 +81,24 @@
       "destinatario": "Juliana Lavaredas",
       "parcelId": "001002166510",
       "sender": "BORDADO INOVADOR"
+    },
+    "001002194428|EQ406290647PT": {
+      "to": "351961357249",
+      "destinatario": "MANJAKINHA",
+      "parcelId": "001002194428",
+      "sender": "CHICCA STORE"
+    },
+    "001002189193|EQ406290219PT": {
+      "to": "351961088214",
+      "destinatario": "JACKELYNE IARA RODRIGUES DA SILVA",
+      "parcelId": "001002189193",
+      "sender": "MARIA LUISA FILIPE"
+    },
+    "001002188022|EQ406290103PT": {
+      "to": "351964216158",
+      "destinatario": "CIDáLIA NOBRE",
+      "parcelId": "001002188022",
+      "sender": "MARIA LUISA FILIPE"
     }
   }
 }
