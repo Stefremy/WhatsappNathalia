@@ -123,7 +123,8 @@ async function hydrateAutoNotificacaoIncidenciaState() {
         to: String(value.to || "").trim(),
         destinatario: String(value.destinatario || "").trim(),
         parcelId: String(value.parcelId || "").trim(),
-        sender: String(value.sender || "").trim()
+        sender: String(value.sender || "").trim(),
+        incidentReason: String(value.incidentReason || "").trim()
       });
     }
   } catch {
@@ -429,6 +430,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
       const destinatario = String(row?.recipient || "").trim();
       const parcelId = String(row?.parcelId || "").trim();
       const sender = String(row?.sender || "").trim();
+      const incidentReason = String(row?.incidentReason || row?.incidence || "").trim();
 
       if (!to) continue;
 
@@ -439,7 +441,8 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
           to,
           destinatario,
           parcelId,
-          sender
+          sender,
+          incidentReason
         });
       }
     }
@@ -462,7 +465,8 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
           to: entry.to,
           destinatario: entry.destinatario,
           parcelId: entry.parcelId,
-          sender: entry.sender
+          sender: entry.sender,
+          incidentReason: String(entry.incidentReason || "").trim()
         });
         queued += 1;
       }
@@ -490,7 +494,8 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
         to: value.to,
         destinatario: value.destinatario,
         parcelId: value.parcelId,
-        sender: value.sender
+        sender: value.sender,
+        incidentReason: String(value.incidentReason || "").trim()
       });
     }
     for (const entry of freshEntries) {
@@ -513,7 +518,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
           clientName: entry.destinatario,
           parcelId: entry.parcelId,
           messageType: "Incidencia",
-          notes: entry.sender
+          notes: String(entry.incidentReason || entry.sender || "").trim()
         }
       });
 
@@ -527,7 +532,8 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
           to: entry.to,
           destinatario: entry.destinatario,
           parcelId: entry.parcelId,
-          sender: entry.sender
+          sender: entry.sender,
+          incidentReason: String(entry.incidentReason || "").trim()
         });
       }
     }
@@ -1627,6 +1633,68 @@ function parseTmsIncidencesDatatable(payload) {
   }));
 }
 
+function extractIncidentReasonFromShipmentRow(row) {
+  const lastIncidence = row?.last_incidence && typeof row.last_incidence === "object"
+    ? row.last_incidence
+    : null;
+
+  if (lastIncidence) {
+    const incidenceName = normalizeDatatableTextCell(
+      lastIncidence?.incidence?.name ||
+      lastIncidence?.incidence_name ||
+      ""
+    );
+    const obs = normalizeDatatableTextCell(lastIncidence?.obs || "");
+
+    if (obs && incidenceName) {
+      return `${incidenceName}: ${obs}`.trim();
+    }
+    if (obs) {
+      return obs;
+    }
+    if (incidenceName) {
+      return incidenceName;
+    }
+  }
+
+  const directCandidates = [
+    row?.incident_reason,
+    row?.incidence_reason,
+    row?.reason,
+    row?.reason_name,
+    row?.reason_description,
+    row?.status_reason,
+    row?.incident_notes,
+    row?.incidence
+  ];
+
+  for (const candidate of directCandidates) {
+    const normalized = normalizeDatatableTextCell(candidate);
+    if (normalized) {
+      return normalized.replace(/^motivo\s*:\s*/i, "").trim();
+    }
+  }
+
+  const htmlCandidates = [row?.status, row?.delivery_date, row?.last_incidence];
+  for (const candidate of htmlCandidates) {
+    const raw = String(candidate || "");
+    if (!raw) continue;
+
+    const motivoMatch = raw.match(/motivo\s*:\s*([^<\n\r"]+)/i);
+    if (motivoMatch?.[1]) {
+      return stripHtml(motivoMatch[1]).replace(/^motivo\s*:\s*/i, "").trim();
+    }
+
+    const titleMatch = raw.match(/title\s*=\s*"([^"]+)"/i);
+    const titleText = titleMatch?.[1] ? stripHtml(titleMatch[1]) : "";
+    if (/motivo\s*:/i.test(titleText)) {
+      return titleText.replace(/^.*?motivo\s*:\s*/i, "").trim();
+    }
+  }
+
+  return "";
+}
+
 function parseTmsIncidenceShipmentsDatatable(payload) {
   const data = Array.isArray(payload?.data) ? payload.data : [];
   return data.map((row) => {
@@ -1672,6 +1740,7 @@ function parseTmsIncidenceShipmentsDatatable(payload) {
       deliveryDate: normalizeDatatableTextCell(row?.delivery_date || row?.delivery_at || ""),
       status: normalizeDatatableTextCell(row?.status || row?.status_id || ""),
       incidence: normalizeDatatableTextCell(row?.last_incidence || ""),
+      incidentReason: extractIncidentReasonFromShipmentRow(row),
       hasCharge,
       chargeAmount: hasChargeByAmount ? chargeAmountNumber.toFixed(2) : ""
     };
@@ -4829,6 +4898,16 @@ async function sendGenericTemplateMessage({
       })
     );
 
+    const logPayload = responseBody && typeof responseBody === "object"
+      ? {
+          ...responseBody,
+          trackerContext: cleanTrackerContext || null
+        }
+      : {
+          response: responseBody,
+          trackerContext: cleanTrackerContext || null
+        };
+
     const supabaseWarning = await safeSupabaseLog(() =>
       createSupabaseLogRow({
         direction: "out",
@@ -4838,7 +4917,7 @@ async function sendGenericTemplateMessage({
         templateName: cleanTemplateName,
         status: response.ok ? "accepted" : `failed_${response.status}`,
         apiMessageId: messageId,
-        payload: responseBody
+        payload: logPayload
       })
     );
 

@@ -255,6 +255,7 @@ type TmsDashboardData = {
     deliveryDate?: string;
     status?: string;
     incidence?: string;
+    incidentReason?: string;
     hasCharge?: boolean;
     chargeAmount?: string;
   }>;
@@ -269,6 +270,7 @@ type TmsDashboardData = {
     deliveryDate?: string;
     status?: string;
     incidence?: string;
+    incidentReason?: string;
     hasCharge?: boolean;
     chargeAmount?: string;
   }>;
@@ -285,6 +287,7 @@ type TmsDeliveredShipment = {
   deliveryDate?: string;
   status?: string;
   incidence?: string;
+  incidentReason?: string;
 };
 
 type PudoNotificationState = Record<
@@ -1014,7 +1017,7 @@ function App() {
   const [callingRefOpen, setCallingRefOpen] = useState(false);
   const callingPeerRef = useRef<RTCPeerConnection | null>(null);
   const callingLocalStreamRef = useRef<MediaStream | null>(null);
-  const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status">("all");
+  const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status" | "incidentReason">("all");
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
   const [trackerPageSize, setTrackerPageSize] = useState(15);
@@ -2909,6 +2912,13 @@ function App() {
         const status = String(item.status || "unknown");
         const templateName = String(item.template_name || "").trim();
         const templateVariable2ParcelId = extractParcelIdFromTemplateVariable2(templateName, message);
+        const payload = item.payload && typeof item.payload === "object"
+          ? (item.payload as Record<string, unknown>)
+          : null;
+        const trackerContext = payload?.trackerContext && typeof payload.trackerContext === "object"
+          ? (payload.trackerContext as Record<string, unknown>)
+          : null;
+        const incidentReason = String(trackerContext?.notes || "").trim();
         return {
           id: String(item.id),
           clientName: String(item.contact_name || resolveContactName(String(item.to_number || ""), savedContacts) || "-"),
@@ -2919,7 +2929,8 @@ function App() {
           dateSent: item.created_at ? new Date(item.created_at).toLocaleString("pt-PT") : "-",
           smsClicksend: String(item.channel || "").toLowerCase() === "sms" ? "Yes" : "No",
           status,
-          messageTitle: String(templateName || "WhatsApp Message")
+          messageTitle: String(templateName || "WhatsApp Message"),
+          incidentReason
         };
       });
     }
@@ -2934,7 +2945,8 @@ function App() {
       dateSent: item.time,
       smsClicksend: item.channel === "sms" ? "Yes" : "No",
       status: item.status,
-      messageTitle: item.channel === "template" ? "Whatsapp Template" : "WhatsApp Message"
+      messageTitle: item.channel === "template" ? "Whatsapp Template" : "WhatsApp Message",
+      incidentReason: ""
     }));
   }, [filteredHistory, savedContacts, sharedLogs]);
 
@@ -2950,7 +2962,8 @@ function App() {
         clientPhone: String(row.clientPhone || "").toLowerCase(),
         parcelId: String(row.parcelId || "").toLowerCase(),
         messageTitle: String(row.messageTitle || "").toLowerCase(),
-        status: String(row.status || "").toLowerCase()
+        status: String(row.status || "").toLowerCase(),
+        incidentReason: String(row.incidentReason || "").toLowerCase()
       };
 
       if (trackerSearchField === "all") {
@@ -6580,12 +6593,13 @@ function App() {
                         <th>Data Recolha</th>
                         <th>Data Entrega</th>
                         <th>Status</th>
+                        <th>Incident Reason</th>
                       </tr>
                     </thead>
                     <tbody>
                       {notificacaoRows.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="tracker-empty">
+                          <td colSpan={11} className="tracker-empty">
                             {notificacaoEnvioSection === "distribuicao"
                               ? (notificacaoLoading ? "A carregar envios em distribuicao..." : "Sem envios em distribuicao para mostrar.")
                               : notificacaoEnvioSection === "entregue"
@@ -6637,6 +6651,7 @@ function App() {
                             <td>{row.pickupDate || "-"}</td>
                             <td>{row.deliveryDate || "-"}</td>
                             <td>{row.status || "-"}</td>
+                            <td>{notificacaoEnvioSection === "incidencias" ? (row.incidentReason || "-") : "-"}</td>
                           </tr>
                         ))
                       )}
@@ -7572,7 +7587,8 @@ function App() {
                       { key: "clientPhone", label: "Phone" },
                       { key: "clientName", label: "Client" },
                       { key: "messageTitle", label: "Message Title" },
-                      { key: "status", label: "Status" }
+                      { key: "status", label: "Status" },
+                      { key: "incidentReason", label: "Incident Reason" }
                     ].map((option) => (
                       <button
                         key={option.key}
@@ -7604,13 +7620,14 @@ function App() {
                       <th>sms Clicksend</th>
                       <th>Status</th>
                       <th>Message Title</th>
+                      <th>Incident Reason</th>
                       <th>Ação</th>
                     </tr>
                   </thead>
                   <tbody>
                     {paginatedTrackerRows.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="tracker-empty">Ainda não existem mensagens para mostrar.</td>
+                        <td colSpan={11} className="tracker-empty">Ainda não existem mensagens para mostrar.</td>
                       </tr>
                     ) : (
                       paginatedTrackerRows.map((row) => (
@@ -7629,6 +7646,7 @@ function App() {
                             </span>
                           </td>
                           <td>{row.messageTitle}</td>
+                          <td>{row.incidentReason || "-"}</td>
                           <td>
                             <button
                               type="button"
