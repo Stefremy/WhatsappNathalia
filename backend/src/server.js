@@ -58,6 +58,7 @@ let autoNotificacaoEnvioRunning = false;
 let autoNotificacaoEnvioLastRunDateKey = "";
 let autoNotificacaoEnvioTransporteRunning = false;
 let autoNotificacaoEnvioTransporteLastRunDateKey = "";
+let autoNotificacaoEnvioStateHydrated = false;
 let autoNotificacaoIncidenciaRunning = false;
 let autoNotificacaoIncidenciaLastRunSlotKey = "";
 let autoNotificacaoIncidenciaStateHydrated = false;
@@ -67,6 +68,10 @@ const autoNotificacaoIncidenciaSentKeys = new Set();
 const autoNotificacaoIncidenciaPendingEntries = new Map();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const autoNotificacaoEnvioStateFile = resolve(
+  __dirname,
+  "../.auto_notificacao_envio_state.json"
+);
 const autoNotificacaoIncidenciaStateFile = resolve(
   __dirname,
   "../.auto_notificacao_incidencia_state.json"
@@ -255,6 +260,56 @@ function getLisbonClockParts() {
     hour: Number(lookup.hour || 0),
     minute: Number(lookup.minute || 0)
   };
+}
+
+function getAutoNotificacaoEnvioGraceMinutes() {
+  const raw = Number(process.env.AUTO_NOTIFICACAO_ENVIO_GRACE_MINUTES || 5);
+  if (!Number.isFinite(raw)) {
+    return 5;
+  }
+  return Math.max(0, Math.min(30, Math.trunc(raw)));
+}
+
+function isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes) {
+  const nowTotal = (parts.hour * 60) + parts.minute;
+  const targetTotal = (targetHour * 60) + targetMinute;
+  const delta = nowTotal - targetTotal;
+  return delta >= 0 && delta <= graceMinutes;
+}
+
+async function hydrateAutoNotificacaoEnvioState() {
+  if (autoNotificacaoEnvioStateHydrated) {
+    return;
+  }
+
+  try {
+    const raw = await readFile(autoNotificacaoEnvioStateFile, "utf8");
+    const parsed = JSON.parse(raw || "{}") || {};
+
+    autoNotificacaoEnvioLastRunDateKey = String(parsed.envioLastRunDateKey || "").trim();
+    autoNotificacaoEnvioTransporteLastRunDateKey = String(parsed.transporteLastRunDateKey || "").trim();
+  } catch {
+    // Ignore missing or invalid persisted state; scheduler will bootstrap.
+  } finally {
+    autoNotificacaoEnvioStateHydrated = true;
+  }
+}
+
+async function persistAutoNotificacaoEnvioState() {
+  const payload = JSON.stringify({
+    envioLastRunDateKey: autoNotificacaoEnvioLastRunDateKey,
+    transporteLastRunDateKey: autoNotificacaoEnvioTransporteLastRunDateKey,
+    updatedAt: new Date().toISOString()
+  }, null, 2);
+
+  try {
+    await writeFile(autoNotificacaoEnvioStateFile, payload, "utf8");
+  } catch (error) {
+    console.error(
+      "[auto-notificacao-envio] failed to persist state",
+      error instanceof Error ? error.message : error
+    );
+  }
 }
 
 async function fetchAllTmsInDistributionShipmentsData({ limit = 250, maxPages = 40 } = {}) {
@@ -695,14 +750,16 @@ function shouldRunAutoNotificacaoEnvioAtClock(parts) {
   const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
   const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
   const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
-  return isWeekday && parts.hour === targetHour && parts.minute === targetMinute;
+  const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
+  return isWeekday && isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 }
 
 function shouldRunAutoNotificacaoEnvioTransporteAtClock(parts) {
   const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
   const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_HOUR || 10);
   const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_MINUTE || 0);
-  return isWeekday && parts.hour === targetHour && parts.minute === targetMinute;
+  const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
+  return isWeekday && isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 }
 
 async function maybeRunAutoNotificacaoEnvioSchedule() {
@@ -717,6 +774,8 @@ async function maybeRunAutoNotificacaoEnvioSchedule() {
     return;
   }
 
+  await hydrateAutoNotificacaoEnvioState();
+
   if (autoNotificacaoEnvioLastRunDateKey === parts.dateKey || autoNotificacaoEnvioRunning) {
     return;
   }
@@ -725,6 +784,7 @@ async function maybeRunAutoNotificacaoEnvioSchedule() {
   try {
     const summary = await runAutoNotificacaoEnvioForInDistribution();
     autoNotificacaoEnvioLastRunDateKey = parts.dateKey;
+    await persistAutoNotificacaoEnvioState();
     console.log("[auto-notificacao-envio]", summary);
   } catch (error) {
     console.error("[auto-notificacao-envio] failed", error instanceof Error ? error.message : error);
@@ -745,6 +805,8 @@ async function maybeRunAutoNotificacaoEnvioTransporteSchedule() {
     return;
   }
 
+  await hydrateAutoNotificacaoEnvioState();
+
   if (autoNotificacaoEnvioTransporteLastRunDateKey === parts.dateKey || autoNotificacaoEnvioTransporteRunning) {
     return;
   }
@@ -753,6 +815,7 @@ async function maybeRunAutoNotificacaoEnvioTransporteSchedule() {
   try {
     const summary = await runAutoNotificacaoEnvioForInTransport();
     autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
+    await persistAutoNotificacaoEnvioState();
     console.log("[auto-notificacao-envio-em-transporte]", summary);
   } catch (error) {
     console.error("[auto-notificacao-envio-em-transporte] failed", error instanceof Error ? error.message : error);
@@ -5354,6 +5417,12 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
     });
   }
 
+  await hydrateAutoNotificacaoEnvioState();
+
+  if (!forceRun && autoNotificacaoEnvioLastRunDateKey === parts.dateKey) {
+    return res.json({ ok: true, skipped: true, reason: "already_ran_today", dateKey: parts.dateKey });
+  }
+
   if (autoNotificacaoEnvioRunning) {
     return res.json({ ok: true, skipped: true, reason: "already_running" });
   }
@@ -5361,6 +5430,8 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
   try {
     autoNotificacaoEnvioRunning = true;
     const summary = await runAutoNotificacaoEnvioForInDistribution();
+    autoNotificacaoEnvioLastRunDateKey = parts.dateKey;
+    await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
     return res.status(500).json({
@@ -5401,6 +5472,8 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
     });
   }
 
+  await hydrateAutoNotificacaoEnvioState();
+
   if (!forceRun && autoNotificacaoEnvioTransporteLastRunDateKey === parts.dateKey) {
     return res.json({ ok: true, skipped: true, reason: "already_ran_today", dateKey: parts.dateKey });
   }
@@ -5413,6 +5486,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
     autoNotificacaoEnvioTransporteRunning = true;
     const summary = await runAutoNotificacaoEnvioForInTransport();
     autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
+    await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
     return res.status(500).json({
