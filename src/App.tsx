@@ -687,13 +687,6 @@ function extractPlaceholderIndexes(input: string) {
 }
 
 function filterOptionalTemplateIndexes(indexes: number[], templateName?: string, languageCode?: string) {
-  const normalizedName = String(templateName || "").trim().toLowerCase();
-  const normalizedLanguage = String(languageCode || "").trim().toLowerCase();
-
-  if (normalizedName === "order_pick_no_ctt" && normalizedLanguage === "en_us") {
-    return indexes.filter((index) => index !== 4);
-  }
-
   return indexes;
 }
 
