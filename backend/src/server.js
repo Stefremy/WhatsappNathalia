@@ -393,16 +393,16 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
     return parts.minute === 0 && parts.hour % configuredWeekendScanHours === 0;
   }
 
-  // Weekdays: every 30 minutes from 09:00 to 19:30 Lisbon time.
+  // Weekdays: every 10 minutes from 09:00 to 19:30 Lisbon time.
   if (parts.hour < 9 || parts.hour > 19) {
     return false;
   }
 
-  if (parts.minute !== 0 && parts.minute !== 30) {
+  if (parts.minute % 10 !== 0) {
     return false;
   }
 
-  if (parts.hour === 19 && parts.minute !== 30) {
+  if (parts.hour === 19 && parts.minute > 30) {
     return false;
   }
 
