@@ -66,6 +66,7 @@ let autoNotificacaoIncidenciaInitialized = false;
 const autoNotificacaoIncidenciaKnownKeys = new Set();
 const autoNotificacaoIncidenciaSentKeys = new Set();
 const autoNotificacaoIncidenciaPendingEntries = new Map();
+const autoNotificacaoIncidenciaMetaByKey = new Map();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const autoNotificacaoStateDir = String(process.env.AUTO_NOTIFICACAO_STATE_DIR || "").trim()
@@ -97,41 +98,203 @@ function buildIncidenciaShipmentKey(row) {
   return `${parcelId}|${tracking}`;
 }
 
+function normalizeIsoDateOrEmpty(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const time = Date.parse(raw);
+  if (!Number.isFinite(time)) return "";
+  return new Date(time).toISOString();
+}
+
+function getAutoNotificacaoIncidenciaRetentionDays() {
+  const raw = Number(process.env.AUTO_NOTIFICACAO_INCIDENCIA_RETENTION_DAYS || 30);
+  if (!Number.isFinite(raw)) return 30;
+  return Math.max(1, Math.min(365, Math.trunc(raw)));
+}
+
+function setAutoNotificacaoIncidenciaKeyMeta(shipmentKey, updates = {}) {
+  const key = String(shipmentKey || "").trim();
+  if (!key) return;
+
+  const prev = autoNotificacaoIncidenciaMetaByKey.get(key) || {};
+  const next = {
+    firstSeenAt: normalizeIsoDateOrEmpty(updates.firstSeenAt || prev.firstSeenAt || ""),
+    lastSeenAt: normalizeIsoDateOrEmpty(updates.lastSeenAt || prev.lastSeenAt || ""),
+    sentAt: normalizeIsoDateOrEmpty(updates.sentAt || prev.sentAt || "")
+  };
+
+  if (!next.firstSeenAt && next.lastSeenAt) {
+    next.firstSeenAt = next.lastSeenAt;
+  }
+
+  autoNotificacaoIncidenciaMetaByKey.set(key, next);
+}
+
+function pruneAutoNotificacaoIncidenciaState() {
+  const retentionDays = getAutoNotificacaoIncidenciaRetentionDays();
+  const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - retentionMs;
+
+  const candidates = new Set([
+    ...autoNotificacaoIncidenciaKnownKeys,
+    ...autoNotificacaoIncidenciaSentKeys,
+    ...autoNotificacaoIncidenciaPendingEntries.keys(),
+    ...autoNotificacaoIncidenciaMetaByKey.keys()
+  ]);
+
+  for (const shipmentKey of candidates) {
+    const meta = autoNotificacaoIncidenciaMetaByKey.get(shipmentKey) || {};
+    const sentAtMs = Date.parse(String(meta.sentAt || ""));
+    const lastSeenAtMs = Date.parse(String(meta.lastSeenAt || ""));
+    const seenReferenceMs = Number.isFinite(lastSeenAtMs) ? lastSeenAtMs : sentAtMs;
+    const hasRecentSent = Number.isFinite(sentAtMs) && sentAtMs >= cutoff;
+    const hasRecentSeen = Number.isFinite(seenReferenceMs) && seenReferenceMs >= cutoff;
+
+    if (hasRecentSent || hasRecentSeen) {
+      continue;
+    }
+
+    autoNotificacaoIncidenciaKnownKeys.delete(shipmentKey);
+    autoNotificacaoIncidenciaSentKeys.delete(shipmentKey);
+    autoNotificacaoIncidenciaPendingEntries.delete(shipmentKey);
+    autoNotificacaoIncidenciaMetaByKey.delete(shipmentKey);
+  }
+}
+
+function applyAutoNotificacaoIncidenciaState(input) {
+  const parsed = input && typeof input === "object" ? input : {};
+  const nowIso = new Date().toISOString();
+
+  autoNotificacaoIncidenciaInitialized = Boolean(parsed.initialized);
+
+  autoNotificacaoIncidenciaKnownKeys.clear();
+  autoNotificacaoIncidenciaMetaByKey.clear();
+  for (const key of Array.isArray(parsed.knownKeys) ? parsed.knownKeys : []) {
+    const clean = String(key || "").trim();
+    if (!clean) continue;
+    autoNotificacaoIncidenciaKnownKeys.add(clean);
+    setAutoNotificacaoIncidenciaKeyMeta(clean, { firstSeenAt: nowIso, lastSeenAt: nowIso });
+  }
+
+  autoNotificacaoIncidenciaSentKeys.clear();
+  for (const key of Array.isArray(parsed.sentKeys) ? parsed.sentKeys : []) {
+    const clean = String(key || "").trim();
+    if (!clean) continue;
+    autoNotificacaoIncidenciaSentKeys.add(clean);
+    setAutoNotificacaoIncidenciaKeyMeta(clean, {
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso,
+      sentAt: nowIso
+    });
+  }
+
+  const keyMeta = parsed.keyMeta && typeof parsed.keyMeta === "object"
+    ? parsed.keyMeta
+    : {};
+  for (const [key, value] of Object.entries(keyMeta)) {
+    const clean = String(key || "").trim();
+    if (!clean || !value || typeof value !== "object") continue;
+    setAutoNotificacaoIncidenciaKeyMeta(clean, {
+      firstSeenAt: value.firstSeenAt,
+      lastSeenAt: value.lastSeenAt,
+      sentAt: value.sentAt
+    });
+  }
+
+  autoNotificacaoIncidenciaPendingEntries.clear();
+  const pending = parsed.pendingEntries && typeof parsed.pendingEntries === "object"
+    ? parsed.pendingEntries
+    : {};
+  for (const [key, value] of Object.entries(pending)) {
+    const clean = String(key || "").trim();
+    if (!clean || !value || typeof value !== "object") continue;
+    autoNotificacaoIncidenciaPendingEntries.set(clean, {
+      to: String(value.to || "").trim(),
+      destinatario: String(value.destinatario || "").trim(),
+      parcelId: String(value.parcelId || "").trim(),
+      sender: String(value.sender || "").trim(),
+      incidentReason: String(value.incidentReason || "").trim()
+    });
+    setAutoNotificacaoIncidenciaKeyMeta(clean, {
+      firstSeenAt: nowIso,
+      lastSeenAt: nowIso
+    });
+  }
+
+  pruneAutoNotificacaoIncidenciaState();
+}
+
+function buildAutoNotificacaoIncidenciaStatePayload() {
+  pruneAutoNotificacaoIncidenciaState();
+
+  const pendingEntries = {};
+  for (const [key, value] of autoNotificacaoIncidenciaPendingEntries.entries()) {
+    pendingEntries[key] = value;
+  }
+
+  const keyMeta = {};
+  for (const [key, value] of autoNotificacaoIncidenciaMetaByKey.entries()) {
+    keyMeta[key] = {
+      firstSeenAt: String(value.firstSeenAt || "").trim(),
+      lastSeenAt: String(value.lastSeenAt || "").trim(),
+      sentAt: String(value.sentAt || "").trim()
+    };
+  }
+
+  return {
+    initialized: autoNotificacaoIncidenciaInitialized,
+    knownKeys: Array.from(autoNotificacaoIncidenciaKnownKeys),
+    sentKeys: Array.from(autoNotificacaoIncidenciaSentKeys),
+    pendingEntries,
+    keyMeta
+  };
+}
+
 async function hydrateAutoNotificacaoIncidenciaState() {
   if (autoNotificacaoIncidenciaStateHydrated) {
     return;
   }
 
   try {
+    if (pgEnabled && pgPool) {
+      try {
+        await ensurePersistentStateTable();
+      } catch {}
+    }
+
+    if (supabaseEnabled && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("workspace_state")
+          .select("value")
+          .eq("key", "auto_notificacao_incidencia_state")
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data?.value && typeof data.value === "object") {
+          applyAutoNotificacaoIncidenciaState(data.value);
+          return;
+        }
+      } catch {}
+    }
+
+    if (pgEnabled && pgPool) {
+      try {
+        const { rows } = await pgPool.query(
+          `select value from public.workspace_state where key = $1 limit 1`,
+          ["auto_notificacao_incidencia_state"]
+        );
+        const value = Array.isArray(rows) && rows.length > 0 ? rows[0]?.value : null;
+        if (value && typeof value === "object") {
+          applyAutoNotificacaoIncidenciaState(value);
+          return;
+        }
+      } catch {}
+    }
+
     const raw = await readFile(autoNotificacaoIncidenciaStateFile, "utf8");
     const parsed = JSON.parse(raw || "{}") || {};
-
-    autoNotificacaoIncidenciaInitialized = Boolean(parsed.initialized);
-
-    for (const key of Array.isArray(parsed.knownKeys) ? parsed.knownKeys : []) {
-      const clean = String(key || "").trim();
-      if (clean) autoNotificacaoIncidenciaKnownKeys.add(clean);
-    }
-
-    for (const key of Array.isArray(parsed.sentKeys) ? parsed.sentKeys : []) {
-      const clean = String(key || "").trim();
-      if (clean) autoNotificacaoIncidenciaSentKeys.add(clean);
-    }
-
-    const pending = parsed.pendingEntries && typeof parsed.pendingEntries === "object"
-      ? parsed.pendingEntries
-      : {};
-    for (const [key, value] of Object.entries(pending)) {
-      const clean = String(key || "").trim();
-      if (!clean || !value || typeof value !== "object") continue;
-      autoNotificacaoIncidenciaPendingEntries.set(clean, {
-        to: String(value.to || "").trim(),
-        destinatario: String(value.destinatario || "").trim(),
-        parcelId: String(value.parcelId || "").trim(),
-        sender: String(value.sender || "").trim(),
-        incidentReason: String(value.incidentReason || "").trim()
-      });
-    }
+    applyAutoNotificacaoIncidenciaState(parsed);
   } catch {
     // Ignore missing or invalid persisted state; scheduler will bootstrap.
   } finally {
@@ -140,17 +303,36 @@ async function hydrateAutoNotificacaoIncidenciaState() {
 }
 
 async function persistAutoNotificacaoIncidenciaState() {
-  const pendingEntries = {};
-  for (const [key, value] of autoNotificacaoIncidenciaPendingEntries.entries()) {
-    pendingEntries[key] = value;
+  const payload = buildAutoNotificacaoIncidenciaStatePayload();
+
+  if (pgEnabled && pgPool) {
+    try {
+      await ensurePersistentStateTable();
+    } catch {}
   }
 
-  const payload = {
-    initialized: autoNotificacaoIncidenciaInitialized,
-    knownKeys: Array.from(autoNotificacaoIncidenciaKnownKeys),
-    sentKeys: Array.from(autoNotificacaoIncidenciaSentKeys),
-    pendingEntries
-  };
+  if (supabaseEnabled && supabase) {
+    try {
+      const { error } = await supabase
+        .from("workspace_state")
+        .upsert([{ key: "auto_notificacao_incidencia_state", value: payload }], { onConflict: "key" });
+      if (!error) {
+        return;
+      }
+    } catch {}
+  }
+
+  if (pgEnabled && pgPool) {
+    try {
+      await pgPool.query(
+        `insert into public.workspace_state (key, value, updated_at)
+        values ($1, $2::jsonb, now())
+        on conflict (key) do update set value = excluded.value, updated_at = now()`,
+        ["auto_notificacao_incidencia_state", JSON.stringify(payload)]
+      );
+      return;
+    } catch {}
+  }
 
   try {
     await writeFile(autoNotificacaoIncidenciaStateFile, JSON.stringify(payload, null, 2), "utf8");
@@ -450,6 +632,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
   autoNotificacaoIncidenciaRunning = true;
   try {
     await hydrateAutoNotificacaoIncidenciaState();
+    const nowIso = new Date().toISOString();
 
     // Refresh source data each cycle to detect newly appeared incidence rows.
     const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
@@ -480,6 +663,11 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
           incidentReason
         });
       }
+
+      setAutoNotificacaoIncidenciaKeyMeta(shipmentKey, {
+        firstSeenAt: nowIso,
+        lastSeenAt: nowIso
+      });
 
       if (!autoNotificacaoIncidenciaKnownKeys.has(shipmentKey)) {
         autoNotificacaoIncidenciaKnownKeys.add(shipmentKey);
@@ -597,6 +785,11 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
       if (result.ok) {
         sent += 1;
         autoNotificacaoIncidenciaSentKeys.add(shipmentKey);
+        setAutoNotificacaoIncidenciaKeyMeta(shipmentKey, {
+          firstSeenAt: nowIso,
+          lastSeenAt: nowIso,
+          sentAt: nowIso
+        });
         autoNotificacaoIncidenciaPendingEntries.delete(shipmentKey);
       } else {
         failed += 1;
