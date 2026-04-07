@@ -91,6 +91,9 @@ let googleOauthSessionHydrated = false;
 function buildIncidenciaShipmentKey(row) {
   const parcelId = String(row?.parcelId || "").trim();
   const tracking = String(row?.providerTrackingCode || "").trim();
+  if (!parcelId && !tracking) {
+    return "";
+  }
   return `${parcelId}|${tracking}`;
 }
 
@@ -454,6 +457,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
     const languageCode = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_LANGUAGE || "pt_PT").trim() || "pt_PT";
 
     const freshEntries = [];
+    const currentEntriesByShipmentKey = new Map();
     for (const row of rows) {
       const shipmentKey = buildIncidenciaShipmentKey(row);
       if (!shipmentKey) continue;
@@ -465,6 +469,17 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
       const incidentReason = String(row?.incidentReason || row?.incidence || "").trim();
 
       if (!to) continue;
+
+      if (!currentEntriesByShipmentKey.has(shipmentKey)) {
+        currentEntriesByShipmentKey.set(shipmentKey, {
+          shipmentKey,
+          to,
+          destinatario,
+          parcelId,
+          sender,
+          incidentReason
+        });
+      }
 
       if (!autoNotificacaoIncidenciaKnownKeys.has(shipmentKey)) {
         autoNotificacaoIncidenciaKnownKeys.add(shipmentKey);
@@ -503,7 +518,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
 
     if (isWeekend) {
       let queued = 0;
-      for (const entry of freshEntries) {
+      for (const entry of currentEntriesByShipmentKey.values()) {
         if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
         autoNotificacaoIncidenciaPendingEntries.set(entry.shipmentKey, {
           to: entry.to,
@@ -555,7 +570,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
         incidentReason: String(value.incidentReason || "").trim()
       });
     }
-    for (const entry of freshEntries) {
+    for (const entry of currentEntriesByShipmentKey.values()) {
       if (!queueByShipmentKey.has(entry.shipmentKey)) {
         queueByShipmentKey.set(entry.shipmentKey, entry);
       }
