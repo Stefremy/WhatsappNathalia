@@ -2,8 +2,8 @@ name: Trigger backend cron endpoints
 
 on:
   schedule:
-    # Incidencias: every 30 minutes on weekdays (backend enforces 10:00-18:00 Lisbon).
-    - cron: '*/30 * * * 1-5'
+    # Incidencias: every 15 minutes on weekdays (backend enforces 10:00-18:00 Lisbon).
+    - cron: '*/15 * * * 1-5'
     # Incidencias: weekend scans every 6 hours (queue only; no sends on weekend).
     - cron: '0 */6 * * 6,0'
     # Em distribuicao: 09:30 Lisbon on weekdays.
@@ -59,7 +59,7 @@ jobs:
             "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio-em-transporte"
 
       - name: Trigger AUTO_NOTIFICACAO_INCIDENCIA cron endpoint
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/30 * * * 1-5' || github.event.schedule == '0 */6 * * 6,0'
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * 1-5' || github.event.schedule == '0 */6 * * 6,0'
         run: |
           set -euo pipefail
           curl --fail --show-error --silent \
