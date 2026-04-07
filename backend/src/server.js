@@ -68,13 +68,15 @@ const autoNotificacaoIncidenciaSentKeys = new Set();
 const autoNotificacaoIncidenciaPendingEntries = new Map();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const autoNotificacaoStateDir = String(process.env.AUTO_NOTIFICACAO_STATE_DIR || "").trim()
+  || (process.env.VERCEL ? "/tmp" : resolve(__dirname, ".."));
 const autoNotificacaoEnvioStateFile = resolve(
-  __dirname,
-  "../.auto_notificacao_envio_state.json"
+  autoNotificacaoStateDir,
+  ".auto_notificacao_envio_state.json"
 );
 const autoNotificacaoIncidenciaStateFile = resolve(
-  __dirname,
-  "../.auto_notificacao_incidencia_state.json"
+  autoNotificacaoStateDir,
+  ".auto_notificacao_incidencia_state.json"
 );
 const GOOGLE_OAUTH_STATE_TTL_MS = 15 * 60 * 1000;
 const googleOauthSession = {
