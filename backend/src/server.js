@@ -271,6 +271,21 @@ function getAutoNotificacaoEnvioGraceMinutes() {
   return Math.max(0, Math.min(30, Math.trunc(raw)));
 }
 
+function getAutoNotificacaoEnvioTransporteGraceMinutes() {
+  const transporteRaw = process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_GRACE_MINUTES;
+  const fallback = getAutoNotificacaoEnvioGraceMinutes();
+  if (typeof transporteRaw === "undefined") {
+    return fallback;
+  }
+
+  const raw = Number(transporteRaw);
+  if (!Number.isFinite(raw)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(30, Math.trunc(raw)));
+}
+
 function isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes) {
   const nowTotal = (parts.hour * 60) + parts.minute;
   const targetTotal = (targetHour * 60) + targetMinute;
@@ -764,7 +779,7 @@ function shouldRunAutoNotificacaoEnvioTransporteAtClock(parts) {
   const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
   const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_HOUR || 10);
   const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_MINUTE || 0);
-  const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
+  const graceMinutes = getAutoNotificacaoEnvioTransporteGraceMinutes();
   return isWeekday && isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 }
 
