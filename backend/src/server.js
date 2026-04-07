@@ -407,22 +407,37 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
   return true;
 }
 
-async function maybeRunAutoNotificacaoIncidenciaSchedule() {
+async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
+  const forceRun = Boolean(options?.forceRun);
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
-  if (!enabled || autoNotificacaoIncidenciaRunning) {
-    return;
+  if (!enabled) {
+    return { ok: true, skipped: true, reason: "AUTO_NOTIFICACAO_INCIDENCIA_ENABLED=false" };
+  }
+
+  if (autoNotificacaoIncidenciaRunning) {
+    return { ok: true, skipped: true, reason: "already_running" };
   }
 
   const parts = getLisbonClockParts();
-  if (!shouldRunAutoNotificacaoIncidenciaAtClock(parts)) {
-    return;
+  if (!forceRun && !shouldRunAutoNotificacaoIncidenciaAtClock(parts)) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "outside_schedule_window",
+      lisbonClock: {
+        dateKey: parts.dateKey,
+        weekday: parts.weekday,
+        hour: parts.hour,
+        minute: parts.minute
+      }
+    };
   }
 
   const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
   const slotKey = `${parts.dateKey} ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
-  if (autoNotificacaoIncidenciaLastRunSlotKey === slotKey) {
-    return;
+  if (!forceRun && autoNotificacaoIncidenciaLastRunSlotKey === slotKey) {
+    return { ok: true, skipped: true, reason: "already_ran_slot", slotKey };
   }
 
   autoNotificacaoIncidenciaLastRunSlotKey = slotKey;
@@ -469,7 +484,19 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
         trackedKeys: autoNotificacaoIncidenciaKnownKeys.size,
         fetchedRows: rows.length
       });
-      return;
+      return {
+        ok: true,
+        skipped: true,
+        reason: "bootstrap_initialized",
+        fetchedRows: rows.length,
+        trackedKeys: autoNotificacaoIncidenciaKnownKeys.size,
+        lisbonClock: {
+          dateKey: parts.dateKey,
+          weekday: parts.weekday,
+          hour: parts.hour,
+          minute: parts.minute
+        }
+      };
     }
 
     if (isWeekend) {
@@ -495,7 +522,20 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
           fetchedRows: rows.length
         });
       }
-      return;
+      return {
+        ok: true,
+        mode: "weekend_scan",
+        queued,
+        freshEntries: freshEntries.length,
+        pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
+        fetchedRows: rows.length,
+        lisbonClock: {
+          dateKey: parts.dateKey,
+          weekday: parts.weekday,
+          hour: parts.hour,
+          minute: parts.minute
+        }
+      };
     }
 
     let processed = 0;
@@ -565,8 +605,32 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule() {
         languageCode
       });
     }
+
+    return {
+      ok: true,
+      mode: "weekday_send",
+      processed,
+      sent,
+      failed,
+      freshEntries: freshEntries.length,
+      pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
+      fetchedRows: rows.length,
+      templateName,
+      languageCode,
+      lisbonClock: {
+        dateKey: parts.dateKey,
+        weekday: parts.weekday,
+        hour: parts.hour,
+        minute: parts.minute
+      }
+    };
   } catch (error) {
     console.error("[auto-notificacao-incidencia] failed", error instanceof Error ? error.message : error);
+    return {
+      ok: false,
+      error: "Failed to run auto notificacao incidencia",
+      details: error instanceof Error ? error.message : "Unknown error"
+    };
   } finally {
     autoNotificacaoIncidenciaRunning = false;
   }
@@ -5590,6 +5654,29 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
   } finally {
     autoNotificacaoEnvioTransporteRunning = false;
   }
+});
+
+app.get("/api/cron/auto-notificacao-incidencia", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized cron trigger" });
+  }
+
+  const forceRaw = String(req.query?.force || "").trim().toLowerCase();
+  const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+
+  const result = await maybeRunAutoNotificacaoIncidenciaSchedule({ forceRun });
+  if (!result || result.ok === false) {
+    return res.status(500).json({
+      error: result?.error || "Failed to run auto notificacao incidencia cron",
+      details: result?.details || "Unknown error"
+    });
+  }
+
+  return res.json({
+    triggeredBy: forceRun ? "manual_force" : "cron",
+    ...result,
+    at: new Date().toISOString()
+  });
 });
 
 app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
