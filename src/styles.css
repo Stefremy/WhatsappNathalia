@@ -1323,6 +1323,349 @@ p {
   gap: 0.7rem;
 }
 
+.fact-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.fact-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: rgba(255, 255, 255, 0.9);
+  display: grid;
+  gap: 0.3rem;
+}
+
+.fact-card small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.ctt-dashboard-panel {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(238, 245, 255, 0.92));
+}
+
+.ctt-dashboard-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.ctt-badge {
+  border: 1px solid rgba(15, 23, 32, 0.16);
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.ctt-subtitle {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
+.ctt-filters-row {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.7rem;
+}
+
+.ctt-filters-row label {
+  display: grid;
+  gap: 0.28rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.ctt-filters-row input {
+  border: 1px solid rgba(15, 23, 32, 0.17);
+  border-radius: 10px;
+  padding: 0.5rem 0.62rem;
+  background: rgba(255, 255, 255, 0.92);
+  font: inherit;
+}
+
+.ctt-filter-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ctt-filter-presets .btn {
+  padding: 0.5rem 0.66rem;
+}
+
+.ctt-period-label {
+  margin-left: auto;
+  font-size: 0.81rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ctt-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.65rem;
+}
+
+.ctt-kpi-card {
+  border: 1px solid rgba(31, 47, 68, 0.14);
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(244, 250, 255, 0.9));
+  display: grid;
+  gap: 0.2rem;
+}
+
+.ctt-kpi-card small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.ctt-kpi-card strong {
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+}
+
+.ctt-kpi-card span {
+  color: #237f53;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.ctt-analytics-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 0.9rem;
+}
+
+.ctt-chart-card {
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 0.9rem;
+}
+
+.ctt-chart-card h4 {
+  margin: 0 0 0.7rem;
+  font-size: 0.96rem;
+}
+
+.ctt-trend-bars {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ctt-trend-bar-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 40px;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.ctt-trend-bar-track {
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(15, 23, 32, 0.09);
+  overflow: hidden;
+}
+
+.ctt-trend-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f6dbf, #2f95e9);
+}
+
+.ctt-route-table-wrap {
+  overflow-x: auto;
+}
+
+.ctt-route-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ctt-route-table th,
+.ctt-route-table td {
+  text-align: left;
+  padding: 0.48rem;
+  border-bottom: 1px solid rgba(15, 23, 32, 0.1);
+  font-size: 0.85rem;
+}
+
+.ctt-route-table th {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ctt-footnote {
+  margin-top: 0.8rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.ctt-sla-grid {
+  margin-top: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.ctt-sla-card {
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: rgba(255, 255, 255, 0.92);
+  display: grid;
+  gap: 0.18rem;
+}
+
+.ctt-sla-card small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.ctt-sla-card strong {
+  font-size: 1.12rem;
+}
+
+.ctt-sla-card span {
+  font-size: 0.8rem;
+  color: #237f53;
+  font-weight: 700;
+}
+
+.ctt-analytics-grid-extended {
+  margin-top: 0.9rem;
+}
+
+.ctt-funnel-list,
+.ctt-incidence-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ctt-funnel-row,
+.ctt-incidence-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 50px 44px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ctt-incidence-row {
+  grid-template-columns: 170px 1fr 40px;
+}
+
+.ctt-funnel-row span,
+.ctt-incidence-row span {
+  font-size: 0.81rem;
+  color: #243143;
+}
+
+.ctt-funnel-track,
+.ctt-incidence-track {
+  height: 9px;
+  background: rgba(15, 23, 32, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ctt-funnel-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0f6dbf, #4caef6);
+}
+
+.ctt-incidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f39c12, #ef5350);
+}
+
+.ctt-funnel-row strong,
+.ctt-incidence-row strong {
+  font-size: 0.82rem;
+}
+
+.ctt-funnel-row em {
+  font-style: normal;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.ctt-heatmap-wrap {
+  overflow-x: auto;
+}
+
+.ctt-heatmap-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0.25rem;
+}
+
+.ctt-heatmap-table th,
+.ctt-heatmap-table td {
+  text-align: center;
+  font-size: 0.79rem;
+}
+
+.ctt-heatmap-table thead th,
+.ctt-heatmap-table tbody th {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ctt-heatmap-cell {
+  display: inline-block;
+  min-width: 36px;
+  padding: 0.3rem 0.4rem;
+  border-radius: 8px;
+  color: #f3f8fc;
+  font-weight: 700;
+}
+
+.ctt-region-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.ctt-region-card {
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.9);
+  display: grid;
+  gap: 0.28rem;
+}
+
+.ctt-region-card strong {
+  font-size: 0.9rem;
+}
+
+.ctt-region-card span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.ctt-risk-status {
+  margin: 0 0 0.55rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ctt-risk-status-error {
+  color: #b42318;
+}
+
 .template-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -2798,6 +3141,28 @@ p {
   .workspace-app-shell {
     width: calc(100vw - 8px);
     margin-top: 4px;
+
+  .ctt-funnel-row,
+  .ctt-incidence-row {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .ctt-sla-grid,
+  .ctt-region-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ctt-period-label {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .fact-grid,
+  .ctt-kpi-grid,
+  .ctt-analytics-grid {
+    grid-template-columns: 1fr;
+  }
   }
 
   .workspace-topbar {

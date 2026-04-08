@@ -665,6 +665,23 @@ async function fetchAllTmsInDistributionShipmentsData({ limit = 250, maxPages = 
   return allRows;
 }
 
+async function fetchAllTmsDeliveredShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+  const allRows = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const pageData = await fetchTmsDeliveredShipmentsData({ page, limit });
+    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
+    allRows.push(...rows);
+
+    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
+    page += 1;
+  }
+
+  return allRows;
+}
+
 async function fetchAllTmsIncidenceShipmentsData({ limit = 250, maxPages = 40 } = {}) {
   const allRows = [];
   let page = 1;
@@ -2205,6 +2222,278 @@ function parseTmsIncidenceShipmentsDatatable(payload) {
       chargeAmount: hasChargeByAmount ? chargeAmountNumber.toFixed(2) : ""
     };
   });
+}
+
+function extractShipmentDateInfo(rawValue) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) {
+    return { key: "", ts: NaN };
+  }
+
+  const iso = raw.match(/(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    const hour = Number(iso[4] || 0);
+    const minute = Number(iso[5] || 0);
+    const second = Number(iso[6] || 0);
+    const key = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const ts = new Date(year, Math.max(0, month - 1), day, hour, minute, second).getTime();
+    return { key, ts };
+  }
+
+  const dmy = raw.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const parsedYear = Number(dmy[3]);
+    const year = parsedYear < 100 ? 2000 + parsedYear : parsedYear;
+    const hour = Number(dmy[4] || 0);
+    const minute = Number(dmy[5] || 0);
+    const second = Number(dmy[6] || 0);
+    const key = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const ts = new Date(year, Math.max(0, month - 1), day, hour, minute, second).getTime();
+    return { key, ts };
+  }
+
+  return { key: "", ts: NaN };
+}
+
+function resolveShipmentPrimaryDateInfo(row) {
+  const pickup = extractShipmentDateInfo(row?.pickupDate || "");
+  if (pickup.key) {
+    return pickup;
+  }
+  return extractShipmentDateInfo(row?.deliveryDate || "");
+}
+
+function isDateKeyWithinRange(dateKey, fromKey, toKey) {
+  const key = String(dateKey || "").trim();
+  if (!key) return false;
+  if (fromKey && key < fromKey) return false;
+  if (toKey && key > toKey) return false;
+  return true;
+}
+
+function clampPercentage(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function pct(numerator, denominator) {
+  if (!Number.isFinite(denominator) || denominator <= 0) return 0;
+  return clampPercentage((Number(numerator) / Number(denominator)) * 100);
+}
+
+function safeSegment(value, fallback = "N/D") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  const byComma = normalized.split(",")[0] || normalized;
+  const byDash = byComma.split("-")[0] || byComma;
+  return String(byDash || fallback).trim() || fallback;
+}
+
+function buildRouteLabelFromRow(row) {
+  const sender = safeSegment(row?.sender || "Origem", "Origem");
+  const recipient = safeSegment(row?.recipient || "Destino", "Destino");
+  return `${sender} -> ${recipient}`;
+}
+
+function buildShipmentIdentityKey(row) {
+  const parcelId = String(row?.parcelId || "").trim();
+  const tracking = String(row?.providerTrackingCode || "").trim();
+  if (parcelId || tracking) return `${parcelId}|${tracking}`;
+  return `${String(row?.recipient || "").trim()}|${String(row?.pickupDate || "").trim()}|${String(row?.deliveryDate || "").trim()}`;
+}
+
+function buildCttDashboardDataFromRows({ deliveredRows, inDistributionRows, inTransportRows, incidenceRows, fromKey, toKey }) {
+  const combinedRows = [
+    ...deliveredRows,
+    ...inDistributionRows,
+    ...inTransportRows,
+    ...incidenceRows
+  ];
+
+  const filteredRows = combinedRows.filter((row) => {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    if (!dateInfo.key) return false;
+    return isDateKeyWithinRange(dateInfo.key, fromKey, toKey);
+  });
+
+  const deliveredFiltered = deliveredRows.filter((row) => {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    return dateInfo.key && isDateKeyWithinRange(dateInfo.key, fromKey, toKey);
+  });
+
+  const inDistributionFiltered = inDistributionRows.filter((row) => {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    return dateInfo.key && isDateKeyWithinRange(dateInfo.key, fromKey, toKey);
+  });
+
+  const inTransportFiltered = inTransportRows.filter((row) => {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    return dateInfo.key && isDateKeyWithinRange(dateInfo.key, fromKey, toKey);
+  });
+
+  const incidenceFiltered = incidenceRows.filter((row) => {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    return dateInfo.key && isDateKeyWithinRange(dateInfo.key, fromKey, toKey);
+  });
+
+  const uniqueShipmentKeys = new Set(filteredRows.map((row) => buildShipmentIdentityKey(row)).filter(Boolean));
+  const totalEnvios = uniqueShipmentKeys.size;
+
+  const routeAgg = new Map();
+  for (const row of filteredRows) {
+    const route = buildRouteLabelFromRow(row);
+    const key = String(route || "N/D");
+    const current = routeAgg.get(key) || { route: key, total: 0, delivered: 0, incidences: 0 };
+    current.total += 1;
+    if (deliveredFiltered.includes(row)) {
+      current.delivered += 1;
+    }
+    if (incidenceFiltered.includes(row)) {
+      current.incidences += 1;
+    }
+    routeAgg.set(key, current);
+  }
+
+  const topRoutes = Array.from(routeAgg.values())
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 6);
+
+  const weekdayOrder = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
+  const weekdayCounts = new Map(weekdayOrder.map((day) => [day, 0]));
+  for (const row of filteredRows) {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    if (!Number.isFinite(dateInfo.ts)) continue;
+    const weekday = weekdayOrder[new Date(dateInfo.ts).getDay()] || "Seg";
+    weekdayCounts.set(weekday, Number(weekdayCounts.get(weekday) || 0) + 1);
+  }
+  const trend = weekdayOrder.map((day) => ({ day, value: Number(weekdayCounts.get(day) || 0) }));
+
+  const incidenceReasonAgg = new Map();
+  for (const row of incidenceFiltered) {
+    const rawReason = String(row?.incidentReason || row?.incidence || row?.status || "").trim();
+    const reason = rawReason || "Sem detalhe";
+    incidenceReasonAgg.set(reason, Number(incidenceReasonAgg.get(reason) || 0) + 1);
+  }
+  const incidenceBreakdown = Array.from(incidenceReasonAgg.entries())
+    .map(([reason, total]) => ({ reason, total }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 8);
+
+  const heatmapHours = ["08h", "10h", "12h", "14h", "16h", "18h"];
+  const heatmapHourBuckets = [8, 10, 12, 14, 16, 18];
+  const heatmapRows = weekdayOrder.slice(1).map((day) => ({ day, values: [0, 0, 0, 0, 0, 0] }));
+  const heatmapByDay = new Map(heatmapRows.map((row) => [row.day, row]));
+
+  for (const row of filteredRows) {
+    const dateInfo = resolveShipmentPrimaryDateInfo(row);
+    if (!Number.isFinite(dateInfo.ts)) continue;
+    const date = new Date(dateInfo.ts);
+    const weekday = weekdayOrder[date.getDay()] || "Seg";
+    if (weekday === "Dom") continue;
+    const rowBucket = heatmapByDay.get(weekday);
+    if (!rowBucket) continue;
+    const hour = date.getHours();
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    for (let i = 0; i < heatmapHourBuckets.length; i += 1) {
+      const distance = Math.abs(hour - heatmapHourBuckets[i]);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = i;
+      }
+    }
+    rowBucket.values[nearestIndex] += 1;
+  }
+
+  const regionalAgg = new Map();
+  for (const row of filteredRows) {
+    const region = safeSegment(row?.recipient || row?.sender || "N/D", "N/D");
+    const current = regionalAgg.get(region) || { region, volume: 0, delivered: 0, incidences: 0 };
+    current.volume += 1;
+    if (deliveredFiltered.includes(row)) current.delivered += 1;
+    if (incidenceFiltered.includes(row)) current.incidences += 1;
+    regionalAgg.set(region, current);
+  }
+
+  const regionalPerformance = Array.from(regionalAgg.values())
+    .map((row) => ({
+      region: row.region,
+      volume: row.volume,
+      onTime: `${pct(row.delivered - row.incidences, row.volume).toFixed(0)}%`,
+      incidences: row.incidences
+    }))
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 6);
+
+  const deliveredWithIssue = deliveredFiltered.filter((row) => String(row?.incidentReason || row?.incidence || "").trim()).length;
+  const deliveredWithoutIssue = Math.max(0, deliveredFiltered.length - deliveredWithIssue);
+  const onTimePct = pct(deliveredWithoutIssue, deliveredFiltered.length);
+  const firstAttemptPct = pct(deliveredWithoutIssue, deliveredFiltered.length);
+  const reDeliveryPct = pct(deliveredWithIssue, deliveredFiltered.length);
+
+  const delaysMinutes = [];
+  for (const row of deliveredFiltered) {
+    const pickupInfo = extractShipmentDateInfo(row?.pickupDate || "");
+    const deliveryInfo = extractShipmentDateInfo(row?.deliveryDate || "");
+    if (!Number.isFinite(pickupInfo.ts) || !Number.isFinite(deliveryInfo.ts)) continue;
+    const diffMinutes = Math.round((deliveryInfo.ts - pickupInfo.ts) / (1000 * 60));
+    if (Number.isFinite(diffMinutes) && diffMinutes >= 0) {
+      delaysMinutes.push(diffMinutes);
+    }
+  }
+  const avgDelayMinutes = delaysMinutes.length > 0
+    ? Math.round(delaysMinutes.reduce((acc, value) => acc + value, 0) / delaysMinutes.length)
+    : 0;
+  const avgDelayHours = Math.floor(avgDelayMinutes / 60);
+  const avgDelayMins = String(avgDelayMinutes % 60).padStart(2, "0");
+
+  const kpis = [
+    { label: "Total Envios", value: String(totalEnvios), delta: "" },
+    { label: "Em Transporte", value: String(inTransportFiltered.length), delta: "" },
+    { label: "Entregues", value: String(deliveredFiltered.length), delta: "" },
+    { label: "Incidencias", value: String(incidenceFiltered.length), delta: "" }
+  ];
+
+  const sla = [
+    { label: "On-time delivery", value: `${onTimePct.toFixed(1)}%`, hint: "real" },
+    { label: "1a tentativa sucesso", value: `${firstAttemptPct.toFixed(1)}%`, hint: "real" },
+    { label: "Atraso medio", value: `${avgDelayHours}h ${avgDelayMins}m`, hint: "real" },
+    { label: "Reentrega", value: `${reDeliveryPct.toFixed(1)}%`, hint: "real" }
+  ];
+
+  const funnel = [
+    { label: "Em transito", count: inTransportFiltered.length },
+    { label: "Em distribuicao", count: inDistributionFiltered.length },
+    { label: "Incidencias", count: incidenceFiltered.length },
+    { label: "Entregue", count: deliveredFiltered.length }
+  ];
+
+  return {
+    kpis,
+    trend,
+    topRoutes,
+    sla,
+    funnel,
+    incidenceBreakdown,
+    heatmap: {
+      hours: heatmapHours,
+      rows: heatmapRows
+    },
+    regionalPerformance,
+    meta: {
+      totalEnvios,
+      inTransport: inTransportFiltered.length,
+      inDistribution: inDistributionFiltered.length,
+      delivered: deliveredFiltered.length,
+      incidencias: incidenceFiltered.length
+    }
+  };
 }
 
 async function fetchTmsDeliveredShipmentsData({ page = 1, limit = 250 } = {}) {
@@ -6973,6 +7262,166 @@ app.get("/api/tms/em-transporte", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to fetch in-transport TMS shipments",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/ctt/dashboard", async (req, res) => {
+  try {
+    const fromRaw = String(req.query?.from || "").trim();
+    const toRaw = String(req.query?.to || "").trim();
+    const fromKey = fromRaw.match(/^\d{4}-\d{2}-\d{2}$/) ? fromRaw : "";
+    const toKey = toRaw.match(/^\d{4}-\d{2}-\d{2}$/) ? toRaw : "";
+    const requestedMaxPages = Number(req.query?.maxPages || 4);
+    const safeMaxPages = Number.isFinite(requestedMaxPages) ? Math.max(1, Math.min(20, Math.trunc(requestedMaxPages))) : 4;
+
+    const [deliveredRows, inDistributionRows, inTransportRows, incidenceRows] = await Promise.all([
+      fetchAllTmsDeliveredShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+      fetchAllTmsInDistributionShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+      fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+      fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
+    ]);
+
+    const dashboard = buildCttDashboardDataFromRows({
+      deliveredRows,
+      inDistributionRows,
+      inTransportRows,
+      incidenceRows,
+      fromKey,
+      toKey
+    });
+
+    return res.json({
+      ok: true,
+      data: dashboard,
+      meta: {
+        from: fromKey || null,
+        to: toKey || null,
+        maxPages: safeMaxPages,
+        fetchedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch CTT dashboard",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/ctt/risk-shipments", async (req, res) => {
+  try {
+    const fromRaw = String(req.query?.from || "").trim();
+    const toRaw = String(req.query?.to || "").trim();
+    const fromKey = fromRaw.match(/^\d{4}-\d{2}-\d{2}$/) ? fromRaw : "";
+    const toKey = toRaw.match(/^\d{4}-\d{2}-\d{2}$/) ? toRaw : "";
+    const requestedLimit = Number(req.query?.limit || 20);
+    const requestedMaxPages = Number(req.query?.maxPages || 4);
+    const requestedMinHours = Number(req.query?.minHours || 8);
+    const safeLimit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, Math.trunc(requestedLimit))) : 20;
+    const safeMaxPages = Number.isFinite(requestedMaxPages) ? Math.max(1, Math.min(20, Math.trunc(requestedMaxPages))) : 4;
+    const safeMinHours = Number.isFinite(requestedMinHours) ? Math.max(1, Math.min(240, Math.trunc(requestedMinHours))) : 8;
+
+    const [inTransportRows, incidenceRows] = await Promise.all([
+      fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+      fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
+    ]);
+
+    const now = Date.now();
+    const byKey = new Map();
+
+    const upsertRisk = (row, options = {}) => {
+      const parcelId = String(row?.parcelId || "").trim();
+      const tracking = String(row?.providerTrackingCode || "").trim();
+      const identityKey = `${parcelId}|${tracking}`.trim();
+      if (!identityKey || identityKey === "|") return;
+
+      const dateInfo = resolveShipmentPrimaryDateInfo(row);
+      if (fromKey || toKey) {
+        if (!isDateKeyWithinRange(dateInfo.key, fromKey, toKey)) {
+          return;
+        }
+      }
+
+      const fallbackHours = Number(options.fallbackHours || 0);
+      const computedHours = Number.isFinite(dateInfo.ts)
+        ? Math.max(1, Math.round((now - dateInfo.ts) / (1000 * 60 * 60)))
+        : fallbackHours;
+
+      const risk = String(options.risk || "Medio");
+      const riskWeight = risk === "Alto" ? 2 : 1;
+      const hoursWithoutUpdate = Math.max(1, computedHours);
+
+      if (hoursWithoutUpdate < safeMinHours && risk !== "Alto") {
+        return;
+      }
+
+      const next = {
+        tracking: tracking || parcelId,
+        customer: String(row?.recipient || row?.sender || "").trim() || "Cliente",
+        route: `${String(row?.sender || "Origem").trim()} -> ${String(row?.recipient || "Destino").trim()}`,
+        risk,
+        riskWeight,
+        hoursWithoutUpdate,
+        status: String(row?.status || "").trim(),
+        incidentReason: String(row?.incidentReason || row?.incidence || "").trim(),
+        parcelId,
+        providerTrackingCode: tracking,
+        shipmentDateKey: dateInfo.key,
+        pickupDate: String(row?.pickupDate || "").trim(),
+        deliveryDate: String(row?.deliveryDate || "").trim()
+      };
+
+      const previous = byKey.get(identityKey);
+      if (!previous) {
+        byKey.set(identityKey, next);
+        return;
+      }
+
+      if (next.riskWeight > previous.riskWeight || (next.riskWeight === previous.riskWeight && next.hoursWithoutUpdate > previous.hoursWithoutUpdate)) {
+        byKey.set(identityKey, next);
+      }
+    };
+
+    for (const row of incidenceRows) {
+      upsertRisk(row, { risk: "Alto", fallbackHours: 24 });
+    }
+
+    for (const row of inTransportRows) {
+      const dateInfo = resolveShipmentPrimaryDateInfo(row);
+      const transportHours = Number.isFinite(dateInfo.ts)
+        ? Math.max(1, Math.round((now - dateInfo.ts) / (1000 * 60 * 60)))
+        : 12;
+      upsertRisk(row, {
+        risk: transportHours >= 24 ? "Alto" : "Medio",
+        fallbackHours: 12
+      });
+    }
+
+    const items = Array.from(byKey.values())
+      .sort((a, b) => (b.riskWeight - a.riskWeight) || (b.hoursWithoutUpdate - a.hoursWithoutUpdate))
+      .slice(0, safeLimit)
+      .map(({ riskWeight, ...item }) => item);
+
+    return res.json({
+      ok: true,
+      data: items,
+      meta: {
+        from: fromKey || null,
+        to: toKey || null,
+        limit: safeLimit,
+        maxPages: safeMaxPages,
+        minHours: safeMinHours,
+        transportFetched: inTransportRows.length,
+        incidenceFetched: incidenceRows.length,
+        totalRiskCandidates: byKey.size,
+        fetchedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch CTT risk shipments",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }

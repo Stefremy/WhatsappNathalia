@@ -7,11 +7,11 @@ const docsFacts = [
   { label: "Auth", value: "Bearer token" }
 ];
 
-const callingDocsFacts = [
-  { label: "Version", value: "v23.0" },
-  { label: "Primary Endpoint", value: "/{Version}/{Phone-Number-ID}/calls" },
-  { label: "Base URL", value: "https://graph.facebook.com" },
-  { label: "Auth", value: "Bearer token" }
+const cttPortalFacts = [
+  { label: "Portal", value: "CTT Expresso" },
+  { label: "Login", value: "https://portal.cttexpresso.pt/Account/Login" },
+  { label: "Objetivo", value: "Dashboard de Indicators" },
+  { label: "Estado", value: "Vista Power BI" }
 ];
 
 const quickApps = [
@@ -290,6 +290,78 @@ type TmsDeliveredShipment = {
   incidentReason?: string;
 };
 
+type CttRiskShipment = {
+  tracking: string;
+  customer: string;
+  route: string;
+  risk: string;
+  hoursWithoutUpdate: number;
+  status?: string;
+  incidentReason?: string;
+  parcelId?: string;
+  providerTrackingCode?: string;
+  shipmentDateKey?: string;
+  pickupDate?: string;
+  deliveryDate?: string;
+};
+
+type CttDashboardKpi = {
+  label: string;
+  value: string;
+  delta?: string;
+};
+
+type CttDashboardTrendPoint = {
+  day: string;
+  value: number;
+};
+
+type CttDashboardRouteRow = {
+  route: string;
+  total: number;
+  delivered: number;
+  incidences: number;
+};
+
+type CttDashboardSlaMetric = {
+  label: string;
+  value: string;
+  hint?: string;
+};
+
+type CttDashboardFunnelRow = {
+  label: string;
+  count: number;
+};
+
+type CttDashboardIncidenceRow = {
+  reason: string;
+  total: number;
+};
+
+type CttDashboardHeatmap = {
+  hours: string[];
+  rows: Array<{ day: string; values: number[] }>;
+};
+
+type CttDashboardRegionalRow = {
+  region: string;
+  volume: number;
+  onTime: string;
+  incidences: number;
+};
+
+type CttDashboardData = {
+  kpis: CttDashboardKpi[];
+  trend: CttDashboardTrendPoint[];
+  topRoutes: CttDashboardRouteRow[];
+  sla: CttDashboardSlaMetric[];
+  funnel: CttDashboardFunnelRow[];
+  incidenceBreakdown: CttDashboardIncidenceRow[];
+  heatmap: CttDashboardHeatmap;
+  regionalPerformance: CttDashboardRegionalRow[];
+};
+
 type PudoNotificationState = Record<
   string,
   {
@@ -380,7 +452,7 @@ function formatE164FromPortugalPhone(phoneInput: string) {
   return `+${phoneDigits}`;
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "calling" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" | "ctt" }) {
   switch (name) {
     case "overview":
       return (
@@ -419,10 +491,11 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
           <path d="m6.5 8.25 5.5 4.5 5.5-4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
-    case "calling":
+    case "ctt":
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M7.8 3.8h2.5a1 1 0 0 1 1 .86l.35 2.4a1 1 0 0 1-.55 1.02l-1.45.72a12.4 12.4 0 0 0 5.6 5.6l.72-1.45a1 1 0 0 1 1.02-.55l2.4.35a1 1 0 0 1 .86 1v2.5a1.8 1.8 0 0 1-1.95 1.8C10.6 18.9 5.1 13.4 4 5.75A1.8 1.8 0 0 1 5.8 3.8Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4.75 7.25A2.5 2.5 0 0 1 7.25 4.75h9.5a2.5 2.5 0 0 1 2.5 2.5v9.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8 10.25h8M8 13.25h5M8 16.25h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "consumiveis":
@@ -996,35 +1069,14 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "calling" | "consumiveis" | "feedback" | "clientes">("workspace");
-
-  // ── WhatsApp Calling page state ─────────────────────────────────────────
-  const [callingPermPhone, setCallingPermPhone] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
-  const [callingPermResult, setCallingPermResult] = useState<null | {
-    status: string;
-    expiration_time?: number;
-    actions?: Array<{ action_name: string; can_perform_action: boolean; limits?: Array<{ time_period: string; current_usage: number; max_allowed: number }> }>;
-  }>(null);
-  const [callingPermLoading, setCallingPermLoading] = useState(false);
-  const [callingPermError, setCallingPermError] = useState("");
-  const [callingReqPermLoading, setCallingReqPermLoading] = useState(false);
-  const [callingReqPermResult, setCallingReqPermResult] = useState("");
-  const [callingReqPermError, setCallingReqPermError] = useState("");
-  const [callingAction, setCallingAction] = useState("connect");
-  const [callingTo, setCallingTo] = useState(import.meta.env.VITE_DEFAULT_TO_NUMBER ?? "");
-  const [callingCallId, setCallingCallId] = useState("");
-  const [callingManageLoading, setCallingManageLoading] = useState(false);
-  const [callingManageResult, setCallingManageResult] = useState("");
-  const [callingManageError, setCallingManageError] = useState("");
-  const [callingWebrtcLoading, setCallingWebrtcLoading] = useState(false);
-  const [callingWebrtcStatus, setCallingWebrtcStatus] = useState("Inativo");
-  const [callingWebrtcError, setCallingWebrtcError] = useState("");
-  const [callingWebrtcSdpPreview, setCallingWebrtcSdpPreview] = useState("");
-  const [callingEvents, setCallingEvents] = useState<Array<{ at?: string; field?: string; value?: unknown }>>([]);
-  const [callingEventsLoading, setCallingEventsLoading] = useState(false);
-  const [callingRefOpen, setCallingRefOpen] = useState(false);
-  const callingPeerRef = useRef<RTCPeerConnection | null>(null);
-  const callingLocalStreamRef = useRef<MediaStream | null>(null);
+  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt">("workspace");
+  const [cttDateFrom, setCttDateFrom] = useState(() => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    return start.toISOString().slice(0, 10);
+  });
+  const [cttDateTo, setCttDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [trackerSearchField, setTrackerSearchField] = useState<"all" | "clientName" | "clientPhone" | "parcelId" | "messageTitle" | "status" | "incidentReason">("all");
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
@@ -1032,6 +1084,12 @@ function App() {
   const [tmsDashboard, setTmsDashboard] = useState<TmsDashboardData | null>(null);
   const [tmsLoading, setTmsLoading] = useState(false);
   const [tmsError, setTmsError] = useState("");
+  const [cttDashboardData, setCttDashboardData] = useState<CttDashboardData | null>(null);
+  const [cttDashboardLoading, setCttDashboardLoading] = useState(false);
+  const [cttDashboardError, setCttDashboardError] = useState("");
+  const [cttRiskRows, setCttRiskRows] = useState<CttRiskShipment[]>([]);
+  const [cttRiskLoading, setCttRiskLoading] = useState(false);
+  const [cttRiskError, setCttRiskError] = useState("");
   const [showIncidencesPanel, setShowIncidencesPanel] = useState(false);
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
   const [showPudoDetails, setShowPudoDetails] = useState(false);
@@ -4017,6 +4075,17 @@ function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (activeView !== "ctt") {
+      return;
+    }
+    if (!cttDateFrom || !cttDateTo) {
+      return;
+    }
+    loadCttDashboard();
+    loadCttRiskShipments();
+  }, [activeView, cttDateFrom, cttDateTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (feedbackPage > feedbackTotalPages) {
       setFeedbackPage(feedbackTotalPages);
     }
@@ -4900,240 +4969,6 @@ function App() {
     }
   }
 
-  // ── Calling page handlers ────────────────────────────────────────────────
-  async function checkCallingPermission(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const phone = callingPermPhone.trim();
-    if (!phone) return;
-    setCallingPermLoading(true);
-    setCallingPermError("");
-    setCallingPermResult(null);
-    try {
-      const res = await fetch(apiUrl(`/api/calls/permissions?user_wa_id=${encodeURIComponent(phone)}`));
-      const data = await parseResponse(res);
-      if (!res.ok) {
-        setCallingPermError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
-        return;
-      }
-      setCallingPermResult({
-        status: String(data?.permission?.status || "unknown"),
-        expiration_time: data?.permission?.expiration_time as number | undefined,
-        actions: Array.isArray(data?.actions) ? data.actions as typeof callingPermResult extends null ? never : NonNullable<typeof callingPermResult>["actions"] : undefined
-      });
-    } catch {
-      setCallingPermError("Não foi possível ligar ao backend.");
-    } finally {
-      setCallingPermLoading(false);
-    }
-  }
-
-  async function requestCallingPermission() {
-    const phone = callingPermPhone.trim();
-    if (!phone) {
-      setCallingReqPermError("Preenche o número do utilizador primeiro.");
-      return;
-    }
-
-    setCallingReqPermLoading(true);
-    setCallingReqPermError("");
-    setCallingReqPermResult("");
-
-    try {
-      const res = await fetch(apiUrl("/api/calls/request-permission"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_wa_id: phone })
-      });
-      const data = await parseResponse(res);
-      if (!res.ok) {
-        setCallingReqPermError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
-        return;
-      }
-
-      setCallingReqPermResult("Pedido de permissão enviado com sucesso.");
-      await checkCallingPermission({ preventDefault: () => {} } as FormEvent<HTMLFormElement>);
-    } catch {
-      setCallingReqPermError("Não foi possível pedir permissão ao backend.");
-    } finally {
-      setCallingReqPermLoading(false);
-    }
-  }
-
-  async function manageCallingAction(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setCallingManageLoading(true);
-    setCallingManageError("");
-    setCallingManageResult("");
-    try {
-      const body: Record<string, unknown> = { action: callingAction };
-      if (callingAction === "terminate") {
-        if (!callingCallId.trim()) {
-          setCallingManageError("Call ID é obrigatório para a ação terminate.");
-          setCallingManageLoading(false);
-          return;
-        }
-        body.call_id = callingCallId.trim();
-      } else {
-        if (!callingTo.trim()) {
-          setCallingManageError("Número de telefone é obrigatório.");
-          setCallingManageLoading(false);
-          return;
-        }
-        body.to = callingTo.trim();
-      }
-      const res = await fetch(apiUrl("/api/calls/manage"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      const data = await parseResponse(res);
-      if (!res.ok) {
-        setCallingManageError(String(data?.error?.message || data?.error || `Erro ${res.status}`));
-        return;
-      }
-      setCallingManageResult(JSON.stringify(data, null, 2));
-    } catch {
-      setCallingManageError("Não foi possível ligar ao backend.");
-    } finally {
-      setCallingManageLoading(false);
-    }
-  }
-
-  async function refreshCallingEvents() {
-    if (activeView !== "calling") return;
-    setCallingEventsLoading(true);
-    try {
-      const res = await fetch(apiUrl("/api/calls/events"));
-      const data = await parseResponse(res);
-      if (!res.ok) {
-        return;
-      }
-      const rows = Array.isArray(data?.data) ? data.data : [];
-      setCallingEvents(rows.slice(0, 15));
-    } catch {
-      // Ignore transient polling errors.
-    } finally {
-      setCallingEventsLoading(false);
-    }
-  }
-
-  function stopCallingMedia() {
-    if (callingPeerRef.current) {
-      try { callingPeerRef.current.close(); } catch {}
-      callingPeerRef.current = null;
-    }
-    if (callingLocalStreamRef.current) {
-      for (const track of callingLocalStreamRef.current.getTracks()) {
-        try { track.stop(); } catch {}
-      }
-      callingLocalStreamRef.current = null;
-    }
-    setCallingWebrtcStatus("Media local terminada");
-  }
-
-  async function startWebRtcConnect() {
-    const to = callingTo.trim();
-    if (!to) {
-      setCallingWebrtcError("Preenche o número de destino.");
-      return;
-    }
-
-    setCallingWebrtcLoading(true);
-    setCallingWebrtcError("");
-    setCallingWebrtcStatus("A preparar WebRTC...");
-    setCallingWebrtcSdpPreview("");
-
-    try {
-      stopCallingMedia();
-
-      if (!navigator?.mediaDevices?.getUserMedia) {
-        throw new Error("Browser sem suporte para getUserMedia.");
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      callingLocalStreamRef.current = stream;
-
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }]
-      });
-      callingPeerRef.current = pc;
-
-      for (const track of stream.getTracks()) {
-        pc.addTrack(track, stream);
-      }
-
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-
-      // Wait for ICE candidates to be gathered so SDP includes connectivity candidates.
-      await new Promise<void>((resolve) => {
-        if (pc.iceGatheringState === "complete") {
-          resolve();
-          return;
-        }
-        const timeout = setTimeout(() => {
-          pc.removeEventListener("icegatheringstatechange", onChange);
-          resolve();
-        }, 3000);
-        const onChange = () => {
-          if (pc.iceGatheringState === "complete") {
-            clearTimeout(timeout);
-            pc.removeEventListener("icegatheringstatechange", onChange);
-            resolve();
-          }
-        };
-        pc.addEventListener("icegatheringstatechange", onChange);
-      });
-
-      const localDescription = pc.localDescription;
-      if (!localDescription?.sdp || !localDescription?.type) {
-        throw new Error("Não foi possível gerar SDP local.");
-      }
-
-      setCallingWebrtcSdpPreview(localDescription.sdp.slice(0, 1200));
-      setCallingWebrtcStatus("A enviar oferta SDP para o backend...");
-
-      const res = await fetch(apiUrl("/api/calls/manage"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "connect",
-          to,
-          session: {
-            sdp_type: localDescription.type,
-            sdp: localDescription.sdp
-          },
-          biz_opaque_callback_data: `workspace-${Date.now()}`
-        })
-      });
-
-      const data = await parseResponse(res);
-      if (!res.ok) {
-        throw new Error(String(data?.error?.message || data?.error || `Erro ${res.status}`));
-      }
-
-      setCallingManageResult(JSON.stringify(data, null, 2));
-      setCallingWebrtcStatus("Oferta SDP enviada. Aguardar eventos no painel de ciclo de chamada.");
-      await refreshCallingEvents();
-    } catch (error) {
-      setCallingWebrtcError(error instanceof Error ? error.message : "Falha ao iniciar WebRTC.");
-      setCallingWebrtcStatus("Falhou");
-    } finally {
-      setCallingWebrtcLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (activeView !== "calling") {
-      return;
-    }
-    void refreshCallingEvents();
-    const timer = setInterval(() => {
-      void refreshCallingEvents();
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [activeView]);
-
   async function sendSmsFallback() {
     const to = digitsOnly(smsTo || genericTo);
     const message = smsText.trim();
@@ -5163,6 +4998,111 @@ function App() {
     } finally {
       setSmsLoading(false);
     }
+  }
+
+  function applyCttDatePreset(days: number) {
+    const safeDays = Number.isFinite(days) ? Math.max(1, Math.trunc(days)) : 7;
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - (safeDays - 1));
+    setCttDateFrom(start.toISOString().slice(0, 10));
+    setCttDateTo(end.toISOString().slice(0, 10));
+  }
+
+  const cttDateRangeDays = useMemo(() => {
+    const from = new Date(`${cttDateFrom}T00:00:00`);
+    const to = new Date(`${cttDateTo}T00:00:00`);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 7;
+    if (to < from) return 1;
+    const diff = Math.round((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24));
+    return Math.max(1, diff + 1);
+  }, [cttDateFrom, cttDateTo]);
+
+  const cttDateRangeLabel = useMemo(() => {
+    return `${cttDateFrom} a ${cttDateTo} (${cttDateRangeDays}d)`;
+  }, [cttDateFrom, cttDateRangeDays, cttDateTo]);
+
+  const cttKpisView = useMemo(() => cttDashboardData?.kpis || [], [cttDashboardData]);
+  const cttTrendView = useMemo(() => cttDashboardData?.trend || [], [cttDashboardData]);
+  const cttTopRoutesView = useMemo(() => cttDashboardData?.topRoutes || [], [cttDashboardData]);
+  const cttSlaMetricsView = useMemo(() => cttDashboardData?.sla || [], [cttDashboardData]);
+  const cttFunnelStepsView = useMemo(() => cttDashboardData?.funnel || [], [cttDashboardData]);
+  const cttIncidenceBreakdownView = useMemo(() => cttDashboardData?.incidenceBreakdown || [], [cttDashboardData]);
+  const cttRegionalPerformanceView = useMemo(() => cttDashboardData?.regionalPerformance || [], [cttDashboardData]);
+  const cttHeatmapHours = useMemo(() => cttDashboardData?.heatmap?.hours || [], [cttDashboardData]);
+  const cttHeatmapRowsView = useMemo(() => cttDashboardData?.heatmap?.rows || [], [cttDashboardData]);
+
+  const cttRiskShipmentsView = useMemo(() => {
+    return cttRiskRows.map((row) => ({
+      ...row,
+      hoursWithoutUpdate: Math.max(1, Math.round(Number(row.hoursWithoutUpdate || 0)))
+    }));
+  }, [cttRiskRows]);
+
+  function loadCttDashboard() {
+    if (!cttDateFrom || !cttDateTo) {
+      return;
+    }
+
+    setCttDashboardLoading(true);
+    setCttDashboardError("");
+
+    const query = new URLSearchParams({
+      from: cttDateFrom,
+      to: cttDateTo,
+      maxPages: "4"
+    });
+
+    fetch(apiUrl(`/api/ctt/dashboard?${query.toString()}`))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok || !data?.data) {
+          throw new Error(String(data?.details || data?.error || `Falha CTT dashboard (${response.status})`));
+        }
+        setCttDashboardData(data.data as CttDashboardData);
+      })
+      .catch((error) => {
+        setCttDashboardData(null);
+        setCttDashboardError(error instanceof Error ? error.message : "Nao foi possivel carregar dashboard CTT.");
+      })
+      .finally(() => {
+        setCttDashboardLoading(false);
+      });
+  }
+
+  function loadCttRiskShipments() {
+    if (!cttDateFrom || !cttDateTo) {
+      return;
+    }
+
+    setCttRiskLoading(true);
+    setCttRiskError("");
+
+    const query = new URLSearchParams({
+      from: cttDateFrom,
+      to: cttDateTo,
+      limit: "12",
+      maxPages: "4",
+      minHours: "8"
+    });
+
+    fetch(apiUrl(`/api/ctt/risk-shipments?${query.toString()}`))
+      .then(async (response) => {
+        const data = await parseResponse(response);
+        if (!response.ok) {
+          throw new Error(String(data?.details || data?.error || `Falha CTT risco (${response.status})`));
+        }
+
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        setCttRiskRows(rows as CttRiskShipment[]);
+      })
+      .catch((error) => {
+        setCttRiskRows([]);
+        setCttRiskError(error instanceof Error ? error.message : "Nao foi possivel carregar encomendas em risco.");
+      })
+      .finally(() => {
+        setCttRiskLoading(false);
+      });
   }
 
   if (!authUser) {
@@ -5352,11 +5292,11 @@ function App() {
             </button>
             <button
               type="button"
-              className={`workspace-nav-link workspace-nav-button${activeView === "calling" ? " active" : ""}`}
-              onClick={() => setActiveView("calling")}
+              className={`workspace-nav-link workspace-nav-button${activeView === "ctt" ? " active" : ""}`}
+              onClick={() => setActiveView("ctt")}
             >
-              <span className="workspace-nav-icon"><SidebarIcon name="calling" /></span>
-              <span>API Calling</span>
+              <span className="workspace-nav-icon"><SidebarIcon name="ctt" /></span>
+              <span>CTT</span>
             </button>
             <button
               type="button"
@@ -7806,366 +7746,291 @@ function App() {
                 </table>
               </div>
             </section>
-          ) : activeView === "calling" ? (
-            <section className="panel tracker-page" id="calling-api-page">
-              {/* ── Header ── */}
+          ) : activeView === "ctt" ? (
+            <section className="panel tracker-page" id="ctt-page">
               <div className="tracker-header">
                 <div>
-                  <h2>WhatsApp API Calling</h2>
-                  <p>Verifique permissões e gerencie chamadas via WhatsApp Cloud API v23.0.</p>
+                  <h2>CTT</h2>
+                  <p>Página dedicada para ligação ao portal CTT Expresso e rastreio de novos envios.</p>
                 </div>
                 <div className="tracker-actions">
                   <a
                     className="btn btn-secondary"
-                    href="https://developers.facebook.com/docs/whatsapp/cloud-api/reference/calling"
+                    href="https://portal.cttexpresso.pt/Account/Login"
                     target="_blank"
                     rel="noreferrer"
                   >
-                    Documentação oficial ↗
+                    Abrir CTT Portal
                   </a>
                   <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => setActiveView("workspace")}
                   >
-                    ← Voltar
+                    Voltar ao Workspace
                   </button>
                 </div>
               </div>
 
-              {/* ── Two-column grid ── */}
-              <div className="calling-grid">
+              <section className="panel">
+                <h3>Resumo da Integração</h3>
+                <div className="fact-grid">
+                  {cttPortalFacts.map((fact) => (
+                    <article key={fact.label} className="fact-card">
+                      <small>{fact.label}</small>
+                      <strong>{fact.value}</strong>
+                    </article>
+                  ))}
+                </div>
+              </section>
 
-                {/* Card 1 – Check Permissions */}
-                <div className="calling-card">
-                  <div className="calling-card-header">
-                    <span className="calling-card-icon">🔍</span>
-                    <div>
-                      <h3>Verificar Permissão</h3>
-                      <p>Consulta se o negócio pode ligar para um utilizador.</p>
-                    </div>
+              <section className="panel ctt-dashboard-panel">
+                <div className="ctt-dashboard-head">
+                  <h3>CTT Indicators Dashboard</h3>
+                  <span className="ctt-badge">Fonte: portal.cttexpresso.pt/Indicators</span>
+                </div>
+                <p className="ctt-subtitle">Visualização operacional estilo Power BI para análise rápida de performance logística.</p>
+
+                <div className="ctt-filters-row">
+                  <label>
+                    Data início
+                    <input
+                      type="date"
+                      value={cttDateFrom}
+                      max={cttDateTo}
+                      onChange={(event) => setCttDateFrom(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Data fim
+                    <input
+                      type="date"
+                      value={cttDateTo}
+                      min={cttDateFrom}
+                      onChange={(event) => setCttDateTo(event.target.value)}
+                    />
+                  </label>
+                  <div className="ctt-filter-presets">
+                    <button type="button" className="btn btn-secondary" onClick={() => applyCttDatePreset(1)}>Hoje</button>
+                    <button type="button" className="btn btn-secondary" onClick={() => applyCttDatePreset(7)}>7 dias</button>
+                    <button type="button" className="btn btn-secondary" onClick={() => applyCttDatePreset(30)}>30 dias</button>
                   </div>
-                  <form className="api-form" onSubmit={checkCallingPermission}>
-                    <label>
-                      Número do utilizador
-                      <input
-                        type="tel"
-                        value={callingPermPhone}
-                        onChange={(e) => setCallingPermPhone(e.target.value)}
-                        placeholder="351912345678"
-                        required
-                      />
-                    </label>
-                    <div className="api-actions">
-                      <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={callingPermLoading}
-                      >
-                        {callingPermLoading ? "A verificar…" : "Verificar Permissão"}
-                      </button>
-                      {callingPermResult && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => { setCallingPermResult(null); setCallingPermError(""); }}
-                        >
-                          Limpar
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={requestCallingPermission}
-                        disabled={callingReqPermLoading || callingPermLoading}
-                      >
-                        {callingReqPermLoading ? "A pedir..." : "Pedir permissão"}
-                      </button>
-                    </div>
-                  </form>
+                  <span className="ctt-period-label">Período: {cttDateRangeLabel}</span>
+                </div>
+                {cttDashboardLoading ? <p className="ctt-risk-status">A carregar dashboard real...</p> : null}
+                {cttDashboardError ? <p className="ctt-risk-status ctt-risk-status-error">{cttDashboardError}</p> : null}
 
-                  {callingPermError && (
-                    <div className="calling-alert calling-alert-error">
-                      <strong>Erro:</strong> {callingPermError}
-                    </div>
-                  )}
+                <div className="ctt-kpi-grid">
+                  {cttKpisView.map((kpi) => (
+                    <article key={kpi.label} className="ctt-kpi-card">
+                      <small>{kpi.label}</small>
+                      <strong>{kpi.value}</strong>
+                      <span>{kpi.delta}</span>
+                    </article>
+                  ))}
+                </div>
 
-                  {callingReqPermError && (
-                    <div className="calling-alert calling-alert-error">
-                      <strong>Erro no pedido:</strong> {callingReqPermError}
-                    </div>
-                  )}
-
-                  {callingReqPermResult && (
-                    <div className="calling-alert calling-alert-success">
-                      <strong>Sucesso:</strong> {callingReqPermResult}
-                    </div>
-                  )}
-
-                  {callingPermResult && (
-                    <div className="calling-perm-result">
-                      <div className="calling-perm-status-row">
-                        <span>Estado da permissão:</span>
-                        <span className={`calling-status-badge calling-status-${callingPermResult.status}`}>
-                          {callingPermResult.status === "granted" ? "✓ Concedida" :
-                           callingPermResult.status === "denied" ? "✗ Negada" :
-                           callingPermResult.status === "pending" ? "⏳ Pendente" :
-                           callingPermResult.status === "expired" ? "⌛ Expirada" :
-                           callingPermResult.status}
-                        </span>
-                      </div>
-                      {callingPermResult.expiration_time && (
-                        <div className="calling-perm-expiry">
-                          Expira em: <strong>{new Date(callingPermResult.expiration_time * 1000).toLocaleString("pt-PT")}</strong>
+                <div className="ctt-analytics-grid">
+                  <article className="ctt-chart-card">
+                    <h4>Tendência semanal (índice)</h4>
+                    <div className="ctt-trend-bars">
+                      {cttTrendView.map((point) => (
+                        <div key={point.day} className="ctt-trend-bar-row">
+                          <span>{point.day}</span>
+                          <div className="ctt-trend-bar-track">
+                            <div className="ctt-trend-bar-fill" style={{ width: `${Math.max(8, Math.min(100, point.value))}%` }} />
+                          </div>
+                          <strong>{point.value}</strong>
                         </div>
-                      )}
-                      {callingPermResult.actions && callingPermResult.actions.length > 0 && (
-                        <div className="calling-actions-table">
-                          <h4>Ações disponíveis</h4>
-                          <table className="calling-table">
-                            <thead>
-                              <tr>
-                                <th>Ação</th>
-                                <th>Permitido</th>
-                                <th>Uso diário</th>
-                                <th>Limite</th>
+                      ))}
+                    </div>
+                  </article>
+
+                  <article className="ctt-chart-card">
+                    <h4>Top rotas</h4>
+                    <div className="ctt-route-table-wrap">
+                      <table className="ctt-route-table">
+                        <thead>
+                          <tr>
+                            <th>Rota</th>
+                            <th>Total</th>
+                            <th>Entregues</th>
+                            <th>Incidencias</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cttTopRoutesView.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="tracker-empty">Sem dados de rotas no período selecionado.</td>
+                            </tr>
+                          ) : (
+                            cttTopRoutesView.map((row) => (
+                              <tr key={row.route}>
+                                <td>{row.route}</td>
+                                <td>{row.total}</td>
+                                <td>{row.delivered}</td>
+                                <td>{row.incidences}</td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {callingPermResult.actions.map((a) => {
-                                const daily = a.limits?.find((l) => l.time_period === "daily" || l.time_period === "PT24H");
-                                return (
-                                  <tr key={a.action_name}>
-                                    <td><code>{a.action_name}</code></td>
-                                    <td>
-                                      {a.can_perform_action
-                                        ? <span className="calling-ok">✓ Sim</span>
-                                        : <span className="calling-no">✗ Não</span>}
-                                    </td>
-                                    <td>{daily ? daily.current_usage : "—"}</td>
-                                    <td>{daily ? daily.max_allowed : "—"}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                            ))
+                          )}
+                        </tbody>
+                      </table>
                     </div>
-                  )}
+                  </article>
                 </div>
 
-                {/* Card 2 – Manage Call */}
-                <div className="calling-card">
-                  <div className="calling-card-header">
-                    <span className="calling-card-icon">📞</span>
-                    <div>
-                      <h3>Gerir Chamada</h3>
-                      <p>Inicia ou gerencia o estado de uma chamada.</p>
+                <div className="ctt-sla-grid">
+                  {cttSlaMetricsView.map((metric) => (
+                    <article key={metric.label} className="ctt-sla-card">
+                      <small>{metric.label}</small>
+                      <strong>{metric.value}</strong>
+                      <span>{metric.hint}</span>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="ctt-analytics-grid ctt-analytics-grid-extended">
+                  <article className="ctt-chart-card">
+                    <h4>Funil operacional</h4>
+                    <div className="ctt-funnel-list">
+                      {cttFunnelStepsView.map((step, index) => {
+                        const previous = index === 0 ? step.count : cttFunnelStepsView[index - 1].count;
+                        const conversion = previous > 0 ? Math.round((step.count / previous) * 100) : 100;
+                        const base = cttFunnelStepsView[0]?.count || step.count;
+                        const width = Math.max(18, Math.round((step.count / base) * 100));
+
+                        return (
+                          <div key={step.label} className="ctt-funnel-row">
+                            <span>{step.label}</span>
+                            <div className="ctt-funnel-track">
+                              <div className="ctt-funnel-fill" style={{ width: `${width}%` }} />
+                            </div>
+                            <strong>{step.count}</strong>
+                            <em>{conversion}%</em>
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
+                  </article>
 
-                  <div className="calling-webrtc-box">
-                    <h4>WebRTC Connect (recomendado)</h4>
-                    <p>Gera automaticamente uma oferta SDP local e envia ação <strong>connect</strong> com sessão.</p>
-                    <div className="api-actions">
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={startWebRtcConnect}
-                        disabled={callingWebrtcLoading}
-                      >
-                        {callingWebrtcLoading ? "A preparar WebRTC..." : "Iniciar chamada com WebRTC"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={stopCallingMedia}
-                      >
-                        Parar media local
-                      </button>
+                  <article className="ctt-chart-card">
+                    <h4>Incidências por tipo</h4>
+                    <div className="ctt-incidence-list">
+                      {cttIncidenceBreakdownView.map((row) => {
+                        const maxValue = cttIncidenceBreakdownView[0]?.total || 1;
+                        const width = Math.max(10, Math.round((row.total / maxValue) * 100));
+                        return (
+                          <div key={row.reason} className="ctt-incidence-row">
+                            <span>{row.reason}</span>
+                            <div className="ctt-incidence-track">
+                              <div className="ctt-incidence-fill" style={{ width: `${width}%` }} />
+                            </div>
+                            <strong>{row.total}</strong>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <p className="calling-webrtc-status">Estado: <strong>{callingWebrtcStatus}</strong></p>
-                    {callingWebrtcError && (
-                      <div className="calling-alert calling-alert-error">
-                        <strong>Erro WebRTC:</strong> {callingWebrtcError}
-                      </div>
-                    )}
-                    {callingWebrtcSdpPreview && (
-                      <details>
-                        <summary>Ver preview SDP local</summary>
-                        <pre className="calling-response-pre">{callingWebrtcSdpPreview}</pre>
-                      </details>
-                    )}
-                  </div>
+                  </article>
+                </div>
 
-                  <form className="api-form" onSubmit={manageCallingAction}>
-                    <label>
-                      Ação
-                      <select
-                        value={callingAction}
-                        onChange={(e) => { setCallingAction(e.target.value); setCallingManageResult(""); setCallingManageError(""); }}
-                      >
-                        <option value="connect">connect – Iniciar chamada</option>
-                        <option value="pre_accept">pre_accept – Pré-aceitar</option>
-                        <option value="accept">accept – Aceitar</option>
-                        <option value="reject">reject – Rejeitar</option>
-                        <option value="terminate">terminate – Terminar</option>
-                      </select>
-                    </label>
+                <div className="ctt-analytics-grid ctt-analytics-grid-extended">
+                  <article className="ctt-chart-card">
+                    <h4>Heatmap operacional (hora x dia)</h4>
+                    <div className="ctt-heatmap-wrap">
+                      <table className="ctt-heatmap-table">
+                        <thead>
+                          <tr>
+                            <th>Dia</th>
+                            {cttHeatmapHours.map((hour) => (
+                              <th key={hour}>{hour}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cttHeatmapRowsView.map((row) => (
+                            <tr key={row.day}>
+                              <th>{row.day}</th>
+                              {row.values.map((value, index) => (
+                                <td key={`${row.day}-${cttHeatmapHours[index]}`}>
+                                  <span
+                                    className="ctt-heatmap-cell"
+                                    style={{
+                                      backgroundColor: `rgba(15, 109, 191, ${Math.max(0.2, Math.min(0.95, value / 100))})`
+                                    }}
+                                  >
+                                    {value}
+                                  </span>
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                          {cttHeatmapRowsView.length === 0 ? (
+                            <tr>
+                              <td colSpan={Math.max(1, cttHeatmapHours.length + 1)} className="tracker-empty">Sem dados de heatmap para o período selecionado.</td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
 
-                    {callingAction === "terminate" ? (
-                      <label>
-                        Call ID
-                        <input
-                          type="text"
-                          value={callingCallId}
-                          onChange={(e) => setCallingCallId(e.target.value)}
-                          placeholder="ID da chamada a terminar"
-                          required
-                        />
-                      </label>
+                  <article className="ctt-chart-card">
+                    <h4>Encomendas em risco</h4>
+                    {cttRiskLoading ? <p className="ctt-risk-status">A carregar dados reais...</p> : null}
+                    {cttRiskError ? <p className="ctt-risk-status ctt-risk-status-error">{cttRiskError}</p> : null}
+                    <div className="ctt-route-table-wrap">
+                      <table className="ctt-route-table">
+                        <thead>
+                          <tr>
+                            <th>Tracking</th>
+                            <th>Cliente</th>
+                            <th>Rota</th>
+                            <th>Risco</th>
+                            <th>Sem update</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cttRiskShipmentsView.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="tracker-empty">Sem encomendas em risco para o período selecionado.</td>
+                            </tr>
+                          ) : (
+                            cttRiskShipmentsView.map((row) => (
+                              <tr key={`${row.tracking}-${row.parcelId || ""}`}>
+                                <td>{row.tracking}</td>
+                                <td>{row.customer}</td>
+                                <td>{row.route}</td>
+                                <td>{row.risk}</td>
+                                <td>{row.hoursWithoutUpdate}h</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                </div>
+
+                <article className="ctt-chart-card">
+                  <h4>Performance regional</h4>
+                  <div className="ctt-region-grid">
+                    {cttRegionalPerformanceView.length === 0 ? (
+                      <p className="ctt-risk-status">Sem performance regional para o período selecionado.</p>
                     ) : (
-                      <label>
-                        Número de destino
-                        <input
-                          type="tel"
-                          value={callingTo}
-                          onChange={(e) => setCallingTo(e.target.value)}
-                          placeholder="351912345678"
-                          required
-                        />
-                      </label>
+                      cttRegionalPerformanceView.map((row) => (
+                        <div key={row.region} className="ctt-region-card">
+                          <strong>{row.region}</strong>
+                          <span>Volume: {row.volume}</span>
+                          <span>On-time: {row.onTime}</span>
+                          <span>Incidencias: {row.incidences}</span>
+                        </div>
+                      ))
                     )}
-
-                    <div className="calling-action-hint">
-                      {callingAction === "connect" && <span>📡 Envia pedido de chamada ao utilizador.</span>}
-                      {callingAction === "pre_accept" && <span>🤝 Sinaliza ao caller que will ser aceite.</span>}
-                      {callingAction === "accept" && <span>✅ Aceita a chamada recebida.</span>}
-                      {callingAction === "reject" && <span>🚫 Rejeita a chamada recebida.</span>}
-                      {callingAction === "terminate" && <span>⛔ Termina uma chamada ativa pelo ID.</span>}
-                    </div>
-
-                    <div className="api-actions">
-                      <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={callingManageLoading}
-                      >
-                        {callingManageLoading ? "A executar…" : `Executar ${callingAction}`}
-                      </button>
-                      {(callingManageResult || callingManageError) && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          onClick={() => { setCallingManageResult(""); setCallingManageError(""); }}
-                        >
-                          Limpar
-                        </button>
-                      )}
-                    </div>
-                  </form>
-
-                  {callingManageError && (
-                    <div className="calling-alert calling-alert-error">
-                      <strong>Erro:</strong> {callingManageError}
-                    </div>
-                  )}
-
-                  {callingManageResult && (
-                    <div className="calling-alert calling-alert-success">
-                      <strong>Resposta:</strong>
-                      <pre className="calling-response-pre">{callingManageResult}</pre>
-                    </div>
-                  )}
-                </div>
-
-                <div className="calling-card">
-                  <div className="calling-card-header">
-                    <span className="calling-card-icon">🛰️</span>
-                    <div>
-                      <h3>Ciclo de chamada (webhook)</h3>
-                      <p>Eventos recebidos do campo <strong>calls</strong> via webhook.</p>
-                    </div>
                   </div>
-                  <div className="api-actions">
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={refreshCallingEvents}
-                      disabled={callingEventsLoading}
-                    >
-                      {callingEventsLoading ? "A atualizar..." : "Atualizar eventos"}
-                    </button>
-                  </div>
-                  {callingEvents.length === 0 ? (
-                    <p className="calling-empty-events">Sem eventos de chamadas até agora.</p>
-                  ) : (
-                    <div className="calling-events-list">
-                      {callingEvents.map((item, idx) => (
-                        <article className="calling-event-item" key={`${item.at || "evt"}-${idx}`}>
-                          <header>
-                            <strong>{item.field || "calls"}</strong>
-                            <span>{item.at ? new Date(item.at).toLocaleString("pt-PT") : "sem data"}</span>
-                          </header>
-                          <pre className="calling-response-pre">{JSON.stringify(item.value ?? {}, null, 2)}</pre>
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+                </article>
 
-              {/* ── Quick Reference (collapsible) ── */}
-              <div className="calling-ref-section">
-                <button
-                  type="button"
-                  className="calling-ref-toggle"
-                  onClick={() => setCallingRefOpen((v) => !v)}
-                >
-                  <span>📚 Referência rápida da API</span>
-                  <span>{callingRefOpen ? "▲" : "▼"}</span>
-                </button>
-                {callingRefOpen && (
-                  <div className="calling-ref-body">
-                    <div className="facts wa-facts">
-                      {callingDocsFacts.map((fact) => (
-                        <article className="fact" key={fact.label}>
-                          <span>{fact.label}</span>
-                          <strong>{fact.value}</strong>
-                        </article>
-                      ))}
-                    </div>
-
-                    <div className="code-grid">
-                      <div>
-                        <h4>GET call_permissions</h4>
-                        <div className="code-block"><pre>{`GET /v23.0/{Phone-Number-ID}/call_permissions
-  ?user_wa_id=351912345678
-Authorization: Bearer <token>
-
-// Response permission.status:
-// "granted" | "pending" | "denied" | "expired"`}</pre></div>
-                      </div>
-                      <div>
-                        <h4>POST calls (connect)</h4>
-                        <div className="code-block"><pre>{`POST /v23.0/{Phone-Number-ID}/calls
-Authorization: Bearer <token>
-
-{
-  "messaging_product": "whatsapp",
-  "to": "351912345678",
-  "action": "connect"
-}`}</pre></div>
-                      </div>
-                    </div>
-
-                    <div className="calling-error-ref">
-                      <strong>⚠️ Erro 138006</strong> — O utilizador não concedeu permissão para receber chamadas. Use <code>send_call_permission_request</code> antes.
-                    </div>
-                  </div>
-                )}
-              </div>
+                <p className="ctt-footnote">Dados reais carregados a partir do portal operacional (TMS/CTT), filtrados pelo período selecionado.</p>
+              </section>
             </section>
           ) : activeView === "consumiveis" ? (
             <section className="panel tracker-page" id="consumiveis-page">
