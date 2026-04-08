@@ -16,6 +16,13 @@ VITE_WHATSAPP_PHONE_NUMBER_ID=configured_in_backend
 VITE_BACKEND_BASE_URL=http://localhost:3001
 ```
 
+For production (Vercel/serverless), do one of the following:
+
+- Leave `VITE_BACKEND_BASE_URL` empty/not set (recommended). The frontend will call `/api/*` on the same domain.
+- Or set `VITE_BACKEND_BASE_URL=https://<your-production-domain>`.
+
+Do not set `VITE_BACKEND_BASE_URL` to `http://localhost:3001` in production.
+
 The frontend includes a **WhatsApp Cloud API Message Console** using:
 
 - `POST https://graph.facebook.com/{Version}/{Phone-Number-ID}/messages`
@@ -135,3 +142,8 @@ Behavior:
 - Calls POST /api/messages/process-scheduled.
 - Calls GET /api/cron/auto-notificacao-envio.
 - The backend itself enforces Lisbon-time checks for `AUTO_NOTIFICACAO_ENVIO` (09:30 on weekdays by env), so calling every 30 minutes is safe.
+
+Important for serverless:
+
+- Automatic timers are disabled on Vercel serverless by design.
+- Scheduled/automatic sends only run when cron endpoints are triggered (GitHub Actions or Vercel Cron).

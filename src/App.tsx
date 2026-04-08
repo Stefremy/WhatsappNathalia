@@ -687,6 +687,8 @@ function extractPlaceholderIndexes(input: string) {
 }
 
 function filterOptionalTemplateIndexes(indexes: number[], templateName?: string, languageCode?: string) {
+  void templateName;
+  void languageCode;
   return indexes;
 }
 
@@ -735,6 +737,20 @@ function fixCommonMojibake(value: string) {
 }
 
 function App() {
+  const isProductionBuild = import.meta.env.PROD;
+  const rawBackendBaseUrl = String(import.meta.env.VITE_BACKEND_BASE_URL || "").trim();
+  const backendBaseUrl = (() => {
+    const normalized = rawBackendBaseUrl.replace(/\/$/, "");
+    if (!normalized) return "";
+
+    // Prevent deployed frontend from trying to call localhost.
+    if (isProductionBuild && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) {
+      return "";
+    }
+
+    return normalized;
+  })();
+
   const [apiVersion, setApiVersion] = useState(
     import.meta.env.VITE_WHATSAPP_API_VERSION ?? "v23.0"
   );
@@ -742,7 +758,6 @@ function App() {
     import.meta.env.VITE_WHATSAPP_PHONE_NUMBER_ID ?? "configured in backend"
   );
   const [wabaId, setWabaId] = useState(import.meta.env.VITE_WHATSAPP_BUSINESS_ACCOUNT_ID ?? "");
-  const backendBaseUrl = (import.meta.env.VITE_BACKEND_BASE_URL?.trim() || "").replace(/\/$/, "");
   const apiUrl = (path: string) => (backendBaseUrl ? `${backendBaseUrl}${path}` : path);
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     try {

@@ -568,18 +568,13 @@ async function fetchAllTmsInTransportShipmentsData({ limit = 250, maxPages = 40 
 
 function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
   const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
-  const configuredWeekendScanHoursRaw = Number(process.env.AUTO_NOTIFICACAO_INCIDENCIA_WEEKEND_SCAN_HOURS || 6);
-  const configuredWeekendScanHours = Number.isFinite(configuredWeekendScanHoursRaw)
-    ? Math.max(1, Math.min(24, Math.trunc(configuredWeekendScanHoursRaw)))
-    : 6;
-
-  // Weekend: scan every N hours (default 6), no sends.
+  // Monday-Friday only.
   if (isWeekend) {
-    return parts.minute === 0 && parts.hour % configuredWeekendScanHours === 0;
+    return false;
   }
 
-  // Weekdays: every 15 minutes from 10:00 to 18:00 Lisbon time.
-  if (parts.hour < 10 || parts.hour > 18) {
+  // Weekdays: every 15 minutes from 09:00 to 18:30 Lisbon time.
+  if (parts.hour < 9 || parts.hour > 18) {
     return false;
   }
 
@@ -587,7 +582,7 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
     return false;
   }
 
-  if (parts.hour === 18 && parts.minute > 0) {
+  if (parts.hour === 18 && parts.minute > 30) {
     return false;
   }
 

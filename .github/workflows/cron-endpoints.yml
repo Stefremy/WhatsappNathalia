@@ -2,18 +2,10 @@ name: Trigger backend cron endpoints
 
 on:
   schedule:
-    # Incidencias: every 15 minutes on weekdays (backend enforces 10:00-18:00 Lisbon).
-    - cron: '*/15 * * * 1-5'
-    # Incidencias: weekend scans every 6 hours (queue only; no sends on weekend).
-    - cron: '0 */6 * * 6,0'
     # Em distribuicao: 09:30 Lisbon on weekdays.
     # DST-safe: trigger both UTC slots; backend keeps Lisbon-time guard.
     - cron: '30 8 * * 1-5'
     - cron: '30 9 * * 1-5'
-    # Em transporte: 10:00 Lisbon on weekdays.
-    # DST-safe: trigger both UTC slots; backend keeps Lisbon-time guard.
-    - cron: '0 9 * * 1-5'
-    - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -32,37 +24,10 @@ jobs:
             exit 1
           fi
 
-      - name: Trigger scheduled messages processor
-        run: |
-          set -euo pipefail
-          curl --fail --show-error --silent \
-            -X POST \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/messages/process-scheduled"
-
       - name: Trigger AUTO_NOTIFICACAO_ENVIO cron endpoint
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 8 * * 1-5' || github.event.schedule == '30 9 * * 1-5'
         run: |
           set -euo pipefail
           curl --fail --show-error --silent \
             -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio"
-
-      - name: Trigger AUTO_NOTIFICACAO_ENVIO_EM_TRANSPORTE cron endpoint
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1-5' || github.event.schedule == '0 10 * * 1-5'
-        run: |
-          set -euo pipefail
-          curl --fail --show-error --silent \
-            -X GET \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio-em-transporte"
-
-      - name: Trigger AUTO_NOTIFICACAO_INCIDENCIA cron endpoint
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * 1-5' || github.event.schedule == '0 */6 * * 6,0'
-        run: |
-          set -euo pipefail
-          curl --fail --show-error --silent \
-            -X GET \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-incidencia"
