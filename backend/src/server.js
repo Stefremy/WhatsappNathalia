@@ -7157,6 +7157,141 @@ async function fetchTmsCustomersData({ page = 1, limit = 100, search = "" } = {}
   };
 }
 
+async function createTmsAuthenticatedContext() {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+  if (!baseUrl || !email || !password) throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) throw new Error("Could not extract CSRF token.");
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  return { baseUrl, csrfToken, cookieJar };
+}
+
+async function fetchTmsWebservicesDatatable({ type = "shipping", page = 1, limit = 20 } = {}) {
+  const safeType = String(type || "shipping").trim().toLowerCase();
+  const safePage = Math.max(1, Math.trunc(Number(page) || 1));
+  const safeLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 20)));
+  const start = (safePage - 1) * safeLimit;
+
+  const { baseUrl, csrfToken, cookieJar } = await createTmsAuthenticatedContext();
+
+  const endpointByType = {
+    shipping: "/admin/webservices/datatable",
+    telematic: "/admin/webservices/datatable",
+    sms: "/admin/webservices/datatable",
+    maps: "/admin/webservices/datatable",
+    tolls: "/admin/webservices/datatable",
+    ai: "/admin/webservices/datatable",
+    credit_insurers: "/admin/webservices/datatable",
+    ecommerce: "/admin/webservices/ecommerce/datatable",
+    payments: "/admin/webservices/payments/datatable"
+  };
+
+  const endpointPath = endpointByType[safeType] || endpointByType.shipping;
+  const body = new URLSearchParams();
+  body.set("_token", csrfToken);
+  body.set("draw", String(safePage));
+  body.set("start", String(start));
+  body.set("length", String(safeLimit));
+  if (endpointPath === "/admin/webservices/datatable") {
+    body.set("type", safeType);
+  }
+
+  const res = await fetch(`${baseUrl}${endpointPath}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: `${baseUrl}/admin/webservices`,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: body.toString(),
+    redirect: "manual"
+  });
+
+  if (!res.ok) {
+    throw new Error(`TMS webservices datatable failed (${safeType}): ${res.status}`);
+  }
+
+  const payload = await res.json().catch(() => ({}));
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  const total = Number(payload?.recordsFiltered ?? payload?.recordsTotal ?? rows.length) || 0;
+
+  return {
+    endpoint: `${baseUrl}${endpointPath}`,
+    type: safeType,
+    rows,
+    meta: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit))
+    }
+  };
+}
+
+app.get("/api/tms/webservices/discovery", async (req, res) => {
+  try {
+    const type = String(req.query?.type || "shipping").trim().toLowerCase();
+    const page = Number(req.query?.page || 1);
+    const limit = Number(req.query?.limit || 20);
+    const data = await fetchTmsWebservicesDatatable({ type, page, limit });
+
+    const cttRows = data.rows.filter((row) => JSON.stringify(row || {}).toLowerCase().includes("ctt"));
+
+    return res.json({
+      ok: true,
+      discovered: {
+        shippingLike: "/admin/webservices/datatable",
+        ecommerce: "/admin/webservices/ecommerce/datatable",
+        payments: "/admin/webservices/payments/datatable"
+      },
+      data: {
+        endpoint: data.endpoint,
+        type: data.type,
+        rows: data.rows,
+        cttRows,
+        meta: data.meta
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to discover TMS webservices endpoints",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/api/customers", async (req, res) => {
   try {
     const page = Number(req.query?.page || 1);

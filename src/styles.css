@@ -1666,6 +1666,217 @@ p {
   color: #b42318;
 }
 
+.webservices-console {
+  gap: 0.85rem;
+}
+
+.webservices-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.webservices-head h2 {
+  margin: 0;
+}
+
+.webservices-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+}
+
+.webservices-breadcrumb {
+  color: #667085;
+  font-size: 0.8rem;
+}
+
+.webservices-tabs {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.webservices-tab {
+  border: 1px solid rgba(15, 23, 32, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 0.45rem 0.62rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.webservices-tab.active {
+  background: #eef6ff;
+  border-color: rgba(15, 109, 191, 0.52);
+  color: #0d5c9f;
+}
+
+.webservices-toolbar {
+  margin-top: 0.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.webservices-console .btn-primary {
+  color: #0f5132;
+  background: linear-gradient(120deg, #d8fbe8, #bff5d8);
+  border-color: rgba(39, 153, 92, 0.32);
+  box-shadow: 0 6px 14px rgba(83, 193, 129, 0.2);
+}
+
+.webservices-console .btn-secondary {
+  color: #334155;
+  background: #eef3f8;
+  border-color: rgba(51, 65, 85, 0.18);
+}
+
+.webservices-console .btn-primary:hover,
+.webservices-console .btn-secondary:hover {
+  filter: brightness(1.02);
+}
+
+.webservices-toolbar input {
+  margin-left: auto;
+  min-width: 240px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.55rem 0.72rem;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.webservices-table td,
+.webservices-table th {
+  font-size: 0.82rem;
+}
+
+.webservices-table td:last-child {
+  min-width: 92px;
+}
+
+.webservices-row-selected {
+  background: rgba(13, 92, 159, 0.08);
+}
+
+.webservices-dot {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.webservices-dot.ok {
+  background: rgba(21, 128, 61, 0.16);
+  color: #166534;
+}
+
+.webservices-dot.off {
+  background: rgba(71, 85, 105, 0.14);
+  color: #475569;
+}
+
+.webservices-edit-btn {
+  padding: 0.34rem 0.62rem;
+  font-size: 0.78rem;
+  color: #0f172a;
+  background: #f8fafc;
+  border: 1px solid #94a3b8;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4) inset;
+}
+
+.webservices-edit-btn:hover {
+  color: #0b1220;
+  background: #e2e8f0;
+  border-color: #64748b;
+}
+
+.webservices-footer {
+  margin-top: 0.55rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.webservices-config-panel {
+  gap: 0.7rem;
+}
+
+.webservices-config-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.webservices-config-head h3 {
+  margin: 0;
+}
+
+.webservices-config-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+}
+
+.webservices-security-note {
+  font-size: 0.75rem;
+  color: #7a5b00;
+  background: rgba(255, 239, 163, 0.42);
+  border: 1px solid rgba(183, 142, 24, 0.35);
+  border-radius: 999px;
+  padding: 0.28rem 0.58rem;
+}
+
+.webservices-config-form {
+  gap: 0.62rem;
+}
+
+.webservices-test-result {
+  margin-top: 0.2rem;
+  display: grid;
+  gap: 0.2rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 0.58rem 0.68rem;
+  font-size: 0.8rem;
+}
+
+.webservices-test-result strong {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.webservices-test-result.loading {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.webservices-test-result.ok {
+  background: #ecfdf3;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.webservices-test-result.error {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
 .template-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -3156,6 +3367,12 @@ p {
   .ctt-period-label {
     margin-left: 0;
     width: 100%;
+  }
+
+  .webservices-toolbar input {
+    margin-left: 0;
+    width: 100%;
+    min-width: 0;
   }
 
   .fact-grid,

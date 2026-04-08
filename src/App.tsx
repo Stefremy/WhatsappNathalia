@@ -362,6 +362,185 @@ type CttDashboardData = {
   regionalPerformance: CttDashboardRegionalRow[];
 };
 
+type WebservicesCategory =
+  | "transportadoras"
+  | "telematica"
+  | "sms"
+  | "pagamentos"
+  | "ecommerce"
+  | "mapas"
+  | "portagens"
+  | "ia"
+  | "credito";
+
+type WebserviceRow = {
+  id: string;
+  category: WebservicesCategory;
+  description: string;
+  provider: string;
+  centerOp: string;
+  agency: string;
+  user: string;
+  sessionId: string;
+  forceRem: boolean;
+  autoActivate: boolean;
+  active: boolean;
+  createdAt: string;
+};
+
+type WebserviceCredential = {
+  baseUrl: string;
+  apiKey: string;
+  bearerToken: string;
+  username: string;
+  password: string;
+  accountCode: string;
+  agencyCode: string;
+  sessionId: string;
+  notes: string;
+};
+
+type WebservicesCttTestResult = {
+  status: "idle" | "loading" | "ok" | "error";
+  message: string;
+  endpoint: string;
+  cttRows: number;
+  checkedAt: string;
+};
+
+const webservicesCategoryTabs: Array<{ key: WebservicesCategory; label: string }> = [
+  { key: "transportadoras", label: "Transportadoras" },
+  { key: "telematica", label: "Telemática e GPS" },
+  { key: "sms", label: "SMS" },
+  { key: "pagamentos", label: "Pagamentos" },
+  { key: "ecommerce", label: "E-commerce" },
+  { key: "mapas", label: "Mapas e Rotas" },
+  { key: "portagens", label: "Portagens" },
+  { key: "ia", label: "IA" },
+  { key: "credito", label: "Seg. Crédito" }
+];
+
+const webservicesSeedRows: WebserviceRow[] = [
+  {
+    id: "ws-vasp",
+    category: "transportadoras",
+    description: "VASP",
+    provider: "VASP",
+    centerOp: "Todas",
+    agency: "-",
+    user: "geral@linke.pt",
+    sessionId: "",
+    forceRem: false,
+    autoActivate: true,
+    active: true,
+    createdAt: "2025-07-31 16:15:20"
+  },
+  {
+    id: "ws-correos-express",
+    category: "transportadoras",
+    description: "Correos Express",
+    provider: "CORREOS.EXPRESS",
+    centerOp: "Todas",
+    agency: "P49240001",
+    user: "WS_GoLinke",
+    sessionId: "",
+    forceRem: false,
+    autoActivate: true,
+    active: true,
+    createdAt: "2025-05-20 17:14:51"
+  },
+  {
+    id: "ws-ctt-correios",
+    category: "transportadoras",
+    description: "CTT Correios",
+    provider: "CORREIOS",
+    centerOp: "[A01] ARMAZEM GUIMARAES",
+    agency: "200103461",
+    user: "12184430",
+    sessionId: "",
+    forceRem: false,
+    autoActivate: true,
+    active: true,
+    createdAt: "2025-04-14 15:38:11"
+  },
+  {
+    id: "ws-dpd",
+    category: "transportadoras",
+    description: "DPD",
+    provider: "DPD PORTUGAL",
+    centerOp: "Todas",
+    agency: "-",
+    user: "ws033824",
+    sessionId: "",
+    forceRem: false,
+    autoActivate: false,
+    active: true,
+    createdAt: "2025-03-26 10:34:10"
+  },
+  {
+    id: "ws-mrw",
+    category: "transportadoras",
+    description: "MRW",
+    provider: "MRW - Guimarães",
+    centerOp: "Todas",
+    agency: "07202",
+    user: "EN07202GoLinke",
+    sessionId: "005613",
+    forceRem: false,
+    autoActivate: false,
+    active: true,
+    createdAt: "2025-03-18 12:13:36"
+  },
+  {
+    id: "ws-ctt-expresso",
+    category: "transportadoras",
+    description: "CTT Expresso",
+    provider: "CTT Expresso",
+    centerOp: "Todas",
+    agency: "300330941",
+    user: "100037458",
+    sessionId: "1d7ad*****afb4b",
+    forceRem: false,
+    autoActivate: true,
+    active: true,
+    createdAt: "2025-03-03 16:57:27"
+  }
+];
+
+const emptyWebserviceCredential: WebserviceCredential = {
+  baseUrl: "",
+  apiKey: "",
+  bearerToken: "",
+  username: "",
+  password: "",
+  accountCode: "",
+  agencyCode: "",
+  sessionId: "",
+  notes: ""
+};
+
+const webservicesPrefilledCredentials: Record<string, WebserviceCredential> = {
+  "ws-ctt-expresso": {
+    baseUrl: "https://whatsapplinke.vercel.app",
+    apiKey: "1d7ad9a9-c7bb-43be-9f57-851d1baafb4b",
+    bearerToken: "",
+    username: "100032458",
+    password: "cea67efe-b547-4be6-87a7-09d287ccf0f6",
+    accountCode: "100032458",
+    agencyCode: "300330941",
+    sessionId: "cea67efe-b547-4be6-87a7-09d287ccf0f6",
+    notes: "Endpoint oficial TMS: /admin/webservices/datatable (type=shipping). Headers CTT: x-api-key + x-user-id."
+  }
+};
+
+const emptyWebservicesCttTestResult: WebservicesCttTestResult = {
+  status: "idle",
+  message: "",
+  endpoint: "",
+  cttRows: 0,
+  checkedAt: ""
+};
+
 type PudoNotificationState = Record<
   string,
   {
@@ -452,7 +631,7 @@ function formatE164FromPortugalPhone(phoneInput: string) {
   return `+${phoneDigits}`;
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" | "ctt" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" | "ctt" | "webservices" }) {
   switch (name) {
     case "overview":
       return (
@@ -496,6 +675,13 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4.75 7.25A2.5 2.5 0 0 1 7.25 4.75h9.5a2.5 2.5 0 0 1 2.5 2.5v9.5a2.5 2.5 0 0 1-2.5 2.5h-9.5a2.5 2.5 0 0 1-2.5-2.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M8 10.25h8M8 13.25h5M8 16.25h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "webservices":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.75 6.75h14.5A1.75 1.75 0 0 1 21 8.5v2.75A1.75 1.75 0 0 1 19.25 13h-14.5A1.75 1.75 0 0 1 3 11.25V8.5a1.75 1.75 0 0 1 1.75-1.75Zm0 6.25h14.5A1.75 1.75 0 0 1 21 14.75v2.75A1.75 1.75 0 0 1 19.25 19.25h-14.5A1.75 1.75 0 0 1 3 17.5v-2.75A1.75 1.75 0 0 1 4.75 13Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M7.5 9.9h.01M7.5 16.15h.01M11 9.9h6M11 16.15h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "consumiveis":
@@ -1069,7 +1255,7 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices">("workspace");
   const [cttDateFrom, setCttDateFrom] = useState(() => {
     const end = new Date();
     const start = new Date(end);
@@ -1090,6 +1276,24 @@ function App() {
   const [cttRiskRows, setCttRiskRows] = useState<CttRiskShipment[]>([]);
   const [cttRiskLoading, setCttRiskLoading] = useState(false);
   const [cttRiskError, setCttRiskError] = useState("");
+  const [webservicesCategory, setWebservicesCategory] = useState<WebservicesCategory>("transportadoras");
+  const [webservicesSearch, setWebservicesSearch] = useState("");
+  const [webservicesRows] = useState<WebserviceRow[]>(webservicesSeedRows);
+  const [webservicesConfigMap, setWebservicesConfigMap] = useState<Record<string, WebserviceCredential>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("wa_webservices_credentials") || "{}") as Record<string, WebserviceCredential>;
+      return {
+        ...webservicesPrefilledCredentials,
+        ...saved
+      };
+    } catch {
+      return { ...webservicesPrefilledCredentials };
+    }
+  });
+  const [webservicesSelectedId, setWebservicesSelectedId] = useState(webservicesSeedRows[0]?.id || "");
+  const [webservicesForm, setWebservicesForm] = useState<WebserviceCredential>(emptyWebserviceCredential);
+  const [webservicesStatus, setWebservicesStatus] = useState("");
+  const [webservicesCttTest, setWebservicesCttTest] = useState<WebservicesCttTestResult>(emptyWebservicesCttTestResult);
   const [showIncidencesPanel, setShowIncidencesPanel] = useState(false);
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
   const [showPudoDetails, setShowPudoDetails] = useState(false);
@@ -5105,6 +5309,136 @@ function App() {
       });
   }
 
+  const webservicesFilteredRows = useMemo(() => {
+    const search = webservicesSearch.trim().toLowerCase();
+    return webservicesRows.filter((row) => {
+      if (row.category !== webservicesCategory) {
+        return false;
+      }
+      if (!search) {
+        return true;
+      }
+      const haystack = [
+        row.description,
+        row.provider,
+        row.centerOp,
+        row.agency,
+        row.user,
+        row.sessionId
+      ].join(" ").toLowerCase();
+      return haystack.includes(search);
+    });
+  }, [webservicesCategory, webservicesRows, webservicesSearch]);
+
+  const webservicesSelectedRow = useMemo(
+    () => webservicesRows.find((row) => row.id === webservicesSelectedId) || webservicesFilteredRows[0] || null,
+    [webservicesFilteredRows, webservicesRows, webservicesSelectedId]
+  );
+
+  useEffect(() => {
+    if (!webservicesSelectedRow) {
+      return;
+    }
+
+    setWebservicesSelectedId(webservicesSelectedRow.id);
+    setWebservicesForm(webservicesConfigMap[webservicesSelectedRow.id] || emptyWebserviceCredential);
+  }, [webservicesConfigMap, webservicesSelectedRow]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("wa_webservices_credentials", JSON.stringify(webservicesConfigMap));
+    } catch {
+      // Ignore localStorage failures for private browsing contexts.
+    }
+  }, [webservicesConfigMap]);
+
+  function selectWebserviceRow(rowId: string) {
+    const target = webservicesRows.find((row) => row.id === rowId);
+    if (!target) {
+      return;
+    }
+    setWebservicesSelectedId(rowId);
+    setWebservicesForm(webservicesConfigMap[rowId] || emptyWebserviceCredential);
+    setWebservicesStatus("");
+  }
+
+  function handleSaveWebserviceKeys(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!webservicesSelectedRow) {
+      setWebservicesStatus("Seleciona um webservice para configurar.");
+      return;
+    }
+
+    setWebservicesConfigMap((current) => ({
+      ...current,
+      [webservicesSelectedRow.id]: {
+        ...webservicesForm,
+        baseUrl: webservicesForm.baseUrl.trim(),
+        apiKey: webservicesForm.apiKey.trim(),
+        bearerToken: webservicesForm.bearerToken.trim(),
+        username: webservicesForm.username.trim(),
+        password: webservicesForm.password,
+        accountCode: webservicesForm.accountCode.trim(),
+        agencyCode: webservicesForm.agencyCode.trim(),
+        sessionId: webservicesForm.sessionId.trim(),
+        notes: webservicesForm.notes.trim()
+      }
+    }));
+    setWebservicesStatus(`Credenciais guardadas para ${webservicesSelectedRow.description}.`);
+  }
+
+  async function handleTestWebserviceCttConnection() {
+    setWebservicesCttTest({
+      status: "loading",
+      message: "A testar ligação CTT no TMS...",
+      endpoint: "",
+      cttRows: 0,
+      checkedAt: ""
+    });
+
+    try {
+      const response = await fetch("/api/tms/webservices/discovery?type=shipping&limit=50");
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || payload?.ok !== true) {
+        const details = String(payload?.details || payload?.error || `HTTP ${response.status}`).trim();
+        throw new Error(details || "Falha na descoberta de webservices no TMS.");
+      }
+
+      const endpoint = String(payload?.data?.endpoint || "").trim();
+      const cttRows = Array.isArray(payload?.data?.cttRows) ? payload.data.cttRows.length : 0;
+      const checkedAt = new Date().toLocaleString("pt-PT");
+
+      if (cttRows > 0) {
+        setWebservicesCttTest({
+          status: "ok",
+          message: `Ligação CTT OK. Encontrados ${cttRows} registos CTT no TMS.`,
+          endpoint,
+          cttRows,
+          checkedAt
+        });
+        return;
+      }
+
+      setWebservicesCttTest({
+        status: "error",
+        message: "Ligação respondeu, mas não foram encontrados registos CTT no datatable shipping.",
+        endpoint,
+        cttRows,
+        checkedAt
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro desconhecido ao testar ligação CTT.";
+      setWebservicesCttTest({
+        status: "error",
+        message,
+        endpoint: "",
+        cttRows: 0,
+        checkedAt: new Date().toLocaleString("pt-PT")
+      });
+    }
+  }
+
   if (!authUser) {
     return (
       <div className="auth-screen">
@@ -5297,6 +5631,14 @@ function App() {
             >
               <span className="workspace-nav-icon"><SidebarIcon name="ctt" /></span>
               <span>CTT</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "webservices" ? " active" : ""}`}
+              onClick={() => setActiveView("webservices")}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="webservices" /></span>
+              <span>Webservices</span>
             </button>
             <button
               type="button"
@@ -7745,6 +8087,218 @@ function App() {
                   </tbody>
                 </table>
               </div>
+            </section>
+          ) : activeView === "webservices" ? (
+            <section className="panel tracker-page" id="webservices-page">
+              <section className="panel webservices-console">
+                <div className="webservices-head">
+                  <div>
+                    <h2>Webservices Globais</h2>
+                    <p>Painel para ligar transportadoras e configurar credenciais de integração por fornecedor.</p>
+                  </div>
+                  <span className="webservices-breadcrumb">Painel de Resumo &gt; Configurações &gt; Webservices Globais</span>
+                </div>
+
+                <div className="webservices-tabs" role="tablist" aria-label="Categorias de webservices">
+                  {webservicesCategoryTabs.map((tab) => (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      className={`webservices-tab${webservicesCategory === tab.key ? " active" : ""}`}
+                      onClick={() => setWebservicesCategory(tab.key)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="webservices-toolbar">
+                  <button type="button" className="btn btn-primary">+ Novo</button>
+                  <button type="button" className="btn btn-secondary">Ativar/Desativar em Massa</button>
+                  <input
+                    value={webservicesSearch}
+                    onChange={(event) => setWebservicesSearch(event.target.value)}
+                    placeholder="Pesquisar fornecedor, utilizador ou agência"
+                    aria-label="Pesquisar webservices"
+                  />
+                </div>
+
+                <div className="tracker-table-wrap">
+                  <table className="tracker-table webservices-table">
+                    <thead>
+                      <tr>
+                        <th>Descrição</th>
+                        <th>Fornecedor</th>
+                        <th>Centro Op.</th>
+                        <th>Agência/Franquia</th>
+                        <th>Utilizador</th>
+                        <th>Session ID</th>
+                        <th>Forçar Rem.</th>
+                        <th>Ativar Auto</th>
+                        <th>Ativo</th>
+                        <th>Criado em</th>
+                        <th>Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {webservicesFilteredRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={11} className="tracker-empty">Sem webservices para os filtros atuais.</td>
+                        </tr>
+                      ) : (
+                        webservicesFilteredRows.map((row) => (
+                          <tr key={row.id} className={webservicesSelectedId === row.id ? "webservices-row-selected" : ""}>
+                            <td>{row.description}</td>
+                            <td>{row.provider}</td>
+                            <td>{row.centerOp}</td>
+                            <td>{row.agency}</td>
+                            <td>{row.user}</td>
+                            <td>{row.sessionId || "-"}</td>
+                            <td><span className={`webservices-dot ${row.forceRem ? "ok" : "off"}`}>{row.forceRem ? "Sim" : "Não"}</span></td>
+                            <td><span className={`webservices-dot ${row.autoActivate ? "ok" : "off"}`}>{row.autoActivate ? "Sim" : "Não"}</span></td>
+                            <td><span className={`webservices-dot ${row.active ? "ok" : "off"}`}>{row.active ? "Ativo" : "Inativo"}</span></td>
+                            <td>{row.createdAt}</td>
+                            <td>
+                              <button type="button" className="btn btn-secondary webservices-edit-btn" onClick={() => selectWebserviceRow(row.id)}>
+                                Editar
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="webservices-footer">
+                  <span>{webservicesFilteredRows.length} registos</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setActiveView("workspace")}
+                  >
+                    Voltar ao Workspace
+                  </button>
+                </div>
+              </section>
+
+              <section className="panel webservices-config-panel">
+                <div className="webservices-config-head">
+                  <div>
+                    <h3>Configurar Ligação</h3>
+                    <p>
+                      {webservicesSelectedRow
+                        ? `${webservicesSelectedRow.description} · ${webservicesSelectedRow.provider}`
+                        : "Seleciona um fornecedor na tabela"}
+                    </p>
+                  </div>
+                  <span className="webservices-security-note">As chaves ficam guardadas localmente neste browser (pré-integração backend).</span>
+                </div>
+
+                <form className="api-form webservices-config-form" onSubmit={handleSaveWebserviceKeys}>
+                  <div className="template-var-grid">
+                    <label>
+                      Base URL
+                      <input
+                        value={webservicesForm.baseUrl}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, baseUrl: event.target.value }))}
+                        placeholder="https://api.fornecedor.com"
+                      />
+                    </label>
+                    <label>
+                      API Key
+                      <input
+                        type="password"
+                        value={webservicesForm.apiKey}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, apiKey: event.target.value }))}
+                        placeholder="Inserir API key"
+                      />
+                    </label>
+                    <label>
+                      Bearer Token
+                      <input
+                        type="password"
+                        value={webservicesForm.bearerToken}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, bearerToken: event.target.value }))}
+                        placeholder="Inserir bearer token"
+                      />
+                    </label>
+                    <label>
+                      Utilizador
+                      <input
+                        value={webservicesForm.username}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, username: event.target.value }))}
+                        placeholder="ws_user"
+                      />
+                    </label>
+                    <label>
+                      Password
+                      <input
+                        type="password"
+                        value={webservicesForm.password}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, password: event.target.value }))}
+                        placeholder="Inserir password"
+                      />
+                    </label>
+                    <label>
+                      Código de Conta
+                      <input
+                        value={webservicesForm.accountCode}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, accountCode: event.target.value }))}
+                        placeholder="Conta / cliente"
+                      />
+                    </label>
+                    <label>
+                      Agência/Franquia
+                      <input
+                        value={webservicesForm.agencyCode}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, agencyCode: event.target.value }))}
+                        placeholder="Código da agência"
+                      />
+                    </label>
+                    <label>
+                      Session ID
+                      <input
+                        value={webservicesForm.sessionId}
+                        onChange={(event) => setWebservicesForm((current) => ({ ...current, sessionId: event.target.value }))}
+                        placeholder="Session ID"
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    Notas de integração
+                    <textarea
+                      rows={3}
+                      value={webservicesForm.notes}
+                      onChange={(event) => setWebservicesForm((current) => ({ ...current, notes: event.target.value }))}
+                      placeholder="Headers, scopes, restrições por endpoint, etc."
+                    />
+                  </label>
+
+                  <div className="api-actions">
+                    <button className="btn btn-primary" type="submit">Guardar Credenciais</button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={handleTestWebserviceCttConnection}
+                      disabled={webservicesCttTest.status === "loading"}
+                    >
+                      {webservicesCttTest.status === "loading" ? "A testar..." : "Testar Ligação CTT"}
+                    </button>
+                    {webservicesStatus ? <span className="status">{webservicesStatus}</span> : null}
+                  </div>
+
+                  {webservicesCttTest.status !== "idle" ? (
+                    <div className={`webservices-test-result ${webservicesCttTest.status}`}>
+                      <strong>{webservicesCttTest.status === "ok" ? "OK" : webservicesCttTest.status === "loading" ? "A testar" : "Erro"}</strong>
+                      <span>{webservicesCttTest.message}</span>
+                      {webservicesCttTest.endpoint ? <span>Endpoint: {webservicesCttTest.endpoint}</span> : null}
+                      {webservicesCttTest.status !== "loading" ? <span>CTT encontrados: {webservicesCttTest.cttRows}</span> : null}
+                      {webservicesCttTest.checkedAt ? <span>Validado em: {webservicesCttTest.checkedAt}</span> : null}
+                    </div>
+                  ) : null}
+                </form>
+              </section>
             </section>
           ) : activeView === "ctt" ? (
             <section className="panel tracker-page" id="ctt-page">
