@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import { get, put } from "@vercel/blob";
 import { Client as NotionClient } from "@notionhq/client";
 import { createClient } from "@supabase/supabase-js";
 import { Pool } from "pg";
@@ -1315,6 +1316,15 @@ const notionFeedbackPageId = String(process.env.NOTION_FEEDBACK_PAGE_ID || "").t
 const notionFeedbackEnabled = Boolean(notionFeedback && (notionFeedbackDatabaseId || notionFeedbackPageId));
 const botpressWebhookRelayUrl = String(process.env.BOTPRESS_WEBHOOK_RELAY_URL || "").trim();
 const botpressApiKey = String(process.env.BOTPRESS_API_KEY || "").trim();
+const blobReadWriteToken = String(process.env.BLOB_READ_WRITE_TOKEN || "").trim();
+const blobMediaUploadEnabled = Boolean(blobReadWriteToken);
+const blobMediaAccessRaw = String(process.env.BLOB_MEDIA_ACCESS || "private").trim().toLowerCase();
+const blobMediaAccess = blobMediaAccessRaw === "public" ? "public" : "private";
+const mediaBlobUrlSignSecret = String(process.env.MEDIA_BLOB_URL_SIGN_SECRET || process.env.CRON_SECRET || "").trim();
+const mediaBlobUrlDefaultTtlSeconds = Math.max(
+  60,
+  Math.min(24 * 60 * 60, Number(process.env.MEDIA_BLOB_URL_DEFAULT_TTL_SECONDS || 900) || 900)
+);
 const supabaseUrl = String(process.env.SUPABASE_URL || "").trim();
 const supabaseServiceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 const supabaseEnabled = Boolean(supabaseUrl && supabaseServiceRoleKey);
@@ -3849,6 +3859,48 @@ async function findSupabaseLogByApiMessageId(messageId) {
   return null;
 }
 
+async function findSupabaseLogPayloadByApiMessageId(messageId) {
+  const normalized = String(messageId || "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (supabaseEnabled && supabase) {
+    const { data, error } = await supabase
+      .from("whatsapp_logs")
+      .select("payload")
+      .eq("api_message_id", normalized)
+      .order("id", { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw new Error(error.message || "Failed to query Supabase log payload by message id");
+    }
+
+    if (Array.isArray(data) && data.length > 0) {
+      return data[0]?.payload || null;
+    }
+
+    return null;
+  }
+
+  if (pgEnabled && pgPool) {
+    const { rows } = await pgPool.query(
+      `select payload
+       from public.whatsapp_logs
+       where api_message_id = $1
+       order by id desc
+       limit 1`,
+      [normalized]
+    );
+    if (Array.isArray(rows) && rows.length > 0) {
+      return rows[0]?.payload || null;
+    }
+  }
+
+  return null;
+}
+
 async function updateSupabaseLogStatusByMessageId({ messageId, status, payload }) {
   const normalizedMessageId = String(messageId || "").trim();
   const normalizedStatus = String(status || "").trim();
@@ -4071,6 +4123,249 @@ function inboundMessageMediaInfo(message) {
   };
 }
 
+function sanitizeBlobPathSegment(value, fallback = "unknown") {
+  const clean = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  if (!clean) {
+    return fallback;
+  }
+
+  return clean.slice(0, 80);
+}
+
+function toBase64Url(input) {
+  return Buffer.from(String(input || ""), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function fromBase64Url(input) {
+  const normalized = String(input || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  const padLength = normalized.length % 4;
+  const padded = padLength === 0 ? normalized : normalized + "=".repeat(4 - padLength);
+  return Buffer.from(padded, "base64").toString("utf8");
+}
+
+function signMediaBlobToken(payload) {
+  if (!mediaBlobUrlSignSecret) {
+    throw new Error("MEDIA_BLOB_URL_SIGN_SECRET or CRON_SECRET is required");
+  }
+
+  const payloadJson = JSON.stringify(payload);
+  const encodedPayload = toBase64Url(payloadJson);
+  const signature = createHmac("sha256", mediaBlobUrlSignSecret).update(encodedPayload).digest("hex");
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyMediaBlobToken(token) {
+  const raw = String(token || "").trim();
+  const dotIndex = raw.lastIndexOf(".");
+  if (!raw || dotIndex <= 0) {
+    throw new Error("Invalid token");
+  }
+
+  const encodedPayload = raw.slice(0, dotIndex);
+  const signature = raw.slice(dotIndex + 1);
+  if (!encodedPayload || !signature) {
+    throw new Error("Invalid token");
+  }
+
+  const expectedSignature = createHmac("sha256", mediaBlobUrlSignSecret).update(encodedPayload).digest("hex");
+  if (!/^[0-9a-f]+$/i.test(signature) || signature.length !== expectedSignature.length) {
+    throw new Error("Invalid token signature");
+  }
+  const isValidSignature = timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expectedSignature, "hex"));
+  if (!isValidSignature) {
+    throw new Error("Invalid token signature");
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(fromBase64Url(encodedPayload));
+  } catch {
+    throw new Error("Invalid token payload");
+  }
+
+  const blobPath = String(payload?.p || "").trim();
+  const expiresAt = Number(payload?.e || 0);
+  const accessRaw = String(payload?.a || "").trim().toLowerCase();
+  const access = accessRaw === "public" ? "public" : "private";
+
+  if (!blobPath || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new Error("Invalid token payload");
+  }
+
+  return { blobPath, expiresAt, access };
+}
+
+function parseBlobPathFromUrl(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    return String(parsed.pathname || "").replace(/^\/+/, "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function getExternalBaseUrl(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = forwardedHost || String(req.headers.host || "").trim();
+  const proto = forwardedProto || req.protocol || "https";
+
+  if (!host) {
+    return "";
+  }
+
+  return `${proto}://${host}`;
+}
+
+function readBlobReferenceFromPayload(payload) {
+  const mediaStorage = payload?.media?.storage || null;
+  if (!mediaStorage || typeof mediaStorage !== "object") {
+    return { blobPath: "", blobUrl: "", blobAccess: "" };
+  }
+
+  const blobPath = String(mediaStorage?.blobPath || "").trim();
+  const blobUrl = String(mediaStorage?.blobUrl || "").trim();
+  const blobAccess = String(mediaStorage?.blobAccess || "").trim().toLowerCase();
+  return { blobPath, blobUrl, blobAccess };
+}
+
+function extensionFromMimeType(mimeType) {
+  const mime = String(mimeType || "").trim().toLowerCase();
+  if (!mime) return "bin";
+
+  const map = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/ogg": "ogg",
+    "audio/aac": "aac",
+    "application/pdf": "pdf"
+  };
+
+  if (map[mime]) {
+    return map[mime];
+  }
+
+  const subtype = mime.split("/")[1] || "";
+  const cleanSubtype = subtype.split(";")[0].replace(/[^a-z0-9.+-]/g, "");
+  if (!cleanSubtype) {
+    return "bin";
+  }
+
+  if (cleanSubtype.includes("+")) {
+    return cleanSubtype.split("+").pop() || "bin";
+  }
+
+  return cleanSubtype;
+}
+
+async function fetchWhatsappMediaBinary(mediaId) {
+  const normalizedMediaId = String(mediaId || "").trim();
+  if (!normalizedMediaId) {
+    throw new Error("Missing media id");
+  }
+
+  const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+  const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+
+  const metaResponse = await fetch(`https://graph.facebook.com/${apiVersion}/${encodeURIComponent(normalizedMediaId)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    signal: AbortSignal.timeout(12000)
+  });
+
+  const metaBody = await metaResponse.json().catch(() => ({}));
+  if (!metaResponse.ok || !metaBody?.url) {
+    throw new Error(`Failed to resolve media URL (${metaResponse.status})`);
+  }
+
+  const binaryResponse = await fetch(String(metaBody.url), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    signal: AbortSignal.timeout(20000)
+  });
+
+  if (!binaryResponse.ok) {
+    throw new Error(`Failed to fetch media binary (${binaryResponse.status})`);
+  }
+
+  const arrayBuffer = await binaryResponse.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const mimeType = String(binaryResponse.headers.get("content-type") || metaBody?.mime_type || "application/octet-stream");
+  const sha256 = createHash("sha256").update(buffer).digest("hex");
+
+  return {
+    buffer,
+    mimeType,
+    sha256,
+    sizeBytes: buffer.length,
+    meta: metaBody
+  };
+}
+
+async function uploadInboundMediaToBlob({ from, messageId, mediaType, mediaId }) {
+  if (!blobMediaUploadEnabled) {
+    return { uploaded: false, reason: "blob_disabled" };
+  }
+
+  const normalizedMediaId = String(mediaId || "").trim();
+  if (!normalizedMediaId) {
+    return { uploaded: false, reason: "missing_media_id" };
+  }
+
+  const mediaBinary = await fetchWhatsappMediaBinary(normalizedMediaId);
+  const now = new Date();
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const toSegment = sanitizeBlobPathSegment(from, "unknown-contact");
+  const messageSegment = sanitizeBlobPathSegment(messageId || normalizedMediaId, normalizedMediaId.slice(0, 40));
+  const mediaSegment = sanitizeBlobPathSegment(mediaType, "media");
+  const extension = extensionFromMimeType(mediaBinary.mimeType);
+  const blobPath = `whatsapp/inbound/${year}/${month}/${day}/${toSegment}/${messageSegment}-${mediaSegment}.${extension}`;
+
+  const blob = await put(blobPath, mediaBinary.buffer, {
+    access: blobMediaAccess,
+    contentType: mediaBinary.mimeType,
+    token: blobReadWriteToken
+  });
+
+  return {
+    uploaded: true,
+    mediaType: String(mediaType || "").trim(),
+    mediaId: normalizedMediaId,
+    mimeType: mediaBinary.mimeType,
+    sizeBytes: mediaBinary.sizeBytes,
+    sha256: mediaBinary.sha256,
+    blobUrl: String(blob?.url || ""),
+    blobPath: String(blob?.pathname || blobPath),
+    blobAccess: blobMediaAccess
+  };
+}
+
 async function logInboundMessage({ from, message, contact }) {
   const inboundMessageId = String(message?.id || "").trim();
   if (!inboundMessageId) {
@@ -4088,6 +4383,25 @@ async function logInboundMessage({ from, message, contact }) {
     const contactName = String(contact?.profile?.name || "").trim();
     const fromWaId = String(from || "").trim();
     const summaryText = inboundMessageText(message);
+    const mediaInfo = inboundMessageMediaInfo(message);
+    let mediaStorage = null;
+
+    if (mediaInfo.mediaId) {
+      try {
+        mediaStorage = await uploadInboundMediaToBlob({
+          from: fromWaId,
+          messageId: inboundMessageId,
+          mediaType: mediaInfo.mediaType,
+          mediaId: mediaInfo.mediaId
+        });
+      } catch (error) {
+        mediaStorage = {
+          uploaded: false,
+          reason: "blob_upload_failed",
+          error: error instanceof Error ? error.message : "Unknown error"
+        };
+      }
+    }
 
     await safeSupabaseLog(() =>
       createSupabaseLogRow({
@@ -4101,7 +4415,12 @@ async function logInboundMessage({ from, message, contact }) {
         payload: {
           direction: "inbound",
           contact,
-          message
+          message,
+          media: {
+            type: mediaInfo.mediaType || null,
+            id: mediaInfo.mediaId || null,
+            storage: mediaStorage
+          }
         }
       })
     );
@@ -6177,46 +6496,131 @@ app.get("/api/media/:mediaId", async (req, res) => {
     if (!mediaId) {
       return res.status(400).json({ error: "Missing media id" });
     }
+    const mediaBinary = await fetchWhatsappMediaBinary(mediaId);
 
-    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
-    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
-
-    const metaResponse = await fetch(`https://graph.facebook.com/${apiVersion}/${encodeURIComponent(mediaId)}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    const metaBody = await metaResponse.json().catch(() => ({}));
-    if (!metaResponse.ok || !metaBody?.url) {
-      return res.status(metaResponse.ok ? 404 : metaResponse.status).json({
-        error: "Failed to resolve media URL",
-        details: metaBody
-      });
-    }
-
-    const binaryResponse = await fetch(String(metaBody.url), {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    if (!binaryResponse.ok) {
-      const details = await binaryResponse.text().catch(() => "");
-      return res.status(binaryResponse.status).json({ error: "Failed to fetch media binary", details });
-    }
-
-    const mimeType = String(binaryResponse.headers.get("content-type") || metaBody?.mime_type || "application/octet-stream");
-    const arrayBuffer = await binaryResponse.arrayBuffer();
-
-    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Type", mediaBinary.mimeType);
     res.setHeader("Cache-Control", "private, max-age=300");
-    return res.send(Buffer.from(arrayBuffer));
+    return res.send(mediaBinary.buffer);
   } catch (error) {
     return res.status(500).json({
       error: "Failed to proxy media",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.post("/api/media/access-url", async (req, res) => {
+  try {
+    if (!blobReadWriteToken) {
+      return res.status(400).json({ error: "BLOB_READ_WRITE_TOKEN is not configured" });
+    }
+    if (!mediaBlobUrlSignSecret) {
+      return res.status(400).json({ error: "MEDIA_BLOB_URL_SIGN_SECRET (or CRON_SECRET) is not configured" });
+    }
+
+    const messageId = String(req.body?.messageId || "").trim();
+    const explicitBlobPath = String(req.body?.blobPath || "").trim();
+    const explicitBlobUrl = String(req.body?.blobUrl || "").trim();
+    const explicitAccessRaw = String(req.body?.access || "").trim().toLowerCase();
+    const explicitAccess = explicitAccessRaw === "public" ? "public" : "private";
+
+    let blobPath = explicitBlobPath;
+    let blobUrl = explicitBlobUrl;
+    let access = explicitAccess;
+
+    if (!blobPath && blobUrl) {
+      blobPath = parseBlobPathFromUrl(blobUrl);
+    }
+
+    if (!blobPath && messageId) {
+      const payload = await findSupabaseLogPayloadByApiMessageId(messageId);
+      const fromPayload = readBlobReferenceFromPayload(payload || {});
+      blobPath = fromPayload.blobPath || parseBlobPathFromUrl(fromPayload.blobUrl);
+      blobUrl = blobUrl || fromPayload.blobUrl;
+      if (fromPayload.blobAccess === "public" || fromPayload.blobAccess === "private") {
+        access = fromPayload.blobAccess;
+      }
+    }
+
+    if (!blobPath) {
+      return res.status(400).json({ error: "Missing blobPath/blobUrl or resolvable messageId" });
+    }
+
+    const requestedTtlSeconds = Number(req.body?.ttlSeconds);
+    const ttlSeconds = Number.isFinite(requestedTtlSeconds)
+      ? Math.max(60, Math.min(24 * 60 * 60, Math.trunc(requestedTtlSeconds)))
+      : mediaBlobUrlDefaultTtlSeconds;
+    const expiresAt = Date.now() + (ttlSeconds * 1000);
+
+    const token = signMediaBlobToken({ p: blobPath, e: expiresAt, a: access });
+    const baseUrl = getExternalBaseUrl(req);
+    const relativePath = `/api/media/access/${encodeURIComponent(token)}`;
+    const accessUrl = baseUrl ? `${baseUrl}${relativePath}` : relativePath;
+
+    return res.json({
+      ok: true,
+      accessUrl,
+      blobPath,
+      blobUrl: blobUrl || null,
+      access,
+      expiresAt,
+      expiresAtIso: new Date(expiresAt).toISOString(),
+      ttlSeconds
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to create media access URL",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/media/access/:token", async (req, res) => {
+  try {
+    if (!blobReadWriteToken) {
+      return res.status(400).json({ error: "BLOB_READ_WRITE_TOKEN is not configured" });
+    }
+    if (!mediaBlobUrlSignSecret) {
+      return res.status(400).json({ error: "MEDIA_BLOB_URL_SIGN_SECRET (or CRON_SECRET) is not configured" });
+    }
+
+    let verified;
+    try {
+      verified = verifyMediaBlobToken(req.params?.token || "");
+    } catch (error) {
+      return res.status(401).json({
+        error: "Invalid media access token",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+
+    if (Date.now() > verified.expiresAt) {
+      return res.status(410).json({ error: "Media access token expired" });
+    }
+
+    const blobResult = await get(verified.blobPath, {
+      access: verified.access,
+      token: blobReadWriteToken
+    });
+
+    if (!blobResult || blobResult.statusCode !== 200 || !blobResult.stream) {
+      return res.status(404).json({ error: "Media blob not found" });
+    }
+
+    const arrayBuffer = await new Response(blobResult.stream).arrayBuffer();
+    const contentType = String(blobResult.blob?.contentType || "application/octet-stream");
+    const contentDisposition = String(blobResult.blob?.contentDisposition || "").trim();
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "private, max-age=60");
+    if (contentDisposition) {
+      res.setHeader("Content-Disposition", contentDisposition);
+    }
+
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch blob media",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }

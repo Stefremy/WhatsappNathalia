@@ -12,6 +12,7 @@
     "vercel:deploy": "vercel deploy --prebuilt --prod"
   },
   "dependencies": {
+    "@vercel/blob": "^2.3.0",
     "@notionhq/client": "^2.3.0",
     "@supabase/supabase-js": "^2.99.2",
     "cors": "^2.8.6",
