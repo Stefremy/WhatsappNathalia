@@ -50,7 +50,7 @@ jobs:
           curl --fail --show-error --silent \
             -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio?force=1"
+            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio"
 
       - name: Trigger AUTO_NOTIFICACAO_ENVIO_EM_TRANSPORTE cron endpoint
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1-5' || github.event.schedule == '0 10 * * 1-5'
@@ -59,7 +59,7 @@ jobs:
           curl --fail --show-error --silent \
             -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio-em-transporte?force=1"
+            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-envio-em-transporte"
 
       - name: Trigger AUTO_NOTIFICACAO_INCIDENCIA cron endpoint
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 13 * * 1-5' || github.event.schedule == '0,30 14 * * 1-5' || github.event.schedule == '30 15 * * 1-5' || github.event.schedule == '0,30 16 * * 1-5' || github.event.schedule == '0,30 17 * * 1-5' || github.event.schedule == '0 18 * * 1-5' || github.event.schedule == '30 14 * * 1-5' || github.event.schedule == '0,30 15 * * 1-5' || github.event.schedule == '30 16 * * 1-5' || github.event.schedule == '0,30 17 * * 1-5' || github.event.schedule == '0,30 18 * * 1-5' || github.event.schedule == '0 19 * * 1-5'
@@ -68,4 +68,4 @@ jobs:
           curl --fail --show-error --silent \
             -X GET \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-incidencia?force=1"
+            "${{ secrets.CRON_BASE_URL }}/api/cron/auto-notificacao-incidencia"

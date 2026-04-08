@@ -1189,7 +1189,7 @@ async function buildAutoNotificacaoEnvioDryRunSummary(options = {}) {
 function shouldRunAutoNotificacaoEnvioAtClock(parts) {
   const isWeekday = !["Sat", "Sun"].includes(parts.weekday);
   const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
-  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 0);
+  const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 30);
   const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
   return isWeekday && isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 }
