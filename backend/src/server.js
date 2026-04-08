@@ -573,8 +573,8 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
     return false;
   }
 
-  // Weekdays: every 15 minutes from 09:00 to 18:30 Lisbon time.
-  if (parts.hour < 9 || parts.hour > 18) {
+  // Weekdays: every 15 minutes from 09:00 to 19:00 Lisbon time.
+  if (parts.hour < 9 || parts.hour > 19) {
     return false;
   }
 
@@ -583,6 +583,10 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
   }
 
   if (parts.hour === 18 && parts.minute > 30) {
+    return false;
+  }
+
+  if (parts.hour === 19 && parts.minute > 0) {
     return false;
   }
 
