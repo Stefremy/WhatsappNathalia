@@ -451,9 +451,9 @@ function getLisbonClockParts() {
 }
 
 function getAutoNotificacaoEnvioGraceMinutes() {
-  const raw = Number(process.env.AUTO_NOTIFICACAO_ENVIO_GRACE_MINUTES || 5);
+  const raw = Number(process.env.AUTO_NOTIFICACAO_ENVIO_GRACE_MINUTES || 30);
   if (!Number.isFinite(raw)) {
-    return 5;
+    return 30;
   }
   return Math.max(0, Math.min(30, Math.trunc(raw)));
 }
@@ -473,6 +473,14 @@ function getAutoNotificacaoEnvioTransporteGraceMinutes() {
   return Math.max(0, Math.min(30, Math.trunc(raw)));
 }
 
+function getAutoNotificacaoIncidenciaGraceMinutes() {
+  const raw = Number(process.env.AUTO_NOTIFICACAO_INCIDENCIA_GRACE_MINUTES || 30);
+  if (!Number.isFinite(raw)) {
+    return 30;
+  }
+  return Math.max(0, Math.min(30, Math.trunc(raw)));
+}
+
 function isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes) {
   const nowTotal = (parts.hour * 60) + parts.minute;
   const targetTotal = (targetHour * 60) + targetMinute;
@@ -486,6 +494,44 @@ async function hydrateAutoNotificacaoEnvioState() {
   }
 
   try {
+    if (pgEnabled && pgPool) {
+      try {
+        await ensurePersistentStateTable();
+      } catch {}
+    }
+
+    if (supabaseEnabled && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("workspace_state")
+          .select("value")
+          .eq("key", "auto_notificacao_envio_state")
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data?.value && typeof data.value === "object") {
+          autoNotificacaoEnvioLastRunDateKey = String(data.value.envioLastRunDateKey || "").trim();
+          autoNotificacaoEnvioTransporteLastRunDateKey = String(data.value.transporteLastRunDateKey || "").trim();
+          return;
+        }
+      } catch {}
+    }
+
+    if (pgEnabled && pgPool) {
+      try {
+        const { rows } = await pgPool.query(
+          `select value from public.workspace_state where key = $1 limit 1`,
+          ["auto_notificacao_envio_state"]
+        );
+        const value = Array.isArray(rows) && rows.length > 0 ? rows[0]?.value : null;
+        if (value && typeof value === "object") {
+          autoNotificacaoEnvioLastRunDateKey = String(value.envioLastRunDateKey || "").trim();
+          autoNotificacaoEnvioTransporteLastRunDateKey = String(value.transporteLastRunDateKey || "").trim();
+          return;
+        }
+      } catch {}
+    }
+
     const raw = await readFile(autoNotificacaoEnvioStateFile, "utf8");
     const parsed = JSON.parse(raw || "{}") || {};
 
@@ -499,14 +545,43 @@ async function hydrateAutoNotificacaoEnvioState() {
 }
 
 async function persistAutoNotificacaoEnvioState() {
-  const payload = JSON.stringify({
+  const payload = {
     envioLastRunDateKey: autoNotificacaoEnvioLastRunDateKey,
     transporteLastRunDateKey: autoNotificacaoEnvioTransporteLastRunDateKey,
     updatedAt: new Date().toISOString()
-  }, null, 2);
+  };
+
+  if (pgEnabled && pgPool) {
+    try {
+      await ensurePersistentStateTable();
+    } catch {}
+  }
+
+  if (supabaseEnabled && supabase) {
+    try {
+      const { error } = await supabase
+        .from("workspace_state")
+        .upsert([{ key: "auto_notificacao_envio_state", value: payload }], { onConflict: "key" });
+      if (!error) {
+        return;
+      }
+    } catch {}
+  }
+
+  if (pgEnabled && pgPool) {
+    try {
+      await pgPool.query(
+        `insert into public.workspace_state (key, value, updated_at)
+        values ($1, $2::jsonb, now())
+        on conflict (key) do update set value = excluded.value, updated_at = now()`,
+        ["auto_notificacao_envio_state", JSON.stringify(payload)]
+      );
+      return;
+    } catch {}
+  }
 
   try {
-    await writeFile(autoNotificacaoEnvioStateFile, payload, "utf8");
+    await writeFile(autoNotificacaoEnvioStateFile, JSON.stringify(payload, null, 2), "utf8");
   } catch (error) {
     console.error(
       "[auto-notificacao-envio] failed to persist state",
@@ -573,24 +648,32 @@ function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
     return false;
   }
 
-  // Weekdays: every 15 minutes from 09:00 to 19:00 Lisbon time.
-  if (parts.hour < 9 || parts.hour > 19) {
-    return false;
+  // Match GitHub cron slots exactly (Lisbon):
+  // 14:30, 15:00, 15:30, 16:30, 17:00, 17:30, 18:00, 18:30, 19:00
+  const allowedMinutesByHour = {
+    14: [30],
+    15: [0, 30],
+    16: [30],
+    17: [0, 30],
+    18: [0, 30],
+    19: [0]
+  };
+
+  const graceMinutes = getAutoNotificacaoIncidenciaGraceMinutes();
+  const nowTotalMinutes = (parts.hour * 60) + parts.minute;
+
+  for (const [hourRaw, minutes] of Object.entries(allowedMinutesByHour)) {
+    const hour = Number(hourRaw);
+    for (const minute of minutes) {
+      const targetTotalMinutes = (hour * 60) + minute;
+      const delta = nowTotalMinutes - targetTotalMinutes;
+      if (delta >= 0 && delta <= graceMinutes) {
+        return true;
+      }
+    }
   }
 
-  if (parts.minute % 15 !== 0) {
-    return false;
-  }
-
-  if (parts.hour === 18 && parts.minute > 30) {
-    return false;
-  }
-
-  if (parts.hour === 19 && parts.minute > 0) {
-    return false;
-  }
-
-  return true;
+  return false;
 }
 
 async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
@@ -620,7 +703,6 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
     };
   }
 
-  const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
   const slotKey = `${parts.dateKey} ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
   if (!forceRun && autoNotificacaoIncidenciaLastRunSlotKey === slotKey) {
     return { ok: true, skipped: true, reason: "already_ran_slot", slotKey };
@@ -694,45 +776,6 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
         reason: "bootstrap_initialized",
         fetchedRows: rows.length,
         trackedKeys: autoNotificacaoIncidenciaKnownKeys.size,
-        lisbonClock: {
-          dateKey: parts.dateKey,
-          weekday: parts.weekday,
-          hour: parts.hour,
-          minute: parts.minute
-        }
-      };
-    }
-
-    if (isWeekend) {
-      let queued = 0;
-      for (const entry of currentEntriesByShipmentKey.values()) {
-        if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
-        autoNotificacaoIncidenciaPendingEntries.set(entry.shipmentKey, {
-          to: entry.to,
-          destinatario: entry.destinatario,
-          parcelId: entry.parcelId,
-          sender: entry.sender,
-          incidentReason: String(entry.incidentReason || "").trim()
-        });
-        queued += 1;
-      }
-
-      await persistAutoNotificacaoIncidenciaState();
-      if (freshEntries.length > 0 || queued > 0) {
-        console.log("[auto-notificacao-incidencia-weekend-scan]", {
-          queued,
-          freshEntries: freshEntries.length,
-          pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
-          fetchedRows: rows.length
-        });
-      }
-      return {
-        ok: true,
-        mode: "weekend_scan",
-        queued,
-        freshEntries: freshEntries.length,
-        pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
-        fetchedRows: rows.length,
         lisbonClock: {
           dateKey: parts.dateKey,
           weekday: parts.weekday,
@@ -1119,13 +1162,29 @@ async function maybeRunAutoNotificacaoEnvioTransporteSchedule() {
 }
 
 // Avoid perpetual background timers in serverless environments.
-if (!process.env.VERCEL) {
-  setInterval(processScheduledMessages, 15000);
+const internalSchedulerEnabledRaw = String(process.env.AUTO_NOTIFICACAO_INTERNAL_SCHEDULER_ENABLED || "true").trim().toLowerCase();
+const internalSchedulerEnabled = ["1", "true", "yes", "on"].includes(internalSchedulerEnabledRaw);
+
+if (!process.env.VERCEL && internalSchedulerEnabled) {
+  // Keep the internal scheduler aligned with cron-like minute precision.
   setInterval(() => {
+    void processScheduledMessages();
+  }, 60_000);
+  setInterval(() => {
+    const parts = getLisbonClockParts();
+    const shouldRunAnyAutoNotificacao =
+      shouldRunAutoNotificacaoEnvioAtClock(parts)
+      || shouldRunAutoNotificacaoEnvioTransporteAtClock(parts)
+      || shouldRunAutoNotificacaoIncidenciaAtClock(parts);
+
+    if (!shouldRunAnyAutoNotificacao) {
+      return;
+    }
+
     void maybeRunAutoNotificacaoEnvioSchedule();
     void maybeRunAutoNotificacaoEnvioTransporteSchedule();
     void maybeRunAutoNotificacaoIncidenciaSchedule();
-  }, 30_000);
+  }, 60_000);
 }
 
 const logsResponseCache = {
@@ -5693,9 +5752,11 @@ app.post("/api/botpress/events", async (req, res) => {
 // ── Scheduling endpoints ──────────────────────────────────────────────────
 function isCronAuthorized(req) {
   const secret = String(process.env.CRON_SECRET || "").trim();
-  const isVercelCron = String(req.headers["x-vercel-cron"] || "").trim() === "1";
-  if (isVercelCron) return true;
-  if (!secret) return true;
+  if (!secret) {
+    // In production/serverless, fail closed if CRON_SECRET is missing.
+    // For local development, allow running cron endpoints without a secret.
+    return !process.env.VERCEL;
+  }
 
   const authHeader = String(req.headers.authorization || "").trim();
   if (!authHeader.toLowerCase().startsWith("bearer ")) return false;
