@@ -473,6 +473,63 @@ function getAutoNotificacaoEnvioTransporteGraceMinutes() {
   return Math.max(0, Math.min(30, Math.trunc(raw)));
 }
 
+function getBoundedPositiveInt(value, fallback, min, max) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(raw)));
+}
+
+function getAutoNotificacaoEnvioFetchLimit() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_ENVIO_FETCH_LIMIT, 120, 10, 250);
+}
+
+function getAutoNotificacaoEnvioFetchMaxPages() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_ENVIO_FETCH_MAX_PAGES, 6, 1, 40);
+}
+
+function getAutoNotificacaoEnvioMaxSendsPerRun() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_ENVIO_MAX_SENDS_PER_RUN, 20, 1, 500);
+}
+
+function getAutoNotificacaoEnvioTransporteFetchLimit() {
+  return getBoundedPositiveInt(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_FETCH_LIMIT,
+    getAutoNotificacaoEnvioFetchLimit(),
+    10,
+    250
+  );
+}
+
+function getAutoNotificacaoEnvioTransporteFetchMaxPages() {
+  return getBoundedPositiveInt(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_FETCH_MAX_PAGES,
+    getAutoNotificacaoEnvioFetchMaxPages(),
+    1,
+    40
+  );
+}
+
+function getAutoNotificacaoEnvioTransporteMaxSendsPerRun() {
+  return getBoundedPositiveInt(
+    process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_MAX_SENDS_PER_RUN,
+    getAutoNotificacaoEnvioMaxSendsPerRun(),
+    1,
+    500
+  );
+}
+
+function getAutoNotificacaoIncidenciaFetchLimit() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_INCIDENCIA_FETCH_LIMIT, 120, 10, 250);
+}
+
+function getAutoNotificacaoIncidenciaFetchMaxPages() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_INCIDENCIA_FETCH_MAX_PAGES, 6, 1, 40);
+}
+
+function getAutoNotificacaoIncidenciaMaxSendsPerRun() {
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_INCIDENCIA_MAX_SENDS_PER_RUN, 20, 1, 500);
+}
+
 function getAutoNotificacaoIncidenciaGraceMinutes() {
   const raw = Number(process.env.AUTO_NOTIFICACAO_INCIDENCIA_GRACE_MINUTES || 30);
   if (!Number.isFinite(raw)) {
@@ -715,8 +772,12 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
     await hydrateAutoNotificacaoIncidenciaState();
     const nowIso = new Date().toISOString();
 
+    const fetchLimit = getAutoNotificacaoIncidenciaFetchLimit();
+    const fetchMaxPages = getAutoNotificacaoIncidenciaFetchMaxPages();
+    const maxSendsPerRun = getAutoNotificacaoIncidenciaMaxSendsPerRun();
+
     // Refresh source data each cycle to detect newly appeared incidence rows.
-    const rows = await fetchAllTmsIncidenceShipmentsData({ limit: 250, maxPages: 40 });
+    const rows = await fetchAllTmsIncidenceShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
     const templateName = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_TEMPLATE || "notificacao_auto_incidencia").trim();
     const languageCode = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_LANGUAGE || "pt_PT").trim() || "pt_PT";
 
@@ -808,6 +869,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
 
     for (const entry of queueByShipmentKey.values()) {
       if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
+      if (processed >= maxSendsPerRun) break;
 
       const shipmentKey = entry.shipmentKey;
       processed += 1;
@@ -867,6 +929,9 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
       freshEntries: freshEntries.length,
       pendingTotal: autoNotificacaoIncidenciaPendingEntries.size,
       fetchedRows: rows.length,
+      fetchLimit,
+      fetchMaxPages,
+      maxSendsPerRun,
       templateName,
       languageCode,
       lisbonClock: {
@@ -888,18 +953,33 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
   }
 }
 
-async function runAutoNotificacaoEnvioForInDistribution() {
+async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
   const templateName = String(process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE || "notificacao_de_envio").trim();
   const languageCode = String(process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE || "pt_PT").trim() || "pt_PT";
+  const fetchLimit = Number.isFinite(Number(options?.limit))
+    ? Math.max(10, Math.min(250, Math.trunc(Number(options.limit))))
+    : getAutoNotificacaoEnvioFetchLimit();
+  const fetchMaxPages = Number.isFinite(Number(options?.maxPages))
+    ? Math.max(1, Math.min(40, Math.trunc(Number(options.maxPages))))
+    : getAutoNotificacaoEnvioFetchMaxPages();
+  const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
+    ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
+    : getAutoNotificacaoEnvioMaxSendsPerRun();
 
   // Refresh source data first (equivalent to clicking "Atualizar em distribuicao").
-  const rows = await fetchAllTmsInDistributionShipmentsData({ limit: 250, maxPages: 40 });
+  const rows = await fetchAllTmsInDistributionShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
 
   let processed = 0;
   let sent = 0;
   let failed = 0;
+  let reachedCap = false;
 
   for (const row of rows) {
+    if (processed >= maxSendsPerRun) {
+      reachedCap = true;
+      break;
+    }
+
     const to = normalizeRecipient(String(row?.finalClientPhone || ""));
     if (!to) {
       continue;
@@ -935,13 +1015,17 @@ async function runAutoNotificacaoEnvioForInDistribution() {
     processed,
     sent,
     failed,
+    reachedCap,
+    maxSendsPerRun,
     fetchedRows: rows.length,
+    fetchLimit,
+    fetchMaxPages,
     templateName,
     languageCode
   };
 }
 
-async function runAutoNotificacaoEnvioForInTransport() {
+async function runAutoNotificacaoEnvioForInTransport(options = {}) {
   const templateName = String(
     process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_TEMPLATE ||
     process.env.AUTO_NOTIFICACAO_ENVIO_TEMPLATE ||
@@ -956,16 +1040,31 @@ async function runAutoNotificacaoEnvioForInTransport() {
     process.env.AUTO_NOTIFICACAO_ENVIO_LANGUAGE ||
     "pt_PT"
   ).trim() || "pt_PT";
+  const fetchLimit = Number.isFinite(Number(options?.limit))
+    ? Math.max(10, Math.min(250, Math.trunc(Number(options.limit))))
+    : getAutoNotificacaoEnvioTransporteFetchLimit();
+  const fetchMaxPages = Number.isFinite(Number(options?.maxPages))
+    ? Math.max(1, Math.min(40, Math.trunc(Number(options.maxPages))))
+    : getAutoNotificacaoEnvioTransporteFetchMaxPages();
+  const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
+    ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
+    : getAutoNotificacaoEnvioTransporteMaxSendsPerRun();
 
   // Refresh source data first (equivalent to clicking "Atualizar em transporte").
-  const rows = await fetchAllTmsInTransportShipmentsData({ limit: 250, maxPages: 40 });
+  const rows = await fetchAllTmsInTransportShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
 
   let processed = 0;
   let sent = 0;
   let failed = 0;
   let skippedMaritimoIlhas = 0;
+  let reachedCap = false;
 
   for (const row of rows) {
+    if (processed >= maxSendsPerRun) {
+      reachedCap = true;
+      break;
+    }
+
     const serviceName = String(row?.service || "")
       .normalize("NFD")
       .replace(/\p{Diacritic}/gu, "")
@@ -1033,8 +1132,12 @@ async function runAutoNotificacaoEnvioForInTransport() {
     processed,
     sent,
     failed,
+    reachedCap,
+    maxSendsPerRun,
     skippedMaritimoIlhas,
     fetchedRows: rows.length,
+    fetchLimit,
+    fetchMaxPages,
     templateName,
     fallbackTemplateName,
     languageCode
