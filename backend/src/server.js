@@ -7260,6 +7260,172 @@ async function fetchTmsWebservicesDatatable({ type = "shipping", page = 1, limit
   };
 }
 
+function parseIntegrationHeaders(prefix) {
+  const headers = {};
+
+  const headersJsonRaw = String(process.env[`${prefix}_HEADERS_JSON`] || "").trim();
+  if (headersJsonRaw) {
+    try {
+      const parsed = JSON.parse(headersJsonRaw);
+      if (parsed && typeof parsed === "object") {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (!key) continue;
+          if (value === undefined || value === null) continue;
+          headers[String(key)] = String(value);
+        }
+      }
+    } catch {
+      // Ignore malformed JSON and fallback to explicit env headers.
+    }
+  }
+
+  const apiKey = String(process.env[`${prefix}_API_KEY`] || "").trim();
+  const apiKeyHeader = String(process.env[`${prefix}_API_KEY_HEADER`] || "x-api-key").trim();
+  if (apiKey) {
+    headers[apiKeyHeader] = apiKey;
+  }
+
+  const userId = String(process.env[`${prefix}_USER_ID`] || "").trim();
+  const userIdHeader = String(process.env[`${prefix}_USER_ID_HEADER`] || "x-user-id").trim();
+  if (userId) {
+    headers[userIdHeader] = userId;
+  }
+
+  const bearerToken = String(process.env[`${prefix}_BEARER_TOKEN`] || "").trim();
+  if (bearerToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+
+  return headers;
+}
+
+function resolveIntegrationServiceConfig(service) {
+  const safeService = String(service || "").trim().toLowerCase();
+  if (!safeService) {
+    throw new Error("Service name is required.");
+  }
+
+  const prefix = safeService.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  const baseUrl = String(process.env[`${prefix}_BASE_URL`] || "").trim().replace(/\/$/, "");
+  const endpointPath = String(process.env[`${prefix}_ENDPOINT_PATH`] || "").trim();
+  const timeoutMsRaw = Number(process.env[`${prefix}_TIMEOUT_MS`] || 25000);
+  const timeoutMs = Number.isFinite(timeoutMsRaw)
+    ? Math.max(1000, Math.min(120000, Math.trunc(timeoutMsRaw)))
+    : 25000;
+
+  if (!baseUrl || !endpointPath) {
+    throw new Error(`Missing ${prefix}_BASE_URL or ${prefix}_ENDPOINT_PATH.`);
+  }
+
+  return {
+    service: safeService,
+    prefix,
+    baseUrl,
+    endpointPath,
+    timeoutMs,
+    headers: parseIntegrationHeaders(prefix)
+  };
+}
+
+async function fetchIntegrationServiceData({ service, query = {} }) {
+  const config = resolveIntegrationServiceConfig(service);
+  const queryEntries = Object.entries(query || {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  const queryString = new URLSearchParams(queryEntries.map(([key, value]) => [String(key), String(value)])).toString();
+  const url = `${config.baseUrl}${config.endpointPath}${queryString ? `?${queryString}` : ""}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
+
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        ...config.headers
+      },
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const contentType = String(upstreamRes.headers.get("content-type") || "").toLowerCase();
+  const textBody = await upstreamRes.text();
+
+  let parsedBody = null;
+  if (contentType.includes("application/json")) {
+    try {
+      parsedBody = JSON.parse(textBody);
+    } catch {
+      parsedBody = null;
+    }
+  }
+
+  return {
+    ok: upstreamRes.ok,
+    status: upstreamRes.status,
+    service: config.service,
+    upstream: {
+      baseUrl: config.baseUrl,
+      endpointPath: config.endpointPath,
+      url,
+      contentType
+    },
+    data: parsedBody ?? textBody,
+    preview: textBody.slice(0, 1200)
+  };
+}
+
+app.get("/api/integrations/:service/live", async (req, res) => {
+  try {
+    const service = String(req.params?.service || "").trim();
+    const payload = await fetchIntegrationServiceData({
+      service,
+      query: req.query || {}
+    });
+
+    const statusCode = payload.ok ? 200 : 502;
+    return res.status(statusCode).json({
+      ok: payload.ok,
+      service: payload.service,
+      status: payload.status,
+      upstream: payload.upstream,
+      data: payload.data,
+      preview: payload.preview
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch integration service",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/ctt/live", async (req, res) => {
+  try {
+    const payload = await fetchIntegrationServiceData({
+      service: "ctt",
+      query: req.query || {}
+    });
+
+    const statusCode = payload.ok ? 200 : 502;
+    return res.status(statusCode).json({
+      ok: payload.ok,
+      service: payload.service,
+      status: payload.status,
+      upstream: payload.upstream,
+      data: payload.data,
+      preview: payload.preview
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to fetch CTT live data",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 app.get("/api/tms/webservices/discovery", async (req, res) => {
   try {
     const type = String(req.query?.type || "shipping").trim().toLowerCase();
@@ -7402,6 +7568,125 @@ app.get("/api/tms/em-transporte", async (req, res) => {
   }
 });
 
+function resolveCttDataSource() {
+  const raw = String(process.env.CTT_DATA_SOURCE || "tms").trim().toLowerCase();
+  return raw === "ctt-api" ? "ctt-api" : "tms";
+}
+
+function parseStatusText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function toCttRowFromUnknown(input) {
+  if (!input || typeof input !== "object") return null;
+
+  const parcelId = String(
+    input.parcelId || input.parcel_id || input.shipmentId || input.shipment_id || input.id || ""
+  ).trim();
+  const providerTrackingCode = String(
+    input.providerTrackingCode || input.tracking || input.trackingCode || input.tracking_code || input.code || ""
+  ).trim();
+
+  const status = String(input.status || input.state || input.shipment_status || "").trim();
+  const sender = String(input.sender || input.from || input.sender_name || "").trim();
+  const recipient = String(input.recipient || input.to || input.recipient_name || input.customer || "").trim();
+  const pickupDate = String(input.pickupDate || input.pickup_date || input.created_at || input.date || "").trim();
+  const deliveryDate = String(input.deliveryDate || input.delivery_date || input.delivered_at || "").trim();
+  const incidence = String(input.incidence || input.incidencia || input.occurrence || "").trim();
+  const incidentReason = String(input.incidentReason || input.reason || input.error || "").trim();
+
+  if (!parcelId && !providerTrackingCode) return null;
+
+  return {
+    parcelId: parcelId || providerTrackingCode,
+    providerTrackingCode,
+    service: String(input.service || input.method || "CTT").trim() || "CTT",
+    sender,
+    recipient,
+    finalClientPhone: String(input.finalClientPhone || input.phone || input.mobile || "").trim(),
+    pickupDate,
+    deliveryDate,
+    status,
+    incidence,
+    incidentReason,
+    hasCharge: false,
+    chargeAmount: ""
+  };
+}
+
+function extractCttRowsFromLivePayload(payload) {
+  const candidates = [];
+  if (Array.isArray(payload)) {
+    candidates.push(...payload);
+  } else if (payload && typeof payload === "object") {
+    const knownArrays = [
+      payload.data,
+      payload.shipments,
+      payload.items,
+      payload.results,
+      payload.rows
+    ];
+    for (const maybe of knownArrays) {
+      if (Array.isArray(maybe)) candidates.push(...maybe);
+    }
+  }
+
+  return candidates
+    .map((item) => toCttRowFromUnknown(item))
+    .filter(Boolean);
+}
+
+async function fetchCttRowsFromDirectApi(query = {}) {
+  const live = await fetchIntegrationServiceData({
+    service: "ctt",
+    query
+  });
+
+  if (!live.ok) {
+    throw new Error(`CTT API request failed with status ${live.status}`);
+  }
+
+  const rows = extractCttRowsFromLivePayload(live.data);
+  if (rows.length === 0) {
+    throw new Error("CTT API responded but no shipment rows could be mapped yet.");
+  }
+
+  const deliveredRows = [];
+  const inDistributionRows = [];
+  const inTransportRows = [];
+  const incidenceRows = [];
+
+  for (const row of rows) {
+    const status = parseStatusText(row.status);
+    const hasIncidence = !!String(row.incidence || row.incidentReason || "").trim();
+
+    if (hasIncidence || status.includes("incid") || status.includes("erro")) {
+      incidenceRows.push(row);
+    }
+    if (status.includes("entreg")) {
+      deliveredRows.push(row);
+      continue;
+    }
+    if (status.includes("distribu")) {
+      inDistributionRows.push(row);
+      continue;
+    }
+    if (status.includes("transport") || status.includes("expedi") || status.includes("transit")) {
+      inTransportRows.push(row);
+      continue;
+    }
+    inTransportRows.push(row);
+  }
+
+  return {
+    deliveredRows,
+    inDistributionRows,
+    inTransportRows,
+    incidenceRows,
+    totalRows: rows.length
+  };
+}
+
 app.get("/api/ctt/dashboard", async (req, res) => {
   try {
     const fromRaw = String(req.query?.from || "").trim();
@@ -7411,12 +7696,27 @@ app.get("/api/ctt/dashboard", async (req, res) => {
     const requestedMaxPages = Number(req.query?.maxPages || 4);
     const safeMaxPages = Number.isFinite(requestedMaxPages) ? Math.max(1, Math.min(20, Math.trunc(requestedMaxPages))) : 4;
 
-    const [deliveredRows, inDistributionRows, inTransportRows, incidenceRows] = await Promise.all([
-      fetchAllTmsDeliveredShipmentsData({ limit: 120, maxPages: safeMaxPages }),
-      fetchAllTmsInDistributionShipmentsData({ limit: 120, maxPages: safeMaxPages }),
-      fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
-      fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
-    ]);
+    const source = resolveCttDataSource();
+
+    let deliveredRows;
+    let inDistributionRows;
+    let inTransportRows;
+    let incidenceRows;
+
+    if (source === "ctt-api") {
+      const direct = await fetchCttRowsFromDirectApi(req.query || {});
+      deliveredRows = direct.deliveredRows;
+      inDistributionRows = direct.inDistributionRows;
+      inTransportRows = direct.inTransportRows;
+      incidenceRows = direct.incidenceRows;
+    } else {
+      [deliveredRows, inDistributionRows, inTransportRows, incidenceRows] = await Promise.all([
+        fetchAllTmsDeliveredShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+        fetchAllTmsInDistributionShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+        fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+        fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
+      ]);
+    }
 
     const dashboard = buildCttDashboardDataFromRows({
       deliveredRows,
@@ -7431,6 +7731,7 @@ app.get("/api/ctt/dashboard", async (req, res) => {
       ok: true,
       data: dashboard,
       meta: {
+        source,
         from: fromKey || null,
         to: toKey || null,
         maxPages: safeMaxPages,
@@ -7458,10 +7759,21 @@ app.get("/api/ctt/risk-shipments", async (req, res) => {
     const safeMaxPages = Number.isFinite(requestedMaxPages) ? Math.max(1, Math.min(20, Math.trunc(requestedMaxPages))) : 4;
     const safeMinHours = Number.isFinite(requestedMinHours) ? Math.max(1, Math.min(240, Math.trunc(requestedMinHours))) : 8;
 
-    const [inTransportRows, incidenceRows] = await Promise.all([
-      fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
-      fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
-    ]);
+    const source = resolveCttDataSource();
+
+    let inTransportRows;
+    let incidenceRows;
+
+    if (source === "ctt-api") {
+      const direct = await fetchCttRowsFromDirectApi(req.query || {});
+      inTransportRows = direct.inTransportRows;
+      incidenceRows = direct.incidenceRows;
+    } else {
+      [inTransportRows, incidenceRows] = await Promise.all([
+        fetchAllTmsInTransportShipmentsData({ limit: 120, maxPages: safeMaxPages }),
+        fetchAllTmsIncidenceShipmentsData({ limit: 120, maxPages: safeMaxPages })
+      ]);
+    }
 
     const now = Date.now();
     const byKey = new Map();
@@ -7543,6 +7855,7 @@ app.get("/api/ctt/risk-shipments", async (req, res) => {
       ok: true,
       data: items,
       meta: {
+        source,
         from: fromKey || null,
         to: toKey || null,
         limit: safeLimit,
