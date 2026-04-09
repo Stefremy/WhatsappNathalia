@@ -141,6 +141,27 @@ Required environment variables in Vercel:
 
 - `CRON_SECRET` (must match backend validation)
 
+Optional runtime tuning variables:
+
+- `SCHEDULED_MESSAGES_CONCURRENCY` (default: `5`, range: `1-20`) to control parallel scheduled message sends.
+- `LOGS_FETCH_ALL_MAX_ROWS` (default: `1000`, range: `100-10000`) to cap `/api/logs?limit=all` payload size.
+- `SOFT_WARN_THROTTLE_MS` (default: `60000`) to throttle repeated soft warning logs.
+- `REQUEST_TRACE_SLOW_MS` (default: `1500`) to log slow request traces.
+- `REQUEST_TRACE_LOG_ALL` (default: `false`) to log trace envelopes for all requests.
+- `ADMIN_PERF_SECRET` (optional, falls back to `CRON_SECRET`) to protect `/api/admin/perf`.
+- `ADMIN_PERF_PERSIST_ENABLED` (default: `false`) to persist request perf events in Postgres.
+- `OUTBOUND_JOB_QUEUE_ENABLED` (default: `false`) to use Postgres queue for scheduled template sends.
+- `OUTBOUND_JOB_QUEUE_CLAIM_LIMIT` (default: `20`) jobs claimed per processing run.
+- `OUTBOUND_JOB_QUEUE_MAX_ATTEMPTS` (default: `3`) retry cap for queued jobs.
+
+Observability behavior:
+
+- Every request gets `X-Request-Id` in response headers (or reuses incoming `x-request-id`).
+- Server logs include `requestId` on key fallback/error paths for easier production traceability.
+- `GET /api/admin/perf` returns route latency/failure aggregates and recent trace samples.
+- `GET /api/admin/perf?source=db` reads persisted metrics when `ADMIN_PERF_PERSIST_ENABLED=true`.
+- When `OUTBOUND_JOB_QUEUE_ENABLED=true`, scheduled messages are persisted in Postgres and drained by `/api/messages/process-scheduled` with retries.
+
 Notes:
 
 - Vercel Cron sends requests to your production deployment.

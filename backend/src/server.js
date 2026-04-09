@@ -20,6 +20,59 @@ const jsonBodyLimit = String(process.env.JSON_BODY_LIMIT || "2mb").trim() || "2m
 app.use(cors());
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
+app.use((req, res, next) => {
+  const incomingRequestId = String(req.headers["x-request-id"] || "").trim();
+  const requestId = incomingRequestId || randomBytes(8).toString("hex");
+  const start = Date.now();
+
+  res.locals.requestId = requestId;
+  ensureRequestTelemetry(res);
+  res.setHeader("X-Request-Id", requestId);
+  res.on("finish", () => {
+    const telemetry = ensureRequestTelemetry(res);
+    const durationMs = Date.now() - start;
+    const slowRequestMsRaw = Number(process.env.REQUEST_TRACE_SLOW_MS || 1500);
+    const slowRequestMs = Number.isFinite(slowRequestMsRaw)
+      ? Math.max(100, Math.min(60000, Math.trunc(slowRequestMsRaw)))
+      : 1500;
+    const logAll = ["1", "true", "yes", "on"].includes(String(process.env.REQUEST_TRACE_LOG_ALL || "").trim().toLowerCase());
+    const hasFailedSpan = telemetry.spans.some((span) => span && span.ok === false);
+    const shouldLog = logAll || res.statusCode >= 500 || durationMs >= slowRequestMs || hasFailedSpan;
+
+    if (shouldLog) {
+      const level = res.statusCode >= 500 || hasFailedSpan ? "warn" : "log";
+      console[level]("[request-trace]", {
+        requestId,
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs,
+        backendTags: Array.from(telemetry.backendTags),
+        spans: telemetry.spans.slice(0, 50)
+      });
+    }
+
+    recordRequestPerfStat({
+      requestId,
+      method: req.method,
+      path: req.originalUrl,
+      statusCode: res.statusCode,
+      durationMs,
+      backendTags: Array.from(telemetry.backendTags)
+    });
+
+    void persistRequestPerfEvent({
+      requestId,
+      method: req.method,
+      route: normalizePerfRoute(req.originalUrl),
+      statusCode: res.statusCode,
+      durationMs,
+      backendTags: Array.from(telemetry.backendTags)
+    });
+  });
+
+  next();
+});
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }
@@ -43,11 +96,207 @@ function normalizeNotionBlockId(value) {
 
 // ── Server-Sent Events (delivery status ticks) ─────────────────────────────
 const sseClients = new Set();
+const softWarnTimestamps = new Map();
+const requestPerfStats = new Map();
+const requestTraceSamples = [];
+const MAX_REQUEST_TRACE_SAMPLES = 200;
+let requestPerfEventsTableReady = false;
+
+function ensureRequestTelemetry(res) {
+  if (!res.locals.requestTelemetry) {
+    res.locals.requestTelemetry = {
+      spans: [],
+      backendTags: new Set()
+    };
+  }
+  return res.locals.requestTelemetry;
+}
+
+function addRequestBackendTag(res, backendTag) {
+  const tag = String(backendTag || "").trim();
+  if (!tag) return;
+  const telemetry = ensureRequestTelemetry(res);
+  telemetry.backendTags.add(tag);
+}
+
+function recordRequestSpan(res, name, startMs, meta = {}, error = null) {
+  const telemetry = ensureRequestTelemetry(res);
+  const entry = {
+    name: String(name || "span").trim() || "span",
+    durationMs: Math.max(0, Date.now() - Number(startMs || Date.now())),
+    ok: !error
+  };
+
+  if (meta && typeof meta === "object") {
+    const safeMeta = { ...meta };
+    if (safeMeta.backend) {
+      addRequestBackendTag(res, safeMeta.backend);
+    }
+    entry.meta = safeMeta;
+  }
+
+  if (error) {
+    entry.error = error instanceof Error ? error.message : String(error);
+  }
+
+  telemetry.spans.push(entry);
+}
+
+async function runWithRequestSpan(res, name, meta, fn) {
+  const startMs = Date.now();
+  try {
+    const value = await fn();
+    recordRequestSpan(res, name, startMs, meta, null);
+    return value;
+  } catch (error) {
+    recordRequestSpan(res, name, startMs, meta, error);
+    throw error;
+  }
+}
+
+function normalizePerfRoute(pathname) {
+  const path = String(pathname || "").split("?")[0] || "/";
+  return path
+    .replace(/[0-9a-f]{16,}/gi, ":id")
+    .replace(/\b\d+\b/g, ":n");
+}
+
+function recordRequestPerfStat({ method, path, statusCode, durationMs, backendTags = [], requestId }) {
+  const normalizedMethod = String(method || "GET").toUpperCase();
+  const normalizedRoute = normalizePerfRoute(path);
+  const key = `${normalizedMethod} ${normalizedRoute}`;
+  const prev = requestPerfStats.get(key) || {
+    key,
+    method: normalizedMethod,
+    route: normalizedRoute,
+    count: 0,
+    totalDurationMs: 0,
+    maxDurationMs: 0,
+    status2xx: 0,
+    status4xx: 0,
+    status5xx: 0,
+    errorCount: 0,
+    backendTagUsage: {},
+    lastSeenAt: ""
+  };
+
+  prev.count += 1;
+  prev.totalDurationMs += durationMs;
+  prev.maxDurationMs = Math.max(prev.maxDurationMs, durationMs);
+  if (statusCode >= 500) {
+    prev.status5xx += 1;
+    prev.errorCount += 1;
+  } else if (statusCode >= 400) {
+    prev.status4xx += 1;
+  } else {
+    prev.status2xx += 1;
+  }
+
+  for (const tag of backendTags) {
+    const cleanTag = String(tag || "").trim();
+    if (!cleanTag) continue;
+    prev.backendTagUsage[cleanTag] = Number(prev.backendTagUsage[cleanTag] || 0) + 1;
+  }
+
+  prev.lastSeenAt = new Date().toISOString();
+  requestPerfStats.set(key, prev);
+
+  requestTraceSamples.push({
+    requestId: String(requestId || ""),
+    method: normalizedMethod,
+    route: normalizedRoute,
+    statusCode,
+    durationMs,
+    backendTags,
+    at: prev.lastSeenAt
+  });
+
+  if (requestTraceSamples.length > MAX_REQUEST_TRACE_SAMPLES) {
+    requestTraceSamples.splice(0, requestTraceSamples.length - MAX_REQUEST_TRACE_SAMPLES);
+  }
+}
+
+function isRequestPerfDbEnabled() {
+  const enabled = ["1", "true", "yes", "on"].includes(
+    String(process.env.ADMIN_PERF_PERSIST_ENABLED || "").trim().toLowerCase()
+  );
+  return enabled && pgEnabled && !!pgPool;
+}
+
+async function ensureRequestPerfEventsTable() {
+  if (!isRequestPerfDbEnabled() || requestPerfEventsTableReady) return;
+  await pgPool.query(`
+    create table if not exists public.request_perf_events (
+      id bigserial primary key,
+      request_id text,
+      method text not null,
+      route text not null,
+      status_code integer not null,
+      duration_ms integer not null,
+      backend_tags jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+  `);
+  await pgPool.query(`
+    create index if not exists idx_request_perf_events_created_at
+    on public.request_perf_events (created_at desc);
+  `);
+  await pgPool.query(`
+    create index if not exists idx_request_perf_events_route_created_at
+    on public.request_perf_events (route, created_at desc);
+  `);
+  requestPerfEventsTableReady = true;
+}
+
+async function persistRequestPerfEvent({ requestId, method, route, statusCode, durationMs, backendTags }) {
+  if (!isRequestPerfDbEnabled()) return;
+  try {
+    await ensureRequestPerfEventsTable();
+    await pgPool.query(
+      `insert into public.request_perf_events
+      (request_id, method, route, status_code, duration_ms, backend_tags, created_at)
+      values ($1, $2, $3, $4, $5, $6::jsonb, now())`,
+      [
+        String(requestId || ""),
+        String(method || "GET").toUpperCase(),
+        String(route || "/"),
+        Number(statusCode || 0),
+        Number(durationMs || 0),
+        JSON.stringify(Array.isArray(backendTags) ? backendTags : [])
+      ]
+    );
+  } catch (error) {
+    warnSoftError("admin_perf.persist", error);
+  }
+}
+
+function warnSoftError(key, error, context = {}) {
+  const now = Date.now();
+  const throttleMsRaw = Number(process.env.SOFT_WARN_THROTTLE_MS || 60000);
+  const throttleMs = Number.isFinite(throttleMsRaw)
+    ? Math.max(1000, Math.min(10 * 60 * 1000, Math.trunc(throttleMsRaw)))
+    : 60000;
+  const last = softWarnTimestamps.get(key) || 0;
+  if (now - last < throttleMs) {
+    return;
+  }
+
+  softWarnTimestamps.set(key, now);
+  console.warn("[soft-error]", {
+    key,
+    message: error instanceof Error ? error.message : String(error || "unknown_error"),
+    ...context
+  });
+}
 
 function broadcastSSE(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) {
-    try { client.write(payload); } catch {}
+    try {
+      client.write(payload);
+    } catch (error) {
+      warnSoftError("sse.broadcast.write", error, { event });
+    }
   }
 }
 
@@ -260,7 +509,9 @@ async function hydrateAutoNotificacaoIncidenciaState() {
     if (pgEnabled && pgPool) {
       try {
         await ensurePersistentStateTable();
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_incidencia.hydrate.ensure_table", error);
+      }
     }
 
     if (supabaseEnabled && supabase) {
@@ -276,7 +527,9 @@ async function hydrateAutoNotificacaoIncidenciaState() {
           applyAutoNotificacaoIncidenciaState(data.value);
           return;
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_incidencia.hydrate.supabase", error);
+      }
     }
 
     if (pgEnabled && pgPool) {
@@ -290,13 +543,16 @@ async function hydrateAutoNotificacaoIncidenciaState() {
           applyAutoNotificacaoIncidenciaState(value);
           return;
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_incidencia.hydrate.postgres", error);
+      }
     }
 
     const raw = await readFile(autoNotificacaoIncidenciaStateFile, "utf8");
     const parsed = JSON.parse(raw || "{}") || {};
     applyAutoNotificacaoIncidenciaState(parsed);
-  } catch {
+  } catch (error) {
+    warnSoftError("auto_incidencia.hydrate.file", error);
     // Ignore missing or invalid persisted state; scheduler will bootstrap.
   } finally {
     autoNotificacaoIncidenciaStateHydrated = true;
@@ -309,7 +565,9 @@ async function persistAutoNotificacaoIncidenciaState() {
   if (pgEnabled && pgPool) {
     try {
       await ensurePersistentStateTable();
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_incidencia.persist.ensure_table", error);
+    }
   }
 
   if (supabaseEnabled && supabase) {
@@ -320,7 +578,9 @@ async function persistAutoNotificacaoIncidenciaState() {
       if (!error) {
         return;
       }
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_incidencia.persist.supabase", error);
+    }
   }
 
   if (pgEnabled && pgPool) {
@@ -332,7 +592,9 @@ async function persistAutoNotificacaoIncidenciaState() {
         ["auto_notificacao_incidencia_state", JSON.stringify(payload)]
       );
       return;
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_incidencia.persist.postgres", error);
+    }
   }
 
   try {
@@ -351,16 +613,30 @@ async function processScheduledMessages() {
   let sent = 0;
   let failed = 0;
 
-  for (const item of scheduledMessages) {
-    if (item.status !== "pending") continue;
-    if (new Date(item.scheduledAt).getTime() > now) continue;
+  const concurrencyRaw = Number(process.env.SCHEDULED_MESSAGES_CONCURRENCY || 5);
+  const concurrency = Number.isFinite(concurrencyRaw)
+    ? Math.max(1, Math.min(20, Math.trunc(concurrencyRaw)))
+    : 5;
+
+  const dueItems = scheduledMessages.filter((item) => {
+    if (item.status !== "pending") return false;
+    return new Date(item.scheduledAt).getTime() <= now;
+  });
+
+  async function processItem(item) {
     processed += 1;
     item.status = "sending";
+
     try {
       const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
       const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
       const token = process.env.WHATSAPP_ACCESS_TOKEN || "";
-      if (!phoneNumberId || !token) { item.status = "failed"; continue; }
+      if (!phoneNumberId || !token) {
+        item.status = "failed";
+        failed += 1;
+        return;
+      }
+
       const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
       const components = [];
       if (item.bodyVariables && item.bodyVariables.length > 0) {
@@ -369,13 +645,25 @@ async function processScheduledMessages() {
           parameters: item.bodyVariables.map((text) => ({ type: "text", text }))
         });
       }
-      const templatePayload = { name: item.templateName, language: { code: item.languageCode || "pt_PT" } };
+
+      const templatePayload = {
+        name: item.templateName,
+        language: { code: item.languageCode || "pt_PT" }
+      };
       if (components.length > 0) templatePayload.components = components;
+
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: item.to, type: "template", template: templatePayload })
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: item.to,
+          type: "template",
+          template: templatePayload
+        })
       });
+
       const responseBody = await response.json().catch(() => ({}));
       const messageId = responseBody?.messages?.[0]?.id || "";
       await safeSupabaseLog(() =>
@@ -417,11 +705,22 @@ async function processScheduledMessages() {
       } else {
         failed += 1;
       }
-    } catch {
+    } catch (error) {
       item.status = "failed";
       failed += 1;
+      warnSoftError("scheduler.process_item", error, {
+        id: item.id,
+        to: item.to,
+        templateName: item.templateName
+      });
+    } finally {
+      broadcastSSE("scheduled_sent", { id: item.id, status: item.status });
     }
-    broadcastSSE("scheduled_sent", { id: item.id, status: item.status });
+  }
+
+  for (let i = 0; i < dueItems.length; i += concurrency) {
+    const chunk = dueItems.slice(i, i + concurrency);
+    await Promise.allSettled(chunk.map((item) => processItem(item)));
   }
 
   return { processed, sent, failed };
@@ -555,7 +854,9 @@ async function hydrateAutoNotificacaoEnvioState() {
     if (pgEnabled && pgPool) {
       try {
         await ensurePersistentStateTable();
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_envio.hydrate.ensure_table", error);
+      }
     }
 
     if (supabaseEnabled && supabase) {
@@ -572,7 +873,9 @@ async function hydrateAutoNotificacaoEnvioState() {
           autoNotificacaoEnvioTransporteLastRunDateKey = String(data.value.transporteLastRunDateKey || "").trim();
           return;
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_envio.hydrate.supabase", error);
+      }
     }
 
     if (pgEnabled && pgPool) {
@@ -587,7 +890,9 @@ async function hydrateAutoNotificacaoEnvioState() {
           autoNotificacaoEnvioTransporteLastRunDateKey = String(value.transporteLastRunDateKey || "").trim();
           return;
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("auto_envio.hydrate.postgres", error);
+      }
     }
 
     const raw = await readFile(autoNotificacaoEnvioStateFile, "utf8");
@@ -595,7 +900,8 @@ async function hydrateAutoNotificacaoEnvioState() {
 
     autoNotificacaoEnvioLastRunDateKey = String(parsed.envioLastRunDateKey || "").trim();
     autoNotificacaoEnvioTransporteLastRunDateKey = String(parsed.transporteLastRunDateKey || "").trim();
-  } catch {
+  } catch (error) {
+    warnSoftError("auto_envio.hydrate.file", error);
     // Ignore missing or invalid persisted state; scheduler will bootstrap.
   } finally {
     autoNotificacaoEnvioStateHydrated = true;
@@ -612,7 +918,9 @@ async function persistAutoNotificacaoEnvioState() {
   if (pgEnabled && pgPool) {
     try {
       await ensurePersistentStateTable();
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_envio.persist.ensure_table", error);
+    }
   }
 
   if (supabaseEnabled && supabase) {
@@ -623,7 +931,9 @@ async function persistAutoNotificacaoEnvioState() {
       if (!error) {
         return;
       }
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_envio.persist.supabase", error);
+    }
   }
 
   if (pgEnabled && pgPool) {
@@ -635,7 +945,9 @@ async function persistAutoNotificacaoEnvioState() {
         ["auto_notificacao_envio_state", JSON.stringify(payload)]
       );
       return;
-    } catch {}
+    } catch (error) {
+      warnSoftError("auto_envio.persist.postgres", error);
+    }
   }
 
   try {
@@ -1663,7 +1975,9 @@ async function persistGoogleOauthSession() {
       if (!error) {
         return;
       }
-    } catch {}
+    } catch (error) {
+      warnSoftError("google.oauth.persist.supabase", error);
+    }
   }
 
   if (pgEnabled && pgPool) {
@@ -1701,7 +2015,9 @@ async function hydrateGoogleOauthSession() {
         applyGoogleOauthSession(data.value);
         return;
       }
-    } catch {}
+    } catch (error) {
+      warnSoftError("google.oauth.hydrate.supabase", error);
+    }
   }
 
   if (pgEnabled && pgPool) {
@@ -1715,7 +2031,9 @@ async function hydrateGoogleOauthSession() {
       if (value && typeof value === "object") {
         applyGoogleOauthSession(value);
       }
-    } catch {}
+    } catch (error) {
+      warnSoftError("google.oauth.hydrate.postgres", error);
+    }
   }
 }
 
@@ -1850,9 +2168,11 @@ function sendOauthHtmlResponse(res, {
         if (window.opener && !window.opener.closed) {
           window.opener.postMessage({ type: "google_oauth_done", ok: ${ok ? "true" : "false"} }, "*");
         }
-      } catch {}
+      } catch (error) {
+        console.warn("[oauth-window-message]", error && error.message ? error.message : error);
+      }
       setTimeout(() => {
-        try { window.close(); } catch {}
+        try { window.close(); } catch (error) { console.warn("[oauth-window-close]", error && error.message ? error.message : error); }
       }, 500);
     </script>
   </body>
@@ -4815,7 +5135,13 @@ app.get("/api/events", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
   sseClients.add(res);
-  const keepalive = setInterval(() => { try { res.write(": keepalive\n\n"); } catch {} }, 25000);
+  const keepalive = setInterval(() => {
+    try {
+      res.write(": keepalive\n\n");
+    } catch (error) {
+      warnSoftError("sse.keepalive.write", error, { route: "/api/events" });
+    }
+  }, 25000);
   req.on("close", () => { sseClients.delete(res); clearInterval(keepalive); });
 });
 
@@ -4833,6 +5159,8 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/api/google/oauth/start", (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const clientId = requiredEnv("GOOGLE_OAUTH_CLIENT_ID");
     const redirectUri = requiredEnv("GOOGLE_OAUTH_REDIRECT_URI");
@@ -4864,6 +5192,7 @@ app.get("/api/google/oauth/start", (req, res) => {
 
     return res.json({ ok: true, url: url.toString(), state });
   } catch (error) {
+    warnSoftError("google.oauth.start", error, { route: "/api/google/oauth/start", requestId });
     return res.status(500).json({
       error: "Failed to build Google OAuth URL",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -4872,6 +5201,8 @@ app.get("/api/google/oauth/start", (req, res) => {
 });
 
 app.get("/api/google/oauth/callback", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const htmlResponse = wantsHtmlResponse(req);
     const code = String(req.query.code || "").trim();
@@ -5004,6 +5335,7 @@ app.get("/api/google/oauth/callback", async (req, res) => {
       refresh_token: tokenData?.refresh_token || ""
     });
   } catch (error) {
+    warnSoftError("google.oauth.callback", error, { route: "/api/google/oauth/callback", requestId });
     if (wantsHtmlResponse(req)) {
       return sendOauthHtmlResponse(res, {
         ok: false,
@@ -5020,7 +5352,9 @@ app.get("/api/google/oauth/callback", async (req, res) => {
   }
 });
 
-app.get("/api/google/oauth/status", (_req, res) => {
+app.get("/api/google/oauth/status", (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   return (async () => {
     await hydrateGoogleOauthSession();
     const connected = Boolean(googleOauthSession.accessToken);
@@ -5030,12 +5364,13 @@ app.get("/api/google/oauth/status", (_req, res) => {
       scope: googleOauthSession.scope || "",
       expires_at: googleOauthSession.expiresAt || 0
     });
-  })().catch((error) =>
-    res.status(500).json({
+  })().catch((error) => {
+    warnSoftError("google.oauth.status", error, { route: "/api/google/oauth/status", requestId });
+    return res.status(500).json({
       error: "Google OAuth status failed",
       details: error instanceof Error ? error.message : "Unknown error"
-    })
-  );
+    });
+  });
 });
 
 async function ensureGoogleAccessToken() {
@@ -5117,6 +5452,8 @@ function fixCommonMojibake(value) {
 }
 
 app.post("/api/google/email/send", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = sanitizeMimeHeaderValue(req.body?.to || "");
     const subject = sanitizeMimeHeaderValue(fixCommonMojibake(req.body?.subject || ""));
@@ -5194,6 +5531,7 @@ app.post("/api/google/email/send", async (req, res) => {
 
     return res.json({ ok: true, data: sendData });
   } catch (error) {
+    warnSoftError("google.email.send", error, { route: "/api/google/email/send", requestId });
     return res.status(500).json({
       error: "Google email send failed",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5209,6 +5547,8 @@ function readGmailHeader(headers, headerName) {
 }
 
 app.get("/api/google/email/inbox", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requested = Number(req.query.maxResults || 20);
     const maxResults = Number.isFinite(requested)
@@ -5282,6 +5622,7 @@ app.get("/api/google/email/inbox", async (req, res) => {
 
     return res.json({ ok: true, data: rows });
   } catch (error) {
+    warnSoftError("google.email.inbox", error, { route: "/api/google/email/inbox", requestId });
     return res.status(500).json({
       error: "Google inbox fetch failed",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5290,6 +5631,8 @@ app.get("/api/google/email/inbox", async (req, res) => {
 });
 
 app.get("/api/consumiveis", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!notionConsumiveisEnabled || !notionConsumiveis) {
     return res.status(503).json({
       error: "Consumiveis Notion integration is not configured.",
@@ -5349,6 +5692,7 @@ app.get("/api/consumiveis", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("consumiveis.list", error, { route: "/api/consumiveis", requestId });
     return res.status(500).json({
       error: "Failed to fetch consumiveis from Notion.",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5357,6 +5701,8 @@ app.get("/api/consumiveis", async (req, res) => {
 });
 
 app.get("/api/feedback-tracker", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!notionFeedbackEnabled || !notionFeedback) {
     return res.status(503).json({
       error: "Feedback Tracker Notion integration is not configured.",
@@ -5419,6 +5765,7 @@ app.get("/api/feedback-tracker", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("feedback_tracker.list", error, { route: "/api/feedback-tracker", requestId });
     return res.status(500).json({
       error: "Failed to fetch feedback tracker from Notion.",
       details: notionErrorDetails(error)
@@ -5427,6 +5774,8 @@ app.get("/api/feedback-tracker", async (req, res) => {
 });
 
 app.post("/api/feedback-tracker", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!notionFeedbackEnabled || !notionFeedback) {
     return res.status(503).json({
       error: "Feedback Tracker Notion integration is not configured.",
@@ -5496,6 +5845,7 @@ app.post("/api/feedback-tracker", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("feedback_tracker.create", error, { route: "/api/feedback-tracker", requestId });
     return res.status(500).json({
       error: "Failed to create feedback tracker row in Notion.",
       details: notionErrorDetails(error)
@@ -5504,6 +5854,8 @@ app.post("/api/feedback-tracker", async (req, res) => {
 });
 
 app.post("/api/consumiveis", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!notionConsumiveisEnabled || !notionConsumiveis) {
     return res.status(503).json({
       error: "Consumiveis Notion integration is not configured.",
@@ -5568,6 +5920,7 @@ app.post("/api/consumiveis", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("consumiveis.create", error, { route: "/api/consumiveis", requestId });
     return res.status(500).json({
       error: "Failed to create consumiveis row in Notion.",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5576,6 +5929,8 @@ app.post("/api/consumiveis", async (req, res) => {
 });
 
 app.post("/api/messages/send", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     const text = String(req.body?.text || "").trim();
@@ -5656,6 +6011,7 @@ app.post("/api/messages/send", async (req, res) => {
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
+    warnSoftError("messages.send", error, { route: "/api/messages/send", requestId });
     return res.status(500).json({
       error: "Failed to send message",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5664,6 +6020,8 @@ app.post("/api/messages/send", async (req, res) => {
 });
 
 app.post("/api/messages/status", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!notionEnabled) {
     return res.json({ success: true, skipped: "notion_disabled" });
   }
@@ -5684,6 +6042,7 @@ app.post("/api/messages/status", async (req, res) => {
 
     return res.json({ success: true, pageId });
   } catch (error) {
+    warnSoftError("messages.status", error, { route: "/api/messages/status", requestId });
     return res.status(500).json({
       error: "Failed to update status",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5692,6 +6051,8 @@ app.post("/api/messages/status", async (req, res) => {
 });
 
 app.post("/api/media/upload", upload.single("file"), async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     if (!req.file) {
       return res.status(400).json({ error: "Field 'file' is required as multipart/form-data." });
@@ -5741,6 +6102,7 @@ app.post("/api/media/upload", upload.single("file"), async (req, res) => {
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
+    warnSoftError("media.upload", error, { route: "/api/media/upload", requestId });
     return res.status(500).json({
       error: "Failed to upload media",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -5749,6 +6111,8 @@ app.post("/api/media/upload", upload.single("file"), async (req, res) => {
 });
 
 app.post("/api/templates/send-return-to-sender", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     const customerName = String(req.body?.customerName || "").trim();
@@ -5839,6 +6203,7 @@ app.post("/api/templates/send-return-to-sender", async (req, res) => {
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
+    warnSoftError("templates.send_return_to_sender", error, { route: "/api/templates/send-return-to-sender", requestId });
     return res.status(500).json({
       error: "Failed to send template message",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6041,6 +6406,8 @@ async function sendGenericTemplateMessage({
 }
 
 app.post("/api/templates/send-generic", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   const result = await sendGenericTemplateMessage({
     to: req.body?.to,
     templateName: req.body?.templateName,
@@ -6050,10 +6417,19 @@ app.post("/api/templates/send-generic", async (req, res) => {
     trackerContext: req.body?.trackerContext
   });
 
+  if (result.status >= 500) {
+    warnSoftError("templates.send_generic", result.finalBody?.details || result.finalBody?.error || "unknown_error", {
+      route: "/api/templates/send-generic",
+      requestId
+    });
+  }
+
   return res.status(result.status).json(result.finalBody);
 });
 
 app.post("/api/sms/clicksend", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     const message = String(req.body?.message || "").trim();
@@ -6076,6 +6452,10 @@ app.post("/api/sms/clicksend", async (req, res) => {
     }
 
     if (result.status === "failed_exception") {
+      warnSoftError("sms.clicksend.failed_exception", result.error || "unknown_error", {
+        route: "/api/sms/clicksend",
+        requestId
+      });
       return res.status(500).json({
         error: "Failed to send SMS via ClickSend",
         details: result.error || "Unknown error"
@@ -6092,6 +6472,7 @@ app.post("/api/sms/clicksend", async (req, res) => {
       ...(result._supabaseWarning ? { _supabaseWarning: result._supabaseWarning } : {})
     });
   } catch (error) {
+    warnSoftError("sms.clicksend", error, { route: "/api/sms/clicksend", requestId });
     return res.status(500).json({
       error: "Failed to send SMS via ClickSend",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6100,6 +6481,8 @@ app.post("/api/sms/clicksend", async (req, res) => {
 });
 
 app.post("/api/templates/send-feedback-request", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     const customerName = String(req.body?.customerName || "").trim();
@@ -6193,6 +6576,7 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
 
     return res.status(response.ok ? 200 : response.status).json(finalBody);
   } catch (error) {
+    warnSoftError("templates.send_feedback_request", error, { route: "/api/templates/send-feedback-request", requestId });
     return res.status(500).json({
       error: "Failed to send feedback request template",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6201,6 +6585,8 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
 });
 
 app.get("/api/templates", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
     const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
@@ -6304,6 +6690,7 @@ app.get("/api/templates", async (req, res) => {
       paging: nextUrl ? { next: nextUrl } : undefined
     });
   } catch (error) {
+    warnSoftError("templates.list", error, { route: "/api/templates", requestId });
     return res.status(500).json({
       error: "Failed to fetch templates",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6416,6 +6803,8 @@ app.get("/api/calls/events", (_req, res) => {
 });
 
 app.post("/api/botpress/events", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     if (!isBotpressRequestAuthorized(req)) {
       return res.status(401).json({ error: "Unauthorized Botpress event" });
@@ -6453,6 +6842,7 @@ app.post("/api/botpress/events", async (req, res) => {
 
     return res.json({ ok: true });
   } catch (error) {
+    warnSoftError("botpress.events", error, { route: "/api/botpress/events", requestId });
     return res.status(500).json({
       error: "Failed to ingest Botpress event",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6475,7 +6865,365 @@ function isCronAuthorized(req) {
   return token === secret;
 }
 
+function isAdminPerfAuthorized(req) {
+  const secret = String(process.env.ADMIN_PERF_SECRET || process.env.CRON_SECRET || "").trim();
+  if (!secret) {
+    return !process.env.VERCEL;
+  }
+
+  const authHeader = String(req.headers.authorization || "").trim();
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    const token = authHeader.slice("Bearer ".length).trim();
+    return token === secret;
+  }
+
+  const headerSecret = String(req.headers["x-admin-perf-secret"] || "").trim();
+  return headerSecret === secret;
+}
+
+app.get("/api/admin/perf", (req, res) => {
+  if (!isAdminPerfAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const requestedLimit = Number(req.query?.limit || 20);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(200, Math.trunc(requestedLimit)))
+    : 20;
+
+  const source = String(req.query?.source || "memory").trim().toLowerCase();
+  if (source === "db") {
+    return (async () => {
+      if (!isRequestPerfDbEnabled()) {
+        return res.status(400).json({ error: "DB perf source is not enabled" });
+      }
+
+      await ensureRequestPerfEventsTable();
+      const totalsResult = await pgPool.query(
+        `select
+          count(*)::int as requests_tracked,
+          count(*) filter (where status_code >= 500)::int as errors_tracked,
+          count(distinct (method || ' ' || route))::int as routes_tracked
+        from public.request_perf_events`
+      );
+
+      const rowsResult = await pgPool.query(
+        `select
+          method,
+          route,
+          count(*)::int as count,
+          round(avg(duration_ms)::numeric, 2) as avg_duration_ms,
+          max(duration_ms)::int as max_duration_ms,
+          count(*) filter (where status_code between 200 and 299)::int as status2xx,
+          count(*) filter (where status_code between 400 and 499)::int as status4xx,
+          count(*) filter (where status_code >= 500)::int as status5xx,
+          count(*) filter (where status_code >= 500)::int as error_count,
+          max(created_at) as last_seen_at
+        from public.request_perf_events
+        group by method, route`
+      );
+
+      const recentResult = await pgPool.query(
+        `select request_id, method, route, status_code, duration_ms, backend_tags, created_at
+        from public.request_perf_events
+        order by created_at desc
+        limit $1`,
+        [limit]
+      );
+
+      const rows = (rowsResult.rows || []).map((item) => ({
+        key: `${item.method} ${item.route}`,
+        method: item.method,
+        route: item.route,
+        count: Number(item.count || 0),
+        avgDurationMs: Number(item.avg_duration_ms || 0),
+        maxDurationMs: Number(item.max_duration_ms || 0),
+        status2xx: Number(item.status2xx || 0),
+        status4xx: Number(item.status4xx || 0),
+        status5xx: Number(item.status5xx || 0),
+        errorCount: Number(item.error_count || 0),
+        failureRate: Number(item.count || 0) > 0
+          ? Number((Number(item.error_count || 0) / Number(item.count || 0)).toFixed(4))
+          : 0,
+        lastSeenAt: item.last_seen_at
+      }));
+
+      const topSlowByAvg = [...rows]
+        .sort((a, b) => b.avgDurationMs - a.avgDurationMs)
+        .slice(0, limit);
+      const topSlowByMax = [...rows]
+        .sort((a, b) => b.maxDurationMs - a.maxDurationMs)
+        .slice(0, limit);
+      const topFailing = [...rows]
+        .sort((a, b) => b.errorCount - a.errorCount || b.failureRate - a.failureRate)
+        .slice(0, limit);
+
+      return res.json({
+        ok: true,
+        source: "db",
+        data: {
+          totals: {
+            routesTracked: Number(totalsResult.rows?.[0]?.routes_tracked || 0),
+            traceSamples: Number(recentResult.rows?.length || 0),
+            requestsTracked: Number(totalsResult.rows?.[0]?.requests_tracked || 0),
+            errorsTracked: Number(totalsResult.rows?.[0]?.errors_tracked || 0)
+          },
+          topSlowByAvg,
+          topSlowByMax,
+          topFailing,
+          recentTraces: (recentResult.rows || []).map((item) => ({
+            requestId: item.request_id,
+            method: item.method,
+            route: item.route,
+            statusCode: Number(item.status_code || 0),
+            durationMs: Number(item.duration_ms || 0),
+            backendTags: Array.isArray(item.backend_tags) ? item.backend_tags : [],
+            at: item.created_at
+          }))
+        },
+        meta: {
+          generatedAt: new Date().toISOString(),
+          limit
+        }
+      });
+    })().catch((error) => {
+      return res.status(500).json({
+        error: "Failed to load admin performance dashboard",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    });
+  }
+
+  const rows = Array.from(requestPerfStats.values()).map((item) => {
+    const avgDurationMs = item.count > 0 ? item.totalDurationMs / item.count : 0;
+    return {
+      ...item,
+      avgDurationMs: Number(avgDurationMs.toFixed(2)),
+      failureRate: item.count > 0 ? Number((item.errorCount / item.count).toFixed(4)) : 0
+    };
+  });
+
+  const topSlowByAvg = [...rows]
+    .sort((a, b) => b.avgDurationMs - a.avgDurationMs)
+    .slice(0, limit);
+  const topSlowByMax = [...rows]
+    .sort((a, b) => b.maxDurationMs - a.maxDurationMs)
+    .slice(0, limit);
+  const topFailing = [...rows]
+    .sort((a, b) => b.errorCount - a.errorCount || b.failureRate - a.failureRate)
+    .slice(0, limit);
+
+  return res.json({
+    ok: true,
+    source: "memory",
+    data: {
+      totals: {
+        routesTracked: rows.length,
+        traceSamples: requestTraceSamples.length,
+        requestsTracked: rows.reduce((sum, row) => sum + row.count, 0),
+        errorsTracked: rows.reduce((sum, row) => sum + row.errorCount, 0)
+      },
+      topSlowByAvg,
+      topSlowByMax,
+      topFailing,
+      recentTraces: requestTraceSamples.slice(Math.max(0, requestTraceSamples.length - limit))
+    },
+    meta: {
+      generatedAt: new Date().toISOString(),
+      limit
+    }
+  });
+});
+
+function isOutboundJobQueueEnabled() {
+  const enabled = ["1", "true", "yes", "on"].includes(
+    String(process.env.OUTBOUND_JOB_QUEUE_ENABLED || "").trim().toLowerCase()
+  );
+  return enabled && pgEnabled && !!pgPool;
+}
+
+async function ensureOutboundMessageJobsTable() {
+  if (!pgEnabled || !pgPool) return;
+  await pgPool.query(`
+    create table if not exists public.outbound_message_jobs (
+      id bigserial primary key,
+      to_number text not null,
+      template_name text not null,
+      language_code text not null default 'pt_PT',
+      body_variables jsonb not null default '[]'::jsonb,
+      scheduled_at timestamptz not null,
+      status text not null default 'pending',
+      attempts integer not null default 0,
+      max_attempts integer not null default 3,
+      worker_id text,
+      locked_at timestamptz,
+      last_error text,
+      last_response jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+  `);
+  await pgPool.query(`
+    create index if not exists idx_outbound_jobs_pending_schedule
+    on public.outbound_message_jobs (status, scheduled_at);
+  `);
+}
+
+async function enqueueOutboundMessageJob({ to, templateName, languageCode, bodyVariables, scheduledAt, maxAttempts = 3 }) {
+  await ensureOutboundMessageJobsTable();
+  const cleanBodyVariables = Array.isArray(bodyVariables)
+    ? bodyVariables.map((v) => String(v ?? "").trim()).filter(Boolean)
+    : [];
+  const safeMaxAttempts = Number.isFinite(Number(maxAttempts))
+    ? Math.max(1, Math.min(10, Math.trunc(Number(maxAttempts))))
+    : 3;
+
+  const { rows } = await pgPool.query(
+    `insert into public.outbound_message_jobs
+    (to_number, template_name, language_code, body_variables, scheduled_at, max_attempts, status, created_at, updated_at)
+    values ($1, $2, $3, $4::jsonb, $5::timestamptz, $6, 'pending', now(), now())
+    returning id, to_number, template_name, language_code, body_variables, scheduled_at, status, attempts, max_attempts, created_at, updated_at`,
+    [to, templateName, languageCode || "pt_PT", JSON.stringify(cleanBodyVariables), scheduledAt, safeMaxAttempts]
+  );
+
+  return rows[0] || null;
+}
+
+async function claimOutboundMessageJobs(limit, workerId) {
+  await ensureOutboundMessageJobsTable();
+  const safeLimit = Number.isFinite(Number(limit))
+    ? Math.max(1, Math.min(200, Math.trunc(Number(limit))))
+    : 20;
+
+  const { rows } = await pgPool.query(
+    `with claimed as (
+      select id
+      from public.outbound_message_jobs
+      where status = 'pending'
+        and scheduled_at <= now()
+        and attempts < max_attempts
+      order by scheduled_at asc, id asc
+      limit $1
+      for update skip locked
+    )
+    update public.outbound_message_jobs as j
+    set status = 'processing',
+        attempts = j.attempts + 1,
+        worker_id = $2,
+        locked_at = now(),
+        updated_at = now()
+    from claimed
+    where j.id = claimed.id
+    returning j.id, j.to_number, j.template_name, j.language_code, j.body_variables, j.scheduled_at, j.status, j.attempts, j.max_attempts`,
+    [safeLimit, workerId]
+  );
+
+  return rows || [];
+}
+
+async function updateOutboundMessageJobResult(job, result) {
+  const isSuccess = Boolean(result?.ok);
+  const attempts = Number(job?.attempts || 0);
+  const maxAttempts = Number(job?.max_attempts || 3);
+  const hasRetriesLeft = attempts < maxAttempts;
+  const nextStatus = isSuccess ? "sent" : (hasRetriesLeft ? "pending" : "failed");
+  const lastError = isSuccess
+    ? null
+    : String(result?.finalBody?.details || result?.finalBody?.error || "unknown_error").slice(0, 500);
+
+  await pgPool.query(
+    `update public.outbound_message_jobs
+    set status = $2,
+        last_error = $3,
+        last_response = $4::jsonb,
+        locked_at = null,
+        worker_id = null,
+        updated_at = now()
+    where id = $1`,
+    [
+      job.id,
+      nextStatus,
+      lastError,
+      JSON.stringify(result?.finalBody && typeof result.finalBody === "object" ? result.finalBody : { value: result?.finalBody ?? null })
+    ]
+  );
+
+  return { nextStatus, hasRetriesLeft };
+}
+
+async function getOutboundMessageJobsPendingCount() {
+  await ensureOutboundMessageJobsTable();
+  const { rows } = await pgPool.query(
+    `select count(*)::int as count
+    from public.outbound_message_jobs
+    where status = 'pending'`
+  );
+  return Number(rows?.[0]?.count || 0);
+}
+
+async function listOutboundMessageJobs(limit = 200) {
+  await ensureOutboundMessageJobsTable();
+  const safeLimit = Number.isFinite(Number(limit))
+    ? Math.max(1, Math.min(500, Math.trunc(Number(limit))))
+    : 200;
+  const { rows } = await pgPool.query(
+    `select id, to_number, template_name, language_code, body_variables, scheduled_at, status, attempts, max_attempts, last_error, created_at, updated_at
+    from public.outbound_message_jobs
+    order by scheduled_at asc, id asc
+    limit $1`,
+    [safeLimit]
+  );
+  return rows || [];
+}
+
+async function processOutboundMessageQueue() {
+  const claimLimitRaw = Number(process.env.OUTBOUND_JOB_QUEUE_CLAIM_LIMIT || 20);
+  const claimLimit = Number.isFinite(claimLimitRaw)
+    ? Math.max(1, Math.min(200, Math.trunc(claimLimitRaw)))
+    : 20;
+  const concurrencyRaw = Number(process.env.SCHEDULED_MESSAGES_CONCURRENCY || 5);
+  const concurrency = Number.isFinite(concurrencyRaw)
+    ? Math.max(1, Math.min(20, Math.trunc(concurrencyRaw)))
+    : 5;
+  const workerId = `worker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const claimed = await claimOutboundMessageJobs(claimLimit, workerId);
+
+  let processed = 0;
+  let sent = 0;
+  let failed = 0;
+  let requeued = 0;
+
+  for (let i = 0; i < claimed.length; i += concurrency) {
+    const chunk = claimed.slice(i, i + concurrency);
+    await Promise.allSettled(
+      chunk.map(async (job) => {
+        processed += 1;
+        const result = await sendGenericTemplateMessage({
+          to: job.to_number,
+          templateName: job.template_name,
+          languageCode: job.language_code || "pt_PT",
+          bodyVariables: Array.isArray(job.body_variables) ? job.body_variables : []
+        });
+
+        const update = await updateOutboundMessageJobResult(job, result);
+        if (result.ok) {
+          sent += 1;
+        } else {
+          failed += 1;
+          if (update.nextStatus === "pending") {
+            requeued += 1;
+          }
+        }
+      })
+    );
+  }
+
+  return { processed, sent, failed, requeued };
+}
+
 app.post("/api/messages/schedule", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     const templateName = String(req.body?.templateName || "").trim();
@@ -6493,33 +7241,89 @@ app.post("/api/messages/schedule", async (req, res) => {
       return res.status(400).json({ error: "Invalid scheduledAt value." });
     }
 
+    if (isOutboundJobQueueEnabled()) {
+      const maxAttemptsRaw = Number(req.body?.maxAttempts || process.env.OUTBOUND_JOB_QUEUE_MAX_ATTEMPTS || 3);
+      const job = await enqueueOutboundMessageJob({
+        to,
+        templateName,
+        languageCode,
+        bodyVariables,
+        scheduledAt,
+        maxAttempts: maxAttemptsRaw
+      });
+
+      return res.json({
+        id: `job-${job?.id}`,
+        queueId: job?.id,
+        to: job?.to_number,
+        templateName: job?.template_name,
+        languageCode: job?.language_code,
+        bodyVariables: Array.isArray(job?.body_variables) ? job.body_variables : [],
+        scheduledAt: job?.scheduled_at,
+        status: job?.status,
+        attempts: job?.attempts,
+        maxAttempts: job?.max_attempts,
+        createdAt: job?.created_at,
+        queue: "postgres"
+      });
+    }
+
     const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const item = { id, to, templateName, languageCode, bodyVariables, scheduledAt, status: "pending", createdAt: new Date().toISOString() };
     scheduledMessages.push(item);
     return res.json(item);
   } catch (error) {
+    warnSoftError("messages.schedule", error, { route: "/api/messages/schedule", requestId });
     return res.status(500).json({ error: "Failed to schedule message", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 
-app.get("/api/messages/scheduled", (_req, res) => {
-  return res.json({ data: scheduledMessages });
+app.get("/api/messages/scheduled", async (_req, res) => {
+  try {
+    if (isOutboundJobQueueEnabled()) {
+      const data = await listOutboundMessageJobs(200);
+      return res.json({ data, queue: "postgres" });
+    }
+
+    return res.json({ data: scheduledMessages, queue: "memory" });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to list scheduled messages",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 });
 
 app.post("/api/messages/process-scheduled", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
 
   try {
+    if (isOutboundJobQueueEnabled()) {
+      const stats = await processOutboundMessageQueue();
+      const pending = await getOutboundMessageJobsPendingCount();
+      return res.json({
+        ok: true,
+        queue: "postgres",
+        ...stats,
+        pending,
+        at: new Date().toISOString()
+      });
+    }
+
     const stats = await processScheduledMessages();
     return res.json({
       ok: true,
+      queue: "memory",
       ...stats,
       pending: scheduledMessages.filter((item) => item.status === "pending").length,
       at: new Date().toISOString()
     });
   } catch (error) {
+    warnSoftError("cron.process_scheduled", error, { route: "/api/messages/process-scheduled", requestId });
     return res.status(500).json({
       error: "Failed to process scheduled messages",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6528,6 +7332,8 @@ app.post("/api/messages/process-scheduled", async (req, res) => {
 });
 
 app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
@@ -6573,6 +7379,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
     await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
+    warnSoftError("cron.auto_notificacao_envio", error, { route: "/api/cron/auto-notificacao-envio", requestId });
     return res.status(500).json({
       error: "Failed to run auto notificacao envio cron",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6583,6 +7390,8 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
 });
 
 app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
@@ -6628,6 +7437,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
     await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
   } catch (error) {
+    warnSoftError("cron.auto_notificacao_envio_transporte", error, { route: "/api/cron/auto-notificacao-envio-em-transporte", requestId });
     return res.status(500).json({
       error: "Failed to run auto notificacao envio em transporte cron",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6638,6 +7448,8 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
 });
 
 app.get("/api/cron/auto-notificacao-incidencia", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
@@ -6647,6 +7459,11 @@ app.get("/api/cron/auto-notificacao-incidencia", async (req, res) => {
 
   const result = await maybeRunAutoNotificacaoIncidenciaSchedule({ forceRun });
   if (!result || result.ok === false) {
+    warnSoftError("cron.auto_notificacao_incidencia", result?.details || result?.error || "unknown_cron_failure", {
+      route: "/api/cron/auto-notificacao-incidencia",
+      requestId,
+      forceRun
+    });
     return res.status(500).json({
       error: result?.error || "Failed to run auto notificacao incidencia cron",
       details: result?.details || "Unknown error"
@@ -6661,6 +7478,8 @@ app.get("/api/cron/auto-notificacao-incidencia", async (req, res) => {
 });
 
 app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   if (!isCronAuthorized(req)) {
     return res.status(401).json({ error: "Unauthorized cron trigger" });
   }
@@ -6699,6 +7518,7 @@ app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
       at: new Date().toISOString()
     });
   } catch (error) {
+    warnSoftError("cron.auto_notificacao_envio_dry_run", error, { route: "/api/cron/auto-notificacao-envio/dry-run", requestId });
     return res.status(500).json({
       error: "Failed to run auto notificacao envio dry-run",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6708,6 +7528,8 @@ app.get("/api/cron/auto-notificacao-envio/dry-run", async (req, res) => {
 
 // ── Send media message (upload + send in one call) ─────────────────────────
 app.post("/api/messages/send-media", upload.single("file"), async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const to = normalizeRecipient(req.body?.to || "");
     if (!req.file || !to) {
@@ -6735,7 +7557,13 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
     }
     const uploadBody = await uploadRes.json();
     const mediaId = String(uploadBody?.id || "").trim();
-    if (!mediaId) return res.status(500).json({ error: "Media upload returned no ID" });
+    if (!mediaId) {
+      warnSoftError("messages.send_media.upload_no_id", "media_upload_returned_no_id", {
+        route: "/api/messages/send-media",
+        requestId
+      });
+      return res.status(500).json({ error: "Media upload returned no ID" });
+    }
 
     // Step 2 – determine media type
     const mime = req.file.mimetype || "";
@@ -6775,11 +7603,14 @@ app.post("/api/messages/send-media", upload.single("file"), async (req, res) => 
     }
     return res.status(sendRes.ok ? 200 : sendRes.status).json(sendBody);
   } catch (error) {
+    warnSoftError("messages.send_media", error, { route: "/api/messages/send-media", requestId });
     return res.status(500).json({ error: "Failed to send media", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 
 app.get("/api/media/:mediaId", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const mediaId = String(req.params?.mediaId || "").trim();
     if (!mediaId) {
@@ -6791,6 +7622,7 @@ app.get("/api/media/:mediaId", async (req, res) => {
     res.setHeader("Cache-Control", "private, max-age=300");
     return res.send(mediaBinary.buffer);
   } catch (error) {
+    warnSoftError("media.proxy", error, { route: "/api/media/:mediaId", requestId });
     return res.status(500).json({
       error: "Failed to proxy media",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6799,6 +7631,8 @@ app.get("/api/media/:mediaId", async (req, res) => {
 });
 
 app.post("/api/media/access-url", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     if (!blobReadWriteToken) {
       return res.status(400).json({ error: "BLOB_READ_WRITE_TOKEN is not configured" });
@@ -6857,6 +7691,7 @@ app.post("/api/media/access-url", async (req, res) => {
       ttlSeconds
     });
   } catch (error) {
+    warnSoftError("media.access_url", error, { route: "/api/media/access-url", requestId });
     return res.status(500).json({
       error: "Failed to create media access URL",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6865,6 +7700,8 @@ app.post("/api/media/access-url", async (req, res) => {
 });
 
 app.get("/api/media/access/:token", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     if (!blobReadWriteToken) {
       return res.status(400).json({ error: "BLOB_READ_WRITE_TOKEN is not configured" });
@@ -6908,6 +7745,7 @@ app.get("/api/media/access/:token", async (req, res) => {
 
     return res.send(Buffer.from(arrayBuffer));
   } catch (error) {
+    warnSoftError("media.access_token", error, { route: "/api/media/access/:token", requestId });
     return res.status(500).json({
       error: "Failed to fetch blob media",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -6916,13 +7754,21 @@ app.get("/api/media/access/:token", async (req, res) => {
 });
 
 app.get("/api/logs", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  recordRequestSpan(res, "route.start", Date.now(), { route: "/api/logs" });
+
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    addRequestBackendTag(res, "fallback");
     return res.json({ data: [], warning: "supabase_not_configured" });
   }
 
   try {
     const rawLimit = String(req.query?.limit || "100").trim().toLowerCase();
     const fetchAll = rawLimit === "all" || rawLimit === "unlimited";
+    const maxFetchAllRowsRaw = Number(process.env.LOGS_FETCH_ALL_MAX_ROWS || 1000);
+    const maxFetchAllRows = Number.isFinite(maxFetchAllRowsRaw)
+      ? Math.max(100, Math.min(10000, Math.trunc(maxFetchAllRowsRaw)))
+      : 1000;
     const requestedLimit = Number(rawLimit);
     const limit = fetchAll
       ? null
@@ -6948,14 +7794,20 @@ app.get("/api/logs", async (req, res) => {
     }
 
     if (supabaseEnabled && supabase) {
+      addRequestBackendTag(res, "supabase");
       let rows = [];
 
       if (fetchAll) {
         // Use a conservative page size so this works even when Supabase API max rows is configured to 100.
         const batchSize = 100;
         let offset = 0;
-
+        const fetchAllStart = Date.now();
         while (true) {
+          if (rows.length >= maxFetchAllRows) {
+            rows = rows.slice(0, maxFetchAllRows);
+            break;
+          }
+
           const { data, error } = await supabase
             .from("whatsapp_logs")
             .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
@@ -6964,6 +7816,8 @@ app.get("/api/logs", async (req, res) => {
             .range(offset, offset + batchSize - 1);
 
           if (error) {
+            recordRequestSpan(res, "logs.supabase.fetch_all", fetchAllStart, { backend: "supabase", fetchAll: true }, error);
+            warnSoftError("logs.fetch.supabase_all", error, { route: "/api/logs", requestId, fetchAll: true });
             return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
           }
 
@@ -6979,15 +7833,19 @@ app.get("/api/logs", async (req, res) => {
             break;
           }
         }
+        recordRequestSpan(res, "logs.supabase.fetch_all", fetchAllStart, { backend: "supabase", fetchAll: true });
       } else {
-        const { data, error } = await supabase
-          .from("whatsapp_logs")
-          .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
-          .neq("channel", STATE_FALLBACK_CHANNEL)
-          .order("created_at", { ascending: false })
-          .limit(limit);
+        const { data, error } = await runWithRequestSpan(res, "logs.supabase.fetch_limited", { backend: "supabase", fetchAll: false }, () =>
+          supabase
+            .from("whatsapp_logs")
+            .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
+            .neq("channel", STATE_FALLBACK_CHANNEL)
+            .order("created_at", { ascending: false })
+            .limit(limit)
+        );
 
         if (error) {
+          warnSoftError("logs.fetch.supabase_limited", error, { route: "/api/logs", requestId, fetchAll: false });
           return res.status(500).json({ error: "Failed to fetch logs", details: error.message });
         }
 
@@ -7010,21 +7868,27 @@ app.get("/api/logs", async (req, res) => {
       return res.json(payload);
     }
 
+    addRequestBackendTag(res, "pg");
     const pgResult = fetchAll
-      ? await pgPool.query(
-        `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
-        from public.whatsapp_logs
-        where channel is distinct from $1
-        order by created_at desc`,
-        [STATE_FALLBACK_CHANNEL]
+      ? await runWithRequestSpan(res, "logs.pg.fetch_all", { backend: "pg", fetchAll: true }, () =>
+        pgPool.query(
+          `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
+          from public.whatsapp_logs
+          where channel is distinct from $1
+          order by created_at desc
+          limit $2`,
+          [STATE_FALLBACK_CHANNEL, maxFetchAllRows]
+        )
       )
-      : await pgPool.query(
-        `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
-        from public.whatsapp_logs
-        where channel is distinct from $2
-        order by created_at desc
-        limit $1`,
-        [limit, STATE_FALLBACK_CHANNEL]
+      : await runWithRequestSpan(res, "logs.pg.fetch_limited", { backend: "pg", fetchAll: false }, () =>
+        pgPool.query(
+          `select id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
+          from public.whatsapp_logs
+          where channel is distinct from $2
+          order by created_at desc
+          limit $1`,
+          [limit, STATE_FALLBACK_CHANNEL]
+        )
       );
 
     const payload = { data: pgResult.rows || [] };
@@ -7042,6 +7906,7 @@ app.get("/api/logs", async (req, res) => {
     res.setHeader("ETag", etag);
     return res.json(payload);
   } catch (error) {
+    warnSoftError("logs.fetch.unhandled", error, { route: "/api/logs", requestId });
     return res.status(500).json({
       error: "Failed to fetch logs",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7049,11 +7914,14 @@ app.get("/api/logs", async (req, res) => {
   }
 });
 
-app.get("/api/tms/dashboard", async (_req, res) => {
+app.get("/api/tms/dashboard", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const data = await fetchTmsDashboardData();
     return res.json({ ok: true, data });
   } catch (error) {
+    warnSoftError("tms.dashboard", error, { route: "/api/tms/dashboard", requestId });
     return res.status(500).json({
       error: "Failed to fetch TMS dashboard data",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7378,6 +8246,8 @@ async function fetchIntegrationServiceData({ service, query = {} }) {
 }
 
 app.get("/api/integrations/:service/live", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const service = String(req.params?.service || "").trim();
     const payload = await fetchIntegrationServiceData({
@@ -7395,6 +8265,11 @@ app.get("/api/integrations/:service/live", async (req, res) => {
       preview: payload.preview
     });
   } catch (error) {
+    warnSoftError("integrations.live", error, {
+      route: "/api/integrations/:service/live",
+      requestId,
+      service: String(req.params?.service || "").trim()
+    });
     return res.status(500).json({
       error: "Failed to fetch integration service",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7403,6 +8278,8 @@ app.get("/api/integrations/:service/live", async (req, res) => {
 });
 
 app.get("/api/ctt/live", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const payload = await fetchIntegrationServiceData({
       service: "ctt",
@@ -7419,6 +8296,7 @@ app.get("/api/ctt/live", async (req, res) => {
       preview: payload.preview
     });
   } catch (error) {
+    warnSoftError("ctt.live", error, { route: "/api/ctt/live", requestId });
     return res.status(500).json({
       error: "Failed to fetch CTT live data",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7427,6 +8305,8 @@ app.get("/api/ctt/live", async (req, res) => {
 });
 
 app.get("/api/tms/webservices/discovery", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const type = String(req.query?.type || "shipping").trim().toLowerCase();
     const page = Number(req.query?.page || 1);
@@ -7451,6 +8331,7 @@ app.get("/api/tms/webservices/discovery", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("tms.webservices_discovery", error, { route: "/api/tms/webservices/discovery", requestId });
     return res.status(500).json({
       error: "Failed to discover TMS webservices endpoints",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7459,6 +8340,8 @@ app.get("/api/tms/webservices/discovery", async (req, res) => {
 });
 
 app.get("/api/customers", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const page = Number(req.query?.page || 1);
     const limit = Number(req.query?.limit || 100);
@@ -7466,6 +8349,7 @@ app.get("/api/customers", async (req, res) => {
     const data = await fetchTmsCustomersData({ page, limit, search });
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.customers", error, { route: "/api/customers", requestId });
     return res.status(500).json({
       error: "Failed to fetch customers",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7474,6 +8358,8 @@ app.get("/api/customers", async (req, res) => {
 });
 
 app.get("/api/tms/delivered", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requestedPage = Number(req.query?.page || 1);
     const requestedLimit = Number(req.query?.limit || 250);
@@ -7485,6 +8371,7 @@ app.get("/api/tms/delivered", async (req, res) => {
 
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.delivered", error, { route: "/api/tms/delivered", requestId });
     return res.status(500).json({
       error: "Failed to fetch delivered TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7493,6 +8380,8 @@ app.get("/api/tms/delivered", async (req, res) => {
 });
 
 app.get("/api/tms/in-distribution", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requestedPage = Number(req.query?.page || 1);
     const requestedLimit = Number(req.query?.limit || 250);
@@ -7504,6 +8393,7 @@ app.get("/api/tms/in-distribution", async (req, res) => {
 
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.in_distribution", error, { route: "/api/tms/in-distribution", requestId });
     return res.status(500).json({
       error: "Failed to fetch in-distribution TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7512,6 +8402,8 @@ app.get("/api/tms/in-distribution", async (req, res) => {
 });
 
 app.get("/api/tms/incidencias", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requestedPage = Number(req.query?.page || 1);
     const requestedLimit = Number(req.query?.limit || 250);
@@ -7523,6 +8415,7 @@ app.get("/api/tms/incidencias", async (req, res) => {
 
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.incidencias", error, { route: "/api/tms/incidencias", requestId });
     return res.status(500).json({
       error: "Failed to fetch incidence TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7531,6 +8424,8 @@ app.get("/api/tms/incidencias", async (req, res) => {
 });
 
 app.get("/api/tms/in-transport", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requestedPage = Number(req.query?.page || 1);
     const requestedLimit = Number(req.query?.limit || 250);
@@ -7542,6 +8437,7 @@ app.get("/api/tms/in-transport", async (req, res) => {
 
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.in_transport", error, { route: "/api/tms/in-transport", requestId });
     return res.status(500).json({
       error: "Failed to fetch in-transport TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7550,6 +8446,8 @@ app.get("/api/tms/in-transport", async (req, res) => {
 });
 
 app.get("/api/tms/em-transporte", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const requestedPage = Number(req.query?.page || 1);
     const requestedLimit = Number(req.query?.limit || 250);
@@ -7561,6 +8459,7 @@ app.get("/api/tms/em-transporte", async (req, res) => {
 
     return res.json({ ok: true, data: data.rows, meta: data.meta });
   } catch (error) {
+    warnSoftError("tms.em_transporte", error, { route: "/api/tms/em-transporte", requestId });
     return res.status(500).json({
       error: "Failed to fetch in-transport TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7688,6 +8587,8 @@ async function fetchCttRowsFromDirectApi(query = {}) {
 }
 
 app.get("/api/ctt/dashboard", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const fromRaw = String(req.query?.from || "").trim();
     const toRaw = String(req.query?.to || "").trim();
@@ -7739,6 +8640,7 @@ app.get("/api/ctt/dashboard", async (req, res) => {
       }
     });
   } catch (error) {
+    warnSoftError("ctt.dashboard", error, { route: "/api/ctt/dashboard", requestId });
     return res.status(500).json({
       error: "Failed to fetch CTT dashboard",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -7902,20 +8804,26 @@ app.post("/api/auth/login", async (req, res) => {
   });
 });
 
-app.get("/api/state", async (_req, res) => {
+app.get("/api/state", async (req, res) => {
   const defaults = defaultWorkspaceState();
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  recordRequestSpan(res, "route.start", Date.now(), { route: "/api/state" });
 
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    addRequestBackendTag(res, "fallback");
     return res.json({ data: defaults, warning: "persistent_state_not_configured" });
   }
 
   try {
     if (supabaseEnabled && supabase) {
+      addRequestBackendTag(res, "supabase");
       try {
-        const { data, error } = await supabase
-          .from("workspace_state")
-          .select("key,value")
-          .in("key", PERSISTENCE_KEYS);
+        const { data, error } = await runWithRequestSpan(res, "state.supabase.fetch_keys", { backend: "supabase" }, () =>
+          supabase
+            .from("workspace_state")
+            .select("key,value")
+            .in("key", PERSISTENCE_KEYS)
+        );
 
         if (!error) {
           const next = { ...defaults };
@@ -7926,29 +8834,42 @@ app.get("/api/state", async (_req, res) => {
           }
 
           try {
-            const contacts = await loadContactsFromDedicatedTable();
+            const contacts = await runWithRequestSpan(res, "state.contacts.fetch_after_supabase", { backend: "supabase" }, () =>
+              loadContactsFromDedicatedTable()
+            );
             if (Object.keys(contacts).length > 0) {
               next.contacts = contacts;
             }
-          } catch {}
+          } catch (error) {
+            warnSoftError("state.get.contacts_supabase", error, { route: "/api/state", requestId });
+          }
 
           return res.json({ data: next });
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("state.get.supabase", error, { route: "/api/state", requestId });
+      }
 
       try {
+        addRequestBackendTag(res, "fallback");
         const snapshot = await getWorkspaceStateFromLogsFallback();
         if (snapshot) {
+          recordRequestSpan(res, "state.logs_fallback.fetch", Date.now(), { backend: "fallback", source: "whatsapp_logs" });
           return res.json({ data: snapshot, warning: "workspace_state_table_unavailable_using_log_fallback" });
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("state.get.logs_fallback", error, { route: "/api/state", requestId });
+      }
     }
 
     if (pgEnabled && pgPool) {
-      await ensurePersistentStateTable();
-      const { rows } = await pgPool.query(
-        `select key, value from public.workspace_state where key = any($1::text[])`,
-        [PERSISTENCE_KEYS]
+      addRequestBackendTag(res, "pg");
+      await runWithRequestSpan(res, "state.pg.ensure_table", { backend: "pg" }, () => ensurePersistentStateTable());
+      const { rows } = await runWithRequestSpan(res, "state.pg.fetch_keys", { backend: "pg" }, () =>
+        pgPool.query(
+          `select key, value from public.workspace_state where key = any($1::text[])`,
+          [PERSISTENCE_KEYS]
+        )
       );
       const next = { ...defaults };
       for (const row of rows || []) {
@@ -7958,11 +8879,15 @@ app.get("/api/state", async (_req, res) => {
       }
 
       try {
-        const contacts = await loadContactsFromDedicatedTable();
+        const contacts = await runWithRequestSpan(res, "state.contacts.fetch_after_pg", { backend: "pg" }, () =>
+          loadContactsFromDedicatedTable()
+        );
         if (Object.keys(contacts).length > 0) {
           next.contacts = contacts;
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("state.get.contacts_postgres", error, { route: "/api/state", requestId });
+      }
 
       return res.json({ data: next });
     }
@@ -7977,7 +8902,11 @@ app.get("/api/state", async (_req, res) => {
 });
 
 app.post("/api/state", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  recordRequestSpan(res, "route.start", Date.now(), { route: "/api/state", method: "POST" });
+
   if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    addRequestBackendTag(res, "fallback");
     return res.status(400).json({ error: "persistent_state_not_configured" });
   }
 
@@ -7993,55 +8922,87 @@ app.post("/api/state", async (req, res) => {
 
   try {
     if (supabaseEnabled && supabase) {
+      addRequestBackendTag(res, "supabase");
       try {
         const payload = updates.map((item) => ({ key: item.key, value: item.value ?? null }));
-        const { error } = await supabase
-          .from("workspace_state")
-          .upsert(payload, { onConflict: "key" });
+        const { error } = await runWithRequestSpan(res, "state.supabase.upsert", { backend: "supabase" }, () =>
+          supabase
+            .from("workspace_state")
+            .upsert(payload, { onConflict: "key" })
+        );
 
         if (!error) {
           if (contactsUpdate) {
             try {
-              await syncContactsToDedicatedTable(contactsUpdate.value);
-            } catch {}
+              await runWithRequestSpan(res, "state.contacts.sync_after_supabase", { backend: "supabase" }, () =>
+                syncContactsToDedicatedTable(contactsUpdate.value)
+              );
+            } catch (error) {
+              warnSoftError("state.post.contacts_supabase", error, { route: "/api/state", requestId });
+            }
           }
           return res.json({ ok: true, updated: updates.length, via: "supabase" });
         }
-      } catch {}
+      } catch (error) {
+        warnSoftError("state.post.supabase", error, { route: "/api/state", requestId });
+      }
 
       try {
+        addRequestBackendTag(res, "fallback");
         const existing = (await getWorkspaceStateFromLogsFallback()) || defaultWorkspaceState();
         const next = { ...existing };
         for (const item of updates) {
           next[item.key] = item.value ?? null;
         }
-        await writeWorkspaceStateToLogsFallback(next);
+        await runWithRequestSpan(res, "state.logs_fallback.write", { backend: "fallback" }, () =>
+          writeWorkspaceStateToLogsFallback(next)
+        );
 
         if (contactsUpdate) {
           try {
-            await syncContactsToDedicatedTable(contactsUpdate.value);
-          } catch {}
+            await runWithRequestSpan(res, "state.contacts.sync_after_logs_fallback", { backend: "fallback" }, () =>
+              syncContactsToDedicatedTable(contactsUpdate.value)
+            );
+          } catch (error) {
+            warnSoftError("state.post.contacts_logs_fallback", error, { route: "/api/state", requestId });
+          }
         }
 
         return res.json({ ok: true, updated: updates.length, via: "supabase_logs_fallback", warning: "workspace_state_table_unavailable_using_log_fallback" });
-      } catch {}
+      } catch (error) {
+        warnSoftError("state.post.logs_fallback", error, { route: "/api/state", requestId });
+      }
     }
 
     if (pgEnabled && pgPool) {
-      await ensurePersistentStateTable();
-      for (const item of updates) {
-        await pgPool.query(
-          `insert into public.workspace_state (key, value, updated_at)
-          values ($1, $2::jsonb, now())
-          on conflict (key) do update set value = excluded.value, updated_at = now()`,
-          [item.key, JSON.stringify(item.value ?? null)]
-        );
+      addRequestBackendTag(res, "pg");
+      await runWithRequestSpan(res, "state.pg.ensure_table", { backend: "pg" }, () => ensurePersistentStateTable());
+      const placeholders = [];
+      const values = [];
+      for (let index = 0; index < updates.length; index += 1) {
+        const keyParam = index * 2 + 1;
+        const valueParam = index * 2 + 2;
+        placeholders.push(`($${keyParam}, $${valueParam}::jsonb, now())`);
+        values.push(updates[index].key, JSON.stringify(updates[index].value ?? null));
       }
+
+      await runWithRequestSpan(res, "state.pg.bulk_upsert", { backend: "pg" }, () =>
+        pgPool.query(
+          `insert into public.workspace_state (key, value, updated_at)
+          values ${placeholders.join(", ")}
+          on conflict (key) do update set value = excluded.value, updated_at = now()`,
+          values
+        )
+      );
 
       if (contactsUpdate) {
         try {
-          await syncContactsToDedicatedTable(contactsUpdate.value);
-        } catch {}
+          await runWithRequestSpan(res, "state.contacts.sync_after_pg", { backend: "pg" }, () =>
+            syncContactsToDedicatedTable(contactsUpdate.value)
+          );
+        } catch (error) {
+          warnSoftError("state.post.contacts_postgres", error, { route: "/api/state", requestId });
+        }
       }
 
       return res.json({ ok: true, updated: updates.length, via: "postgres" });
@@ -8095,11 +9056,13 @@ app.get("/api/radio/proxy", (req, res) => {
 
   const proxyReq = transport.request(options, (proxyRes) => {
     const status = proxyRes.statusCode || 0;
-    // Follow simple redirects
+    // Redirect handling disabled: return an explicit error instead of recursive proxying.
     if ((status === 301 || status === 302 || status === 307 || status === 308) && proxyRes.headers.location) {
       proxyReq.destroy();
-      req.query.url = proxyRes.headers.location;
-      return app._router.handle(req, res, () => {});
+      return res.status(502).json({
+        error: "Upstream redirect not supported",
+        location: String(proxyRes.headers.location || "")
+      });
     }
     if (status < 200 || status >= 400) {
       if (!res.headersSent) res.status(502).json({ error: `Upstream returned ${status}` });
@@ -8128,6 +9091,8 @@ app.get("/api/radio/proxy", (req, res) => {
 // ── WhatsApp Calling API routes ────────────────────────────────────────────
 
 app.get("/api/calls/permissions", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const userWaId = String(req.query.user_wa_id || "").trim();
     if (!userWaId) {
@@ -8146,11 +9111,14 @@ app.get("/api/calls/permissions", async (req, res) => {
     const data = await apiRes.json();
     return res.status(apiRes.status).json(data);
   } catch (error) {
+    warnSoftError("calls.permissions", error, { route: "/api/calls/permissions", requestId });
     return res.status(500).json({ error: "Failed to check call permissions", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 
 app.post("/api/calls/request-permission", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const userWaId = String(req.body?.user_wa_id || "").trim();
     if (!userWaId) {
@@ -8180,11 +9148,14 @@ app.post("/api/calls/request-permission", async (req, res) => {
     const data = await apiRes.json();
     return res.status(apiRes.status).json(data);
   } catch (error) {
+    warnSoftError("calls.request_permission", error, { route: "/api/calls/request-permission", requestId });
     return res.status(500).json({ error: "Failed to request call permission", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 
 app.post("/api/calls/manage", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
   try {
     const { action, to, call_id, session, biz_opaque_callback_data } = req.body || {};
     if (!action) {
@@ -8234,6 +9205,7 @@ app.post("/api/calls/manage", async (req, res) => {
     const data = await apiRes.json();
     return res.status(apiRes.status).json(data);
   } catch (error) {
+    warnSoftError("calls.manage", error, { route: "/api/calls/manage", requestId });
     return res.status(500).json({ error: "Failed to manage call", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
