@@ -123,27 +123,25 @@ npm run build
 npm run preview
 ```
 
-## Cron via GitHub Actions (recommended for Vercel Hobby)
+## Cron on Vercel (Pro)
 
-This project can trigger backend cron endpoints from GitHub Actions, avoiding Vercel Hobby cron limits.
+This project is configured to run scheduled backend endpoints using Vercel Cron.
 
-Workflow file:
+Configuration file:
 
-- `.github/workflows/cron-endpoints.yml`
+- `vercel.json` (field: `crons`)
 
-Required GitHub repository secrets:
+Cron endpoints triggered:
 
-- `CRON_BASE_URL` (example: `https://your-app.vercel.app`)
-- `CRON_SECRET` (must match `CRON_SECRET` in backend environment)
+- GET /api/cron/auto-notificacao-envio
+- GET /api/cron/auto-notificacao-envio-em-transporte
+- GET /api/cron/auto-notificacao-incidencia
 
-Behavior:
+Required environment variables in Vercel:
 
-- Runs every 30 minutes on weekdays (UTC).
-- Calls POST /api/messages/process-scheduled.
-- Calls GET /api/cron/auto-notificacao-envio.
-- The backend itself enforces Lisbon-time checks for `AUTO_NOTIFICACAO_ENVIO` (09:30 on weekdays by env), so calling every 30 minutes is safe.
+- `CRON_SECRET` (must match backend validation)
 
-Important for serverless:
+Notes:
 
-- Automatic timers are disabled on Vercel serverless by design.
-- Scheduled/automatic sends only run when cron endpoints are triggered (GitHub Actions or Vercel Cron).
+- Vercel Cron sends requests to your production deployment.
+- Keep the GitHub workflow `.github/workflows/cron-endpoints.yml` only for manual fallback (`workflow_dispatch`) to avoid duplicate scheduled triggers.
