@@ -79,10 +79,6 @@
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 17 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
       "schedule": "0,30 18 * * 1-5"
     },
     {
