@@ -308,6 +308,10 @@ let autoNotificacaoEnvioRunning = false;
 let autoNotificacaoEnvioLastRunDateKey = "";
 let autoNotificacaoEnvioTransporteRunning = false;
 let autoNotificacaoEnvioTransporteLastRunDateKey = "";
+let autoNotificacaoEnvioSentDateKey = "";
+let autoNotificacaoEnvioTransporteSentDateKey = "";
+const autoNotificacaoEnvioSentKeys = new Set();
+const autoNotificacaoEnvioTransporteSentKeys = new Set();
 let autoNotificacaoEnvioStateHydrated = false;
 let autoNotificacaoIncidenciaRunning = false;
 let autoNotificacaoIncidenciaLastRunSlotKey = "";
@@ -346,6 +350,20 @@ function buildIncidenciaShipmentKey(row) {
     return "";
   }
   return `${parcelId}|${tracking}`;
+}
+
+function buildEnvioShipmentKey(row, normalizedTo, messageType) {
+  const parcelId = String(row?.parcelId || "").trim();
+  const tracking = String(row?.providerTrackingCode || "").trim();
+  const recipient = String(normalizedTo || "").trim();
+  const type = String(messageType || "").trim().toLowerCase();
+  const identity = parcelId || tracking;
+
+  if (!identity || !recipient || !type) {
+    return "";
+  }
+
+  return `${type}|${identity}|${recipient}`;
 }
 
 function normalizeIsoDateOrEmpty(value) {
@@ -779,6 +797,23 @@ function getBoundedPositiveInt(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(raw)));
 }
 
+function parseOptionalBoundedPositiveInt(value, min, max) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return undefined;
+  return Math.max(min, Math.min(max, Math.trunc(raw)));
+}
+
+function parseBooleanLike(value, defaultValue = false) {
+  if (typeof value === "undefined" || value === null || value === "") {
+    return defaultValue;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
 function getAutoNotificacaoEnvioFetchLimit() {
   return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_ENVIO_FETCH_LIMIT, 120, 10, 250);
 }
@@ -871,6 +906,20 @@ async function hydrateAutoNotificacaoEnvioState() {
         if (!error && data?.value && typeof data.value === "object") {
           autoNotificacaoEnvioLastRunDateKey = String(data.value.envioLastRunDateKey || "").trim();
           autoNotificacaoEnvioTransporteLastRunDateKey = String(data.value.transporteLastRunDateKey || "").trim();
+          autoNotificacaoEnvioSentDateKey = String(data.value.envioSentDateKey || "").trim();
+          autoNotificacaoEnvioTransporteSentDateKey = String(data.value.transporteSentDateKey || "").trim();
+
+          autoNotificacaoEnvioSentKeys.clear();
+          for (const key of Array.isArray(data.value.envioSentKeys) ? data.value.envioSentKeys : []) {
+            const clean = String(key || "").trim();
+            if (clean) autoNotificacaoEnvioSentKeys.add(clean);
+          }
+
+          autoNotificacaoEnvioTransporteSentKeys.clear();
+          for (const key of Array.isArray(data.value.transporteSentKeys) ? data.value.transporteSentKeys : []) {
+            const clean = String(key || "").trim();
+            if (clean) autoNotificacaoEnvioTransporteSentKeys.add(clean);
+          }
           return;
         }
       } catch (error) {
@@ -888,6 +937,20 @@ async function hydrateAutoNotificacaoEnvioState() {
         if (value && typeof value === "object") {
           autoNotificacaoEnvioLastRunDateKey = String(value.envioLastRunDateKey || "").trim();
           autoNotificacaoEnvioTransporteLastRunDateKey = String(value.transporteLastRunDateKey || "").trim();
+          autoNotificacaoEnvioSentDateKey = String(value.envioSentDateKey || "").trim();
+          autoNotificacaoEnvioTransporteSentDateKey = String(value.transporteSentDateKey || "").trim();
+
+          autoNotificacaoEnvioSentKeys.clear();
+          for (const key of Array.isArray(value.envioSentKeys) ? value.envioSentKeys : []) {
+            const clean = String(key || "").trim();
+            if (clean) autoNotificacaoEnvioSentKeys.add(clean);
+          }
+
+          autoNotificacaoEnvioTransporteSentKeys.clear();
+          for (const key of Array.isArray(value.transporteSentKeys) ? value.transporteSentKeys : []) {
+            const clean = String(key || "").trim();
+            if (clean) autoNotificacaoEnvioTransporteSentKeys.add(clean);
+          }
           return;
         }
       } catch (error) {
@@ -900,6 +963,20 @@ async function hydrateAutoNotificacaoEnvioState() {
 
     autoNotificacaoEnvioLastRunDateKey = String(parsed.envioLastRunDateKey || "").trim();
     autoNotificacaoEnvioTransporteLastRunDateKey = String(parsed.transporteLastRunDateKey || "").trim();
+    autoNotificacaoEnvioSentDateKey = String(parsed.envioSentDateKey || "").trim();
+    autoNotificacaoEnvioTransporteSentDateKey = String(parsed.transporteSentDateKey || "").trim();
+
+    autoNotificacaoEnvioSentKeys.clear();
+    for (const key of Array.isArray(parsed.envioSentKeys) ? parsed.envioSentKeys : []) {
+      const clean = String(key || "").trim();
+      if (clean) autoNotificacaoEnvioSentKeys.add(clean);
+    }
+
+    autoNotificacaoEnvioTransporteSentKeys.clear();
+    for (const key of Array.isArray(parsed.transporteSentKeys) ? parsed.transporteSentKeys : []) {
+      const clean = String(key || "").trim();
+      if (clean) autoNotificacaoEnvioTransporteSentKeys.add(clean);
+    }
   } catch (error) {
     warnSoftError("auto_envio.hydrate.file", error);
     // Ignore missing or invalid persisted state; scheduler will bootstrap.
@@ -912,6 +989,10 @@ async function persistAutoNotificacaoEnvioState() {
   const payload = {
     envioLastRunDateKey: autoNotificacaoEnvioLastRunDateKey,
     transporteLastRunDateKey: autoNotificacaoEnvioTransporteLastRunDateKey,
+    envioSentDateKey: autoNotificacaoEnvioSentDateKey,
+    transporteSentDateKey: autoNotificacaoEnvioTransporteSentDateKey,
+    envioSentKeys: Array.from(autoNotificacaoEnvioSentKeys),
+    transporteSentKeys: Array.from(autoNotificacaoEnvioTransporteSentKeys),
     updatedAt: new Date().toISOString()
   };
 
@@ -1295,6 +1376,12 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
   const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
     ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
     : getAutoNotificacaoEnvioMaxSendsPerRun();
+  const runDateKey = String(options?.runDateKey || getLisbonClockParts().dateKey || "").trim();
+
+  if (runDateKey && autoNotificacaoEnvioSentDateKey !== runDateKey) {
+    autoNotificacaoEnvioSentDateKey = runDateKey;
+    autoNotificacaoEnvioSentKeys.clear();
+  }
 
   // Refresh source data first (equivalent to clicking "Atualizar em distribuicao").
   const rows = await fetchAllTmsInDistributionShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
@@ -1302,6 +1389,7 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
   let processed = 0;
   let sent = 0;
   let failed = 0;
+  let skippedAlreadySent = 0;
   let reachedCap = false;
 
   for (const row of rows) {
@@ -1312,6 +1400,12 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
 
     const to = normalizeRecipient(String(row?.finalClientPhone || ""));
     if (!to) {
+      continue;
+    }
+
+    const shipmentKey = buildEnvioShipmentKey(row, to, "em_distribuicao");
+    if (shipmentKey && autoNotificacaoEnvioSentKeys.has(shipmentKey)) {
+      skippedAlreadySent += 1;
       continue;
     }
 
@@ -1336,6 +1430,9 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
 
     if (result.ok) {
       sent += 1;
+      if (shipmentKey) {
+        autoNotificacaoEnvioSentKeys.add(shipmentKey);
+      }
     } else {
       failed += 1;
     }
@@ -1345,6 +1442,7 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
     processed,
     sent,
     failed,
+    skippedAlreadySent,
     reachedCap,
     maxSendsPerRun,
     fetchedRows: rows.length,
@@ -1379,6 +1477,16 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
   const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
     ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
     : getAutoNotificacaoEnvioTransporteMaxSendsPerRun();
+  const runDateKey = String(options?.runDateKey || getLisbonClockParts().dateKey || "").trim();
+  const includeIlhas = parseBooleanLike(
+    options?.includeIlhas,
+    parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_INCLUDE_ILHAS, false)
+  );
+
+  if (runDateKey && autoNotificacaoEnvioTransporteSentDateKey !== runDateKey) {
+    autoNotificacaoEnvioTransporteSentDateKey = runDateKey;
+    autoNotificacaoEnvioTransporteSentKeys.clear();
+  }
 
   // Refresh source data first (equivalent to clicking "Atualizar em transporte").
   const rows = await fetchAllTmsInTransportShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
@@ -1386,6 +1494,7 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
   let processed = 0;
   let sent = 0;
   let failed = 0;
+  let skippedAlreadySent = 0;
   let skippedMaritimoIlhas = 0;
   let reachedCap = false;
 
@@ -1407,13 +1516,19 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
       compactServiceName.includes("cttaereoilhas") ||
       (serviceName.includes("aereo") && serviceName.includes("ilhas"));
 
-    if (isMaritimoIlhasService || isAereoIlhasService) {
+    if (!includeIlhas && (isMaritimoIlhasService || isAereoIlhasService)) {
       skippedMaritimoIlhas += 1;
       continue;
     }
 
     const to = normalizeRecipient(String(row?.finalClientPhone || ""));
     if (!to) {
+      continue;
+    }
+
+    const shipmentKey = buildEnvioShipmentKey(row, to, "em_transporte");
+    if (shipmentKey && autoNotificacaoEnvioTransporteSentKeys.has(shipmentKey)) {
+      skippedAlreadySent += 1;
       continue;
     }
 
@@ -1453,6 +1568,9 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
 
     if (result.ok) {
       sent += 1;
+      if (shipmentKey) {
+        autoNotificacaoEnvioTransporteSentKeys.add(shipmentKey);
+      }
     } else {
       failed += 1;
     }
@@ -1462,8 +1580,10 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
     processed,
     sent,
     failed,
+    skippedAlreadySent,
     reachedCap,
     maxSendsPerRun,
+    includeIlhas,
     skippedMaritimoIlhas,
     fetchedRows: rows.length,
     fetchLimit,
@@ -1552,7 +1672,7 @@ async function maybeRunAutoNotificacaoEnvioSchedule() {
 
   autoNotificacaoEnvioRunning = true;
   try {
-    const summary = await runAutoNotificacaoEnvioForInDistribution();
+    const summary = await runAutoNotificacaoEnvioForInDistribution({ runDateKey: parts.dateKey });
     autoNotificacaoEnvioLastRunDateKey = parts.dateKey;
     await persistAutoNotificacaoEnvioState();
     console.log("[auto-notificacao-envio]", summary);
@@ -1583,7 +1703,7 @@ async function maybeRunAutoNotificacaoEnvioTransporteSchedule() {
 
   autoNotificacaoEnvioTransporteRunning = true;
   try {
-    const summary = await runAutoNotificacaoEnvioForInTransport();
+    const summary = await runAutoNotificacaoEnvioForInTransport({ runDateKey: parts.dateKey });
     autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
     await persistAutoNotificacaoEnvioState();
     console.log("[auto-notificacao-envio-em-transporte]", summary);
@@ -7340,6 +7460,12 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
 
   const forceRaw = String(req.query?.force || "").trim().toLowerCase();
   const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+  const runOptions = {
+    limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
+    maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
+    maxSendsPerRun: parseOptionalBoundedPositiveInt(req.query?.maxSendsPerRun, 1, 500),
+    runDateKey: parts.dateKey
+  };
 
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
@@ -7374,7 +7500,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
 
   try {
     autoNotificacaoEnvioRunning = true;
-    const summary = await runAutoNotificacaoEnvioForInDistribution();
+    const summary = await runAutoNotificacaoEnvioForInDistribution(runOptions);
     autoNotificacaoEnvioLastRunDateKey = parts.dateKey;
     await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });
@@ -7398,6 +7524,13 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
 
   const forceRaw = String(req.query?.force || "").trim().toLowerCase();
   const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+  const runOptions = {
+    limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
+    maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
+    maxSendsPerRun: parseOptionalBoundedPositiveInt(req.query?.maxSendsPerRun, 1, 500),
+    includeIlhas: parseBooleanLike(req.query?.includeIlhas, false),
+    runDateKey: parts.dateKey
+  };
 
   const enabledRaw = String(process.env.AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_ENABLED || "true").trim().toLowerCase();
   const enabled = !["0", "false", "no", "off"].includes(enabledRaw);
@@ -7432,7 +7565,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
 
   try {
     autoNotificacaoEnvioTransporteRunning = true;
-    const summary = await runAutoNotificacaoEnvioForInTransport();
+    const summary = await runAutoNotificacaoEnvioForInTransport(runOptions);
     autoNotificacaoEnvioTransporteLastRunDateKey = parts.dateKey;
     await persistAutoNotificacaoEnvioState();
     return res.json({ ok: true, triggeredBy: forceRun ? "manual_force" : "cron", ...summary, at: new Date().toISOString() });

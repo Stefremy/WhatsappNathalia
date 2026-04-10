@@ -137,6 +137,24 @@ Cron endpoints triggered:
 - GET /api/cron/auto-notificacao-envio-em-transporte
 - GET /api/cron/auto-notificacao-incidencia
 
+Manual trigger query params (for full backfills):
+
+- `force=1` bypasses schedule window and the `already_ran_today` guard.
+- `limit` (10-250) controls rows per source API page.
+- `maxPages` (1-40) controls total source pages fetched.
+- `maxSendsPerRun` (1-500) controls max sends in the run.
+- `includeIlhas=1` (only `auto-notificacao-envio-em-transporte`) includes CTT Maritimo/Aereo Ilhas rows.
+
+Batch safety behavior:
+
+- `em distribuicao` and `em transporte` now keep per-day sent keys (parcel/tracking + recipient) to avoid duplicate sends across multiple runs on the same day.
+- This means you can run batch 1 and batch 2 (15 minutes later) without re-sending the same parcel to the same phone in that day.
+
+Examples:
+
+- `/api/cron/auto-notificacao-envio?force=1&maxSendsPerRun=500&maxPages=40&limit=250`
+- `/api/cron/auto-notificacao-envio-em-transporte?force=1&maxSendsPerRun=500&maxPages=40&limit=250&includeIlhas=1`
+
 Required environment variables in Vercel:
 
 - `CRON_SECRET` (must match backend validation)
