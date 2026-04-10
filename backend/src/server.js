@@ -6965,6 +6965,65 @@ app.post("/api/botpress/events", async (req, res) => {
   }
 });
 
+app.get("/api/health", (_req, res) => {
+  return res.status(200).json({
+    ok: true,
+    service: "whatsappnathalia-api",
+    environment: process.env.VERCEL ? "vercel" : "self-hosted",
+    now: new Date().toISOString(),
+    uptimeSec: Math.max(0, Math.trunc(process.uptime()))
+  });
+});
+
+app.get("/api/health/ready", async (req, res) => {
+  const deep = parseBooleanLike(req.query?.deep, false);
+  const checks = [];
+
+  const requiredEnv = [
+    "WHATSAPP_PHONE_NUMBER_ID",
+    "WHATSAPP_ACCESS_TOKEN",
+    "CRON_SECRET"
+  ];
+
+  for (const key of requiredEnv) {
+    const configured = String(process.env[key] || "").trim().length > 0;
+    checks.push({
+      name: `env.${key}`,
+      ok: configured,
+      required: true,
+      detail: configured ? "configured" : "missing"
+    });
+  }
+
+  if (deep) {
+    checks.push({
+      name: "dep.supabase_config",
+      ok: supabaseEnabled,
+      required: false,
+      detail: supabaseEnabled ? "enabled" : "disabled_or_missing_config"
+    });
+
+    checks.push({
+      name: "dep.postgres_config",
+      ok: pgEnabled,
+      required: false,
+      detail: pgEnabled ? "enabled" : "disabled_or_missing_config"
+    });
+  }
+
+  const requiredFailures = checks.filter((item) => item.required && !item.ok);
+  const ready = requiredFailures.length === 0;
+
+  return res.status(ready ? 200 : 503).json({
+    ok: ready,
+    ready,
+    deep,
+    checkedAt: new Date().toISOString(),
+    checks,
+    requiredFailures: requiredFailures.map((item) => item.name)
+  });
+});
+
 // ── Scheduling endpoints ──────────────────────────────────────────────────
 function isCronAuthorized(req) {
   const secret = String(process.env.CRON_SECRET || "").trim();

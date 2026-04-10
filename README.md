@@ -69,6 +69,8 @@ npm --prefix backend run dev
 - `POST /api/templates/send-feedback-request` -> sends feedback request template with 2 variables
 - `GET /api/templates` -> fetches templates; supports `phoneNumberId` (lookup WABA) or direct `wabaId`, returning all pages by default (`fetchAll=true`)
 - `GET /webhook` and `POST /webhook` -> WhatsApp webhook verify + status updates + inbound message logging
+- `GET /api/health` -> lightweight liveness check for uptime monitoring
+- `GET /api/health/ready` -> readiness check (returns `503` when required core env is missing); use `?deep=1` for optional dependency-config checks
 
 ### Conversation history tracking (Notion)
 
