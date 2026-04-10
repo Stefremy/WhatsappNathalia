@@ -862,7 +862,7 @@ function getAutoNotificacaoIncidenciaFetchMaxPages() {
 }
 
 function getAutoNotificacaoIncidenciaMaxSendsPerRun() {
-  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_INCIDENCIA_MAX_SENDS_PER_RUN, 20, 1, 500);
+  return getBoundedPositiveInt(process.env.AUTO_NOTIFICACAO_INCIDENCIA_MAX_SENDS_PER_RUN, 50, 1, 500);
 }
 
 function getAutoNotificacaoIncidenciaGraceMinutes() {
