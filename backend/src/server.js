@@ -809,7 +809,7 @@ function parseBooleanLike(value, defaultValue = false) {
   }
 
   const normalized = String(value).trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["1", "true", "yes", "sim", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return defaultValue;
 }
@@ -4018,11 +4018,6 @@ function notionErrorDetails(error) {
   if (requestId) parts.push(`request_id=${requestId}`);
 
   return parts.join(" | ");
-}
-
-function parseBooleanLike(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return ["1", "true", "yes", "sim", "on"].includes(normalized);
 }
 
 function normalizeConsumiveisCreateInput(rawInput) {
