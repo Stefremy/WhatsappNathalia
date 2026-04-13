@@ -938,6 +938,17 @@ function normalizeTrackingToken(value: string) {
     .replace(/[^a-z0-9]/g, "");
 }
 
+function getLastNDaysDateRange(days = 30) {
+  const safeDays = Number.isFinite(days) ? Math.max(1, Math.trunc(days)) : 30;
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(to.getDate() - (safeDays - 1));
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10)
+  };
+}
+
 function extractPlaceholderIndexes(input: string) {
   const matches = [...String(input || "").matchAll(/\{\{(\d+)\}\}/g)];
   return [...new Set(matches.map((match) => Number(match[1])).filter(Number.isFinite))].sort(
@@ -1137,6 +1148,8 @@ function App() {
   const [sharedLogs, setSharedLogs] = useState<SharedLogItem[]>([]);
   const [sharedLogsLoading, setSharedLogsLoading] = useState(false);
   const [sharedLogsError, setSharedLogsError] = useState("");
+  const [sharedLogsLimit, setSharedLogsLimit] = useState(150);
+  const [notificacaoRowsLimit, setNotificacaoRowsLimit] = useState(250);
   const [consumiveisRows, setConsumiveisRows] = useState<ConsumivelItem[]>([]);
   const [consumiveisColumns, setConsumiveisColumns] = useState<string[]>([]);
   const [consumiveisLoading, setConsumiveisLoading] = useState(false);
@@ -1152,8 +1165,8 @@ function App() {
   const [deliveredError, setDeliveredError] = useState("");
   const [deliveredPage, setDeliveredPage] = useState(1);
   const [deliveredTotal, setDeliveredTotal] = useState(0);
-  const [deliveredDateFrom, setDeliveredDateFrom] = useState("");
-  const [deliveredDateTo, setDeliveredDateTo] = useState("");
+  const [deliveredDateFrom, setDeliveredDateFrom] = useState(() => getLastNDaysDateRange(30).from);
+  const [deliveredDateTo, setDeliveredDateTo] = useState(() => getLastNDaysDateRange(30).to);
   const [deliveredSearchQuery, setDeliveredSearchQuery] = useState("");
   const [deliveredRangeMode, setDeliveredRangeMode] = useState(false);
   const [inDistributionRows, setInDistributionRows] = useState<TmsDeliveredShipment[]>([]);
@@ -1518,8 +1531,8 @@ function App() {
 
   const detailsPageSize = 25;
   const feedbackPageSize = 100;
-  const deliveredPageSize = 250;
-  const inDistributionPageSize = 250;
+  const deliveredPageSize = notificacaoRowsLimit;
+  const inDistributionPageSize = notificacaoRowsLimit;
   const notificacaoHistoryPageSize = 50;
 
   const filteredSortedFeedbackRows = useMemo(() => {
@@ -3267,8 +3280,11 @@ function App() {
       .join("|");
   }
 
-  function loadSharedLogs(options?: { silent?: boolean }) {
+  function loadSharedLogs(options?: { silent?: boolean; limit?: number }) {
     const silent = options?.silent === true;
+    const limit = Number.isFinite(options?.limit)
+      ? Math.max(15, Math.min(2000, Math.trunc(Number(options?.limit))))
+      : sharedLogsLimit;
 
     if (silent && sharedLogsInFlightRef.current) {
       return;
@@ -3280,7 +3296,7 @@ function App() {
     setSharedLogsError("");
     sharedLogsInFlightRef.current = true;
 
-    fetch(apiUrl("/api/logs?limit=all"))
+    fetch(apiUrl(`/api/logs?limit=${limit}`))
       .then((response) => response.json())
       .then((data) => {
         const rows = Array.isArray(data?.data) ? (data.data as SharedLogItem[]) : [];
@@ -3516,8 +3532,14 @@ function App() {
         }
 
         const rows = Array.isArray(data?.data) ? data.data : [];
+        const filteredRows = (rows as TmsDeliveredShipment[]).filter((row) => {
+          const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
+          if (deliveredDateFrom && (!dateKey || dateKey < deliveredDateFrom)) return false;
+          if (deliveredDateTo && (!dateKey || dateKey > deliveredDateTo)) return false;
+          return true;
+        });
         const total = Number(data?.meta?.total || rows.length) || rows.length;
-        setDeliveredRows(rows as TmsDeliveredShipment[]);
+        setDeliveredRows(filteredRows);
         setDeliveredTotal(total);
         setDeliveredPage(targetPage);
       })
@@ -3805,8 +3827,10 @@ function App() {
     dateTo: string;
     searchQuery: string;
   }) {
+    const defaultRange = getLastNDaysDateRange(30);
     const normalizedQuery = normalizeTrackingToken(searchQuery);
-    const hasDateFilter = Boolean(dateFrom || dateTo);
+    const hasDateFilter = Boolean(dateFrom || dateTo)
+      && (dateFrom !== defaultRange.from || dateTo !== defaultRange.to);
     const hasTrackingFilter = Boolean(normalizedQuery);
 
     if (!hasDateFilter && !hasTrackingFilter) {
@@ -3931,12 +3955,12 @@ function App() {
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       loadSharedLogs({ silent: true });
-    }, 15000);
+    }, 45000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sharedLogsLimit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rehydrate inbound chat from shared logs for resilience when SSE reconnects.
   useEffect(() => {
@@ -6072,6 +6096,19 @@ function App() {
           >
             {sharedLogsLoading ? "A atualizar..." : "Atualizar logs"}
           </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              const nextLimit = Math.min(2000, sharedLogsLimit + 50);
+              setSharedLogsLimit(nextLimit);
+              loadSharedLogs({ limit: nextLimit });
+            }}
+            disabled={sharedLogsLoading || sharedLogsLimit >= 2000}
+          >
+            {sharedLogsLimit >= 2000 ? "Limite máximo" : "Carregar +50"}
+          </button>
+          <span className="status">a mostrar até {sharedLogsLimit} logs</span>
           <span className="status">{filteredHistory.length}/{displayedHistory.length} mensagens</span>
         </div>
 
@@ -6777,6 +6814,27 @@ function App() {
                     type="button"
                     className="btn btn-secondary"
                     onClick={() => {
+                      const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
+                      setNotificacaoRowsLimit(nextLimit);
+                      if (notificacaoEnvioSection === "distribuicao") {
+                        loadInDistributionShipments(1);
+                      } else if (notificacaoEnvioSection === "entregue") {
+                        loadDeliveredShipments(1);
+                      } else if (notificacaoEnvioSection === "incidencias") {
+                        loadIncidenciasShipments(1);
+                      } else {
+                        loadInTransportShipments(1);
+                      }
+                    }}
+                    disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
+                  >
+                    {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
+                  </button>
+                  <span className="status">rows: {notificacaoRowsLimit}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
                       setActiveView("workspace");
                       window.location.hash = "generic-template-console";
                     }}
@@ -6860,6 +6918,30 @@ function App() {
                 </p>
 
                 {notificacaoError ? <p className="status">{notificacaoError}</p> : null}
+
+                <div className="tracker-actions" style={{ marginBottom: "0.75rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
+                      setNotificacaoRowsLimit(nextLimit);
+                      if (notificacaoEnvioSection === "distribuicao") {
+                        loadInDistributionShipments(1);
+                      } else if (notificacaoEnvioSection === "entregue") {
+                        loadDeliveredShipments(1);
+                      } else if (notificacaoEnvioSection === "incidencias") {
+                        loadIncidenciasShipments(1);
+                      } else {
+                        loadInTransportShipments(1);
+                      }
+                    }}
+                    disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
+                  >
+                    {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
+                  </button>
+                  <span className="status">Rows por carregamento: {notificacaoRowsLimit}</span>
+                </div>
 
                 <div className="tracker-table-wrap delivered-scroll-wrap delivered-table-wrap">
                   <table className="tracker-table delivered-table">
@@ -7201,6 +7283,19 @@ function App() {
                   >
                     {sharedLogsLoading ? "A atualizar..." : "Atualizar"}
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      const nextLimit = Math.min(2000, sharedLogsLimit + 50);
+                      setSharedLogsLimit(nextLimit);
+                      loadSharedLogs({ limit: nextLimit });
+                    }}
+                    disabled={sharedLogsLoading || sharedLogsLimit >= 2000}
+                  >
+                    {sharedLogsLimit >= 2000 ? "Limite máximo" : "Carregar +50"}
+                  </button>
+                  <span className="status">logs: {sharedLogsLimit}</span>
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -7861,6 +7956,22 @@ function App() {
               {sharedLogsError ? <p className="status">{sharedLogsError}</p> : null}
 
               <div className="tracker-table-wrap">
+                <div className="tracker-actions" style={{ marginBottom: "0.75rem" }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      const nextLimit = Math.min(2000, sharedLogsLimit + 50);
+                      setSharedLogsLimit(nextLimit);
+                      loadSharedLogs({ limit: nextLimit });
+                    }}
+                    disabled={sharedLogsLoading || sharedLogsLimit >= 2000}
+                  >
+                    {sharedLogsLimit >= 2000 ? "Limite máximo" : "Carregar +50"}
+                  </button>
+                  <span className="status">Logs carregados: {sharedLogsLimit}</span>
+                </div>
+
                 <div className="tracker-filters">
                   <div className="tracker-filter-buttons" role="group" aria-label="Pesquisar por campo">
                     {[

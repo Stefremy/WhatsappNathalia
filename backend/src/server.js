@@ -7514,6 +7514,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
 
   const forceRaw = String(req.query?.force || "").trim().toLowerCase();
   const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+  const parts = getLisbonClockParts();
   const runOptions = {
     limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
     maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
@@ -7527,7 +7528,6 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
     return res.json({ ok: true, skipped: true, reason: "AUTO_NOTIFICACAO_ENVIO_ENABLED=false" });
   }
 
-  const parts = getLisbonClockParts();
   if (!forceRun && !shouldRunAutoNotificacaoEnvioAtClock(parts)) {
     return res.json({
       ok: true,
@@ -7578,6 +7578,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
 
   const forceRaw = String(req.query?.force || "").trim().toLowerCase();
   const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
+  const parts = getLisbonClockParts();
   const runOptions = {
     limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
     maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
@@ -7592,7 +7593,6 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
     return res.json({ ok: true, skipped: true, reason: "AUTO_NOTIFICACAO_ENVIO_TRANSPORTE_ENABLED=false" });
   }
 
-  const parts = getLisbonClockParts();
   if (!forceRun && !shouldRunAutoNotificacaoEnvioTransporteAtClock(parts)) {
     return res.json({
       ok: true,
