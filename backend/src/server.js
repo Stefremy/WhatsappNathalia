@@ -803,6 +803,12 @@ function parseOptionalBoundedPositiveInt(value, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(raw)));
 }
 
+function parseOptionalPositiveInt(value) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return undefined;
+  return Math.max(1, Math.trunc(raw));
+}
+
 function parseBooleanLike(value, defaultValue = false) {
   if (typeof value === "undefined" || value === null || value === "") {
     return defaultValue;
@@ -1185,7 +1191,9 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
 
     const fetchLimit = getAutoNotificacaoIncidenciaFetchLimit();
     const fetchMaxPages = getAutoNotificacaoIncidenciaFetchMaxPages();
-    const maxSendsPerRun = getAutoNotificacaoIncidenciaMaxSendsPerRun();
+    const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
+      ? Math.max(1, Math.trunc(Number(options.maxSendsPerRun)))
+      : Number.POSITIVE_INFINITY;
 
     // Refresh source data each cycle to detect newly appeared incidence rows.
     const rows = await fetchAllTmsIncidenceShipmentsData({ limit: fetchLimit, maxPages: fetchMaxPages });
@@ -1280,7 +1288,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
 
     for (const entry of queueByShipmentKey.values()) {
       if (autoNotificacaoIncidenciaSentKeys.has(entry.shipmentKey)) continue;
-      if (processed >= maxSendsPerRun) break;
+      if (Number.isFinite(maxSendsPerRun) && processed >= maxSendsPerRun) break;
 
       const shipmentKey = entry.shipmentKey;
       processed += 1;
@@ -1342,7 +1350,7 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
       fetchedRows: rows.length,
       fetchLimit,
       fetchMaxPages,
-      maxSendsPerRun,
+      maxSendsPerRun: Number.isFinite(maxSendsPerRun) ? maxSendsPerRun : "unlimited",
       templateName,
       languageCode,
       lisbonClock: {
@@ -1374,8 +1382,8 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
     ? Math.max(1, Math.min(40, Math.trunc(Number(options.maxPages))))
     : getAutoNotificacaoEnvioFetchMaxPages();
   const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
-    ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
-    : getAutoNotificacaoEnvioMaxSendsPerRun();
+    ? Math.max(1, Math.trunc(Number(options.maxSendsPerRun)))
+    : Number.POSITIVE_INFINITY;
   const runDateKey = String(options?.runDateKey || getLisbonClockParts().dateKey || "").trim();
 
   if (runDateKey && autoNotificacaoEnvioSentDateKey !== runDateKey) {
@@ -1393,7 +1401,7 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
   let reachedCap = false;
 
   for (const row of rows) {
-    if (processed >= maxSendsPerRun) {
+    if (Number.isFinite(maxSendsPerRun) && processed >= maxSendsPerRun) {
       reachedCap = true;
       break;
     }
@@ -1444,7 +1452,7 @@ async function runAutoNotificacaoEnvioForInDistribution(options = {}) {
     failed,
     skippedAlreadySent,
     reachedCap,
-    maxSendsPerRun,
+    maxSendsPerRun: Number.isFinite(maxSendsPerRun) ? maxSendsPerRun : "unlimited",
     fetchedRows: rows.length,
     fetchLimit,
     fetchMaxPages,
@@ -1475,8 +1483,8 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
     ? Math.max(1, Math.min(40, Math.trunc(Number(options.maxPages))))
     : getAutoNotificacaoEnvioTransporteFetchMaxPages();
   const maxSendsPerRun = Number.isFinite(Number(options?.maxSendsPerRun))
-    ? Math.max(1, Math.min(500, Math.trunc(Number(options.maxSendsPerRun))))
-    : getAutoNotificacaoEnvioTransporteMaxSendsPerRun();
+    ? Math.max(1, Math.trunc(Number(options.maxSendsPerRun)))
+    : Number.POSITIVE_INFINITY;
   const runDateKey = String(options?.runDateKey || getLisbonClockParts().dateKey || "").trim();
   const includeIlhas = parseBooleanLike(
     options?.includeIlhas,
@@ -1499,7 +1507,7 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
   let reachedCap = false;
 
   for (const row of rows) {
-    if (processed >= maxSendsPerRun) {
+    if (Number.isFinite(maxSendsPerRun) && processed >= maxSendsPerRun) {
       reachedCap = true;
       break;
     }
@@ -1582,7 +1590,7 @@ async function runAutoNotificacaoEnvioForInTransport(options = {}) {
     failed,
     skippedAlreadySent,
     reachedCap,
-    maxSendsPerRun,
+    maxSendsPerRun: Number.isFinite(maxSendsPerRun) ? maxSendsPerRun : "unlimited",
     includeIlhas,
     skippedMaritimoIlhas,
     fetchedRows: rows.length,
@@ -7518,7 +7526,7 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
   const runOptions = {
     limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
     maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
-    maxSendsPerRun: parseOptionalBoundedPositiveInt(req.query?.maxSendsPerRun, 1, 500),
+    maxSendsPerRun: parseOptionalPositiveInt(req.query?.maxSendsPerRun),
     runDateKey: parts.dateKey
   };
 
@@ -7582,7 +7590,7 @@ app.get("/api/cron/auto-notificacao-envio-em-transporte", async (req, res) => {
   const runOptions = {
     limit: parseOptionalBoundedPositiveInt(req.query?.limit, 10, 250),
     maxPages: parseOptionalBoundedPositiveInt(req.query?.maxPages, 1, 40),
-    maxSendsPerRun: parseOptionalBoundedPositiveInt(req.query?.maxSendsPerRun, 1, 500),
+    maxSendsPerRun: parseOptionalPositiveInt(req.query?.maxSendsPerRun),
     includeIlhas: parseBooleanLike(req.query?.includeIlhas, false),
     runDateKey: parts.dateKey
   };
@@ -7644,7 +7652,10 @@ app.get("/api/cron/auto-notificacao-incidencia", async (req, res) => {
   const forceRaw = String(req.query?.force || "").trim().toLowerCase();
   const forceRun = ["1", "true", "yes", "on"].includes(forceRaw);
 
-  const result = await maybeRunAutoNotificacaoIncidenciaSchedule({ forceRun });
+  const result = await maybeRunAutoNotificacaoIncidenciaSchedule({
+    forceRun,
+    maxSendsPerRun: parseOptionalPositiveInt(req.query?.maxSendsPerRun)
+  });
   if (!result || result.ok === false) {
     warnSoftError("cron.auto_notificacao_incidencia", result?.details || result?.error || "unknown_cron_failure", {
       route: "/api/cron/auto-notificacao-incidencia",

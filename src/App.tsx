@@ -3519,6 +3519,9 @@ function App() {
 
   function loadDeliveredShipments(page = deliveredPage) {
     const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+    const defaultRange = getLastNDaysDateRange(30);
+    const effectiveFrom = deliveredDateFrom || defaultRange.from;
+    const effectiveTo = deliveredDateTo || defaultRange.to;
 
     setDeliveredLoading(true);
     setDeliveredError("");
@@ -3534,8 +3537,8 @@ function App() {
         const rows = Array.isArray(data?.data) ? data.data : [];
         const filteredRows = (rows as TmsDeliveredShipment[]).filter((row) => {
           const dateKey = extractDeliveredDateKey(row.pickupDate || row.deliveryDate || "");
-          if (deliveredDateFrom && (!dateKey || dateKey < deliveredDateFrom)) return false;
-          if (deliveredDateTo && (!dateKey || dateKey > deliveredDateTo)) return false;
+          if (effectiveFrom && (!dateKey || dateKey < effectiveFrom)) return false;
+          if (effectiveTo && (!dateKey || dateKey > effectiveTo)) return false;
           return true;
         });
         const total = Number(data?.meta?.total || rows.length) || rows.length;
@@ -5573,6 +5576,10 @@ function App() {
               onClick={() => {
                 setActiveView("notificacao-envio");
                 setNotificacaoEnvioSection("entregue");
+                const range = getLastNDaysDateRange(30);
+                setDeliveredDateFrom(range.from);
+                setDeliveredDateTo(range.to);
+                loadDeliveredShipments(1);
               }}
             >
               <span className="workspace-nav-icon" aria-hidden="true">•</span>
@@ -6865,9 +6872,10 @@ function App() {
                     className={`tracker-filter-btn${notificacaoEnvioSection === "entregue" ? " active" : ""}`}
                     onClick={() => {
                       setNotificacaoEnvioSection("entregue");
-                      if (deliveredRows.length === 0 && !deliveredLoading) {
-                        loadDeliveredShipments(1);
-                      }
+                      const range = getLastNDaysDateRange(30);
+                      setDeliveredDateFrom(range.from);
+                      setDeliveredDateTo(range.to);
+                      loadDeliveredShipments(1);
                     }}
                   >
                     Entregue
@@ -7959,7 +7967,7 @@ function App() {
                 <div className="tracker-actions" style={{ marginBottom: "0.75rem" }}>
                   <button
                     type="button"
-                    className="btn btn-secondary"
+                    className="btn btn-secondary btn-load-lime"
                     onClick={() => {
                       const nextLimit = Math.min(2000, sharedLogsLimit + 50);
                       setSharedLogsLimit(nextLimit);
@@ -7969,7 +7977,7 @@ function App() {
                   >
                     {sharedLogsLimit >= 2000 ? "Limite máximo" : "Carregar +50"}
                   </button>
-                  <span className="status">Logs carregados: {sharedLogsLimit}</span>
+                  <span className="status status-load-lime">Logs carregados: {sharedLogsLimit}</span>
                 </div>
 
                 <div className="tracker-filters">

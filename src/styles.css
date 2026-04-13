@@ -403,6 +403,25 @@ p {
   border-color: rgba(73, 177, 111, 0.18);
 }
 
+.btn-load-lime {
+  color: #0f2d18;
+  background: linear-gradient(120deg, #b7ff4a, #8ae234);
+  border-color: #74c52d;
+  box-shadow: 0 8px 20px rgba(128, 215, 45, 0.28);
+}
+
+.btn-load-lime:hover {
+  background: linear-gradient(120deg, #c3ff65, #98eb4b);
+}
+
+.status-load-lime {
+  color: #214b0f;
+  background: rgba(183, 255, 74, 0.32);
+  border: 1px solid rgba(116, 197, 45, 0.6);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+}
+
 .panel {
   display: grid;
   gap: 1rem;
