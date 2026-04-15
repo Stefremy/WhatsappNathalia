@@ -4798,14 +4798,14 @@ function App() {
         return;
       }
 
+    const destinatario = String(row.recipient || "").trim();
     const shopName = String(row.sender || row.recipient || "").trim();
-    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
     const variables = [
       String(feedbackPreviewBodyVars[0] || "").trim(),
       String(feedbackPreviewBodyVars[1] || "").trim()
     ];
     const feedbackButtonUrlVariable = String(genericButtonUrlVariable || feedbackPreviewBodyVars[2] || "").trim();
-    variables[0] = tracking || variables[0] || "";
+    variables[0] = destinatario || variables[0] || "";
     variables[1] = shopName || variables[1] || "";
 
     setGenericTo(targetTo);
