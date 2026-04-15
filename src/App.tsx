@@ -1200,7 +1200,7 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "artefactos" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices">("workspace");
   const [cttDateFrom, setCttDateFrom] = useState(() => {
     const end = new Date();
     const start = new Date(end);
@@ -5090,6 +5090,14 @@ function App() {
               <span className="workspace-nav-icon"><SidebarIcon name="overview" /></span>
               <span>Overview</span>
             </a>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "artefactos" ? " active" : ""}`}
+              onClick={() => setActiveView("artefactos")}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="templates" /></span>
+              <span>Artefactos</span>
+            </button>
             <a href="#api-console" className="workspace-nav-link" onClick={() => setActiveView("workspace")}>
               <span className="workspace-nav-icon"><SidebarIcon name="chat" /></span>
               <span>Chat Console</span>
@@ -5259,31 +5267,6 @@ function App() {
           </a>
         </div>
       </header>
-
-      <section className="panel" id="atalhos-linke">
-        <h2>Atalhos Rápidos Linke</h2>
-        <p>
-          Acesso direto às ferramentas mais usadas pela equipa de mediação logística.
-        </p>
-        <div className="shortcut-grid">
-          {quickApps.map((app) => (
-            <a
-              key={app.url}
-              className="shortcut-card"
-              href={app.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <div className="shortcut-card-head">
-                <img className="shortcut-icon" src={app.icon} alt={`${app.name} logo`} loading="lazy" />
-                <strong>{app.name}</strong>
-              </div>
-              <span>{app.description}</span>
-              <small>{app.url}</small>
-            </a>
-          ))}
-        </div>
-      </section>
 
       <section className="panel" id="api-console">
         <h2>Consola de Mensagens WhatsApp Cloud API</h2>
@@ -6330,6 +6313,41 @@ function App() {
         </button>
       </section>
             </div>
+          ) : activeView === "artefactos" ? (
+            <section className="panel" id="artefactos-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Artefactos</h2>
+                  <p>Acesso direto às ferramentas e produtos usados no dia a dia da operação.</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setActiveView("workspace")}
+                >
+                  Voltar ao Workspace
+                </button>
+              </div>
+
+              <div className="shortcut-grid">
+                {quickApps.map((app) => (
+                  <a
+                    key={app.url}
+                    className="shortcut-card"
+                    href={app.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <div className="shortcut-card-head">
+                      <img className="shortcut-icon" src={app.icon} alt={`${app.name} logo`} loading="lazy" />
+                      <strong>{app.name}</strong>
+                    </div>
+                    <span>{app.description}</span>
+                    <small>{app.url}</small>
+                  </a>
+                ))}
+              </div>
+            </section>
           ) : activeView === "notificacao-envio" ? (
             <section className="panel tracker-page" id="notificacao-envio-page">
               <div className="tracker-header">
