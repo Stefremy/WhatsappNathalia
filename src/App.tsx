@@ -1460,7 +1460,9 @@ function App() {
   const detailsPageSize = 25;
   const feedbackPageSize = 100;
   const deliveredPageSize = notificacaoRowsLimit;
-  const inDistributionPageSize = notificacaoRowsLimit;
+  const inDistributionPageSize = 500;
+  const incidenciasPageSize = 100;
+  const inTransportPageSize = 500;
   const notificacaoHistoryPageSize = 50;
 
   const filteredSortedFeedbackRows = useMemo(() => {
@@ -1496,12 +1498,12 @@ function App() {
   );
 
   const incidenciasTotalPages = useMemo(
-    () => Math.max(1, Math.ceil((incidenciasTotal || incidenciasRows.length) / inDistributionPageSize)),
+    () => Math.max(1, Math.ceil((incidenciasTotal || incidenciasRows.length) / incidenciasPageSize)),
     [incidenciasRows.length, incidenciasTotal]
   );
 
   const inTransportTotalPages = useMemo(
-    () => Math.max(1, Math.ceil((inTransportTotal || inTransportRows.length) / inDistributionPageSize)),
+    () => Math.max(1, Math.ceil((inTransportTotal || inTransportRows.length) / inTransportPageSize)),
     [inTransportRows.length, inTransportTotal]
   );
   const notificacaoRows = useMemo(
@@ -1556,7 +1558,14 @@ function App() {
         : notificacaoEnvioSection === "incidencias"
           ? incidenciasTotalPages
           : inTransportTotalPages;
-  const notificacaoPageSize = notificacaoEnvioSection === "entregue" ? deliveredPageSize : inDistributionPageSize;
+  const notificacaoPageSize =
+    notificacaoEnvioSection === "entregue"
+      ? deliveredPageSize
+      : notificacaoEnvioSection === "incidencias"
+        ? incidenciasPageSize
+        : notificacaoEnvioSection === "em-transporte"
+          ? inTransportPageSize
+          : inDistributionPageSize;
 
   const filteredDeliveredRows = useMemo(() => {
     const query = deliveredSearchQuery.trim().toLowerCase();
@@ -3507,7 +3516,7 @@ function App() {
     setIncidenciasLoading(true);
     setIncidenciasError("");
 
-    fetch(apiUrl(`/api/tms/incidencias?page=${targetPage}&limit=${inDistributionPageSize}`))
+    fetch(apiUrl(`/api/tms/incidencias?page=${targetPage}&limit=${incidenciasPageSize}`))
       .then(async (response) => {
         const data = await parseResponse(response);
         if (!response.ok) {
@@ -3534,13 +3543,13 @@ function App() {
     setInTransportLoading(true);
     setInTransportError("");
 
-    fetch(apiUrl(`/api/tms/in-transport?page=${targetPage}&limit=${inDistributionPageSize}`))
+    fetch(apiUrl(`/api/tms/in-transport?page=${targetPage}&limit=${inTransportPageSize}`))
       .then(async (response) => {
         let effectiveResponse = response;
         let data = await parseResponse(effectiveResponse);
 
         if (effectiveResponse.status === 404) {
-          effectiveResponse = await fetch(apiUrl(`/api/tms/em-transporte?page=${targetPage}&limit=${inDistributionPageSize}`));
+          effectiveResponse = await fetch(apiUrl(`/api/tms/em-transporte?page=${targetPage}&limit=${inTransportPageSize}`));
           data = await parseResponse(effectiveResponse);
         }
 
@@ -6421,7 +6430,7 @@ function App() {
                 <div className="tracker-pagination delivered-pagination">
                   <div className="tracker-page-size">
                     <span>Rows per page</span>
-                    <span>250</span>
+                    <span>{notificacaoPageSize}</span>
                   </div>
 
                   <span className="tracker-page-label">
