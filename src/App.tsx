@@ -400,26 +400,6 @@ type WebserviceCredential = {
   notes: string;
 };
 
-type WebservicesCttTestResult = {
-  status: "idle" | "loading" | "ok" | "error";
-  message: string;
-  endpoint: string;
-  cttRows: number;
-  checkedAt: string;
-};
-
-const webservicesCategoryTabs: Array<{ key: WebservicesCategory; label: string }> = [
-  { key: "transportadoras", label: "Transportadoras" },
-  { key: "telematica", label: "Telemática e GPS" },
-  { key: "sms", label: "SMS" },
-  { key: "pagamentos", label: "Pagamentos" },
-  { key: "ecommerce", label: "E-commerce" },
-  { key: "mapas", label: "Mapas e Rotas" },
-  { key: "portagens", label: "Portagens" },
-  { key: "ia", label: "IA" },
-  { key: "credito", label: "Seg. Crédito" }
-];
-
 const webservicesSeedRows: WebserviceRow[] = [
   {
     id: "ws-vasp",
@@ -507,18 +487,6 @@ const webservicesSeedRows: WebserviceRow[] = [
   }
 ];
 
-const emptyWebserviceCredential: WebserviceCredential = {
-  baseUrl: "",
-  apiKey: "",
-  bearerToken: "",
-  username: "",
-  password: "",
-  accountCode: "",
-  agencyCode: "",
-  sessionId: "",
-  notes: ""
-};
-
 const webservicesPrefilledCredentials: Record<string, WebserviceCredential> = {
   "ws-ctt-expresso": {
     baseUrl: "https://whatsapplinke.vercel.app",
@@ -531,14 +499,6 @@ const webservicesPrefilledCredentials: Record<string, WebserviceCredential> = {
     sessionId: "cea67efe-b547-4be6-87a7-09d287ccf0f6",
     notes: "Endpoint oficial TMS: /admin/webservices/datatable (type=shipping). Headers CTT: x-api-key + x-user-id."
   }
-};
-
-const emptyWebservicesCttTestResult: WebservicesCttTestResult = {
-  status: "idle",
-  message: "",
-  endpoint: "",
-  cttRows: 0,
-  checkedAt: ""
 };
 
 type PudoNotificationState = Record<
@@ -812,15 +772,6 @@ function fillTemplateBody(templateText: string, values: string[]) {
     const idx = Number(index) - 1;
     return values[idx] || `{{${index}}}`;
   });
-}
-
-function normalizeLookupToken(value: string) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 }
 
 function normalizeFeedbackColumnKey(value: string) {
@@ -1186,27 +1137,7 @@ function App() {
   const [inTransportTotal, setInTransportTotal] = useState(0);
   const [notificacaoEnvioSection, setNotificacaoEnvioSection] = useState<"distribuicao" | "entregue" | "incidencias" | "em-transporte">("distribuicao");
   const [notificacaoHistoryPage, setNotificacaoHistoryPage] = useState(1);
-  const [feedbackStoreLookup, setFeedbackStoreLookup] = useState("");
   const [feedbackLookupStatus, setFeedbackLookupStatus] = useState("");
-  const [feedbackCreateOpen, setFeedbackCreateOpen] = useState(false);
-  const [feedbackCreateShopName, setFeedbackCreateShopName] = useState("");
-  const [feedbackCreateLink, setFeedbackCreateLink] = useState("");
-  const [feedbackCreateLoading, setFeedbackCreateLoading] = useState(false);
-  const [feedbackCreateStatus, setFeedbackCreateStatus] = useState("");
-  const [feedbackLinkCache, setFeedbackLinkCache] = useState<Record<string, string>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("wa_feedback_link_cache") || "{}") as Record<string, string>;
-    } catch {
-      return {};
-    }
-  });
-  const [feedbackSenderLinkMap, setFeedbackSenderLinkMap] = useState<Record<string, string>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("wa_feedback_sender_link_map") || "{}") as Record<string, string>;
-    } catch {
-      return {};
-    }
-  });
 
   // ── Clientes page state ────────────────────────────────────────────────
   const [clientesRows, setClientesRows] = useState<Array<{ id: number; name: string; email: string; phone: string; nif: string; address: string; city: string; country: string; active: boolean; createdAt: string; lastShipment: string; shipments: number; url: string }>>([]);
@@ -1289,10 +1220,10 @@ function App() {
   const [cttRiskRows, setCttRiskRows] = useState<CttRiskShipment[]>([]);
   const [cttRiskLoading, setCttRiskLoading] = useState(false);
   const [cttRiskError, setCttRiskError] = useState("");
-  const [webservicesCategory, setWebservicesCategory] = useState<WebservicesCategory>("transportadoras");
-  const [webservicesSearch, setWebservicesSearch] = useState("");
+  const [webservicesCategory] = useState<WebservicesCategory>("transportadoras");
+  const [webservicesSearch] = useState("");
   const [webservicesRows] = useState<WebserviceRow[]>(webservicesSeedRows);
-  const [webservicesConfigMap, setWebservicesConfigMap] = useState<Record<string, WebserviceCredential>>(() => {
+  const [webservicesConfigMap] = useState<Record<string, WebserviceCredential>>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("wa_webservices_credentials") || "{}") as Record<string, WebserviceCredential>;
       return {
@@ -1304,9 +1235,6 @@ function App() {
     }
   });
   const [webservicesSelectedId, setWebservicesSelectedId] = useState(webservicesSeedRows[0]?.id || "");
-  const [webservicesForm, setWebservicesForm] = useState<WebserviceCredential>(emptyWebserviceCredential);
-  const [webservicesStatus, setWebservicesStatus] = useState("");
-  const [webservicesCttTest, setWebservicesCttTest] = useState<WebservicesCttTestResult>(emptyWebservicesCttTestResult);
   const [showIncidencesPanel, setShowIncidencesPanel] = useState(false);
   const [showIncidenceDetails, setShowIncidenceDetails] = useState(false);
   const [showPudoDetails, setShowPudoDetails] = useState(false);
@@ -2691,14 +2619,6 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem("wa_template_history", JSON.stringify(templateHistory)); } catch {}
   }, [templateHistory]);
-
-  useEffect(() => {
-    try { localStorage.setItem("wa_feedback_link_cache", JSON.stringify(feedbackLinkCache)); } catch {}
-  }, [feedbackLinkCache]);
-
-  useEffect(() => {
-    try { localStorage.setItem("wa_feedback_sender_link_map", JSON.stringify(feedbackSenderLinkMap)); } catch {}
-  }, [feedbackSenderLinkMap]);
 
   useEffect(() => {
     try { localStorage.setItem("wa_clientes_email_templates", JSON.stringify(clientesEmailTemplates)); } catch {}
@@ -4313,7 +4233,10 @@ function App() {
       return;
     }
     loadCttDashboard();
-    // loadCttRiskShipments(); // Disabled by request: do not call /api/ctt/risk-shipments
+    const riskShipmentsLoadEnabled = false;
+    if (riskShipmentsLoadEnabled) {
+      loadCttRiskShipments();
+    }
   }, [activeView, cttDateFrom, cttDateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -4692,241 +4615,10 @@ function App() {
     });
 
     if (!sendResult?.ok) return;
-
     const sentVars = Array.isArray(sendResult.bodyVariables) ? sendResult.bodyVariables : [];
-    const feedbackUrl = String(
-      feedbackNeedsUrlButtonVariable
-        ? genericButtonUrlVariable
-        : sentVars[2] || genericButtonUrlVariable
-    ).trim();
-    const manualSender = String(sentVars[1] || feedbackStoreLookup || "").trim();
-
-    if (!feedbackUrl) {
-      setFeedbackLookupStatus("Template enviado, mas sem Feedback URL para marcar Follow-up SMS no Notion.");
-      return;
-    }
-
-    const senderAssociation = validateSenderLinkAssociation(manualSender, feedbackUrl);
-    if (!senderAssociation.ok) {
-      setFeedbackLookupStatus(senderAssociation.message);
-      return;
-    }
-
-    rememberSenderLinkAssociation(manualSender, feedbackUrl);
-
-    try {
-      await createFeedbackFollowUpEntry({
-        shopName: String(sentVars[1] || feedbackStoreLookup || "Feedback Survey").trim(),
-        feedbackUrl,
-        referencia: String(sentVars[0] || "Template Feedback Survey").trim(),
-        whatsappTemplate: String(sendResult.templateName || feedbackTemplateName || "").trim()
-      });
-      setFeedbackLookupStatus("Template enviado e Follow-up SMS marcado como enviado no Notion.");
-    } catch (error) {
-      setFeedbackLookupStatus(
-        error instanceof Error
-          ? `Template enviado, mas falhou ao marcar Follow-up SMS no Notion: ${error.message}`
-          : "Template enviado, mas falhou ao marcar Follow-up SMS no Notion."
-      );
-    }
-  }
-
-  function cacheFeedbackLink(link: string, aliases: string[]) {
-    const normalizedLink = String(link || "").trim();
-    if (!normalizedLink) return;
-
-    setFeedbackLinkCache((current) => {
-      const next = { ...current };
-      let changed = false;
-
-      for (const alias of aliases) {
-        const token = normalizeLookupToken(alias);
-        if (!token) continue;
-        if (next[token] === normalizedLink) continue;
-        next[token] = normalizedLink;
-        changed = true;
-      }
-
-      return changed ? next : current;
-    });
-  }
-
-  function getCachedFeedbackLink(aliases: string[]) {
-    for (const alias of aliases) {
-      const token = normalizeLookupToken(alias);
-      if (!token) continue;
-      const cached = String(feedbackLinkCache[token] || "").trim();
-      if (cached) return cached;
-    }
-    return "";
-  }
-
-  function senderToken(sender: string) {
-    return normalizeLookupToken(String(sender || "").trim());
-  }
-
-  function getLinkedSenderTokenForLink(link: string, exceptToken = "") {
-    const normalizedLink = String(link || "").trim();
-    if (!normalizedLink) return "";
-
-    for (const [token, linked] of Object.entries(feedbackSenderLinkMap)) {
-      if (!token || token === exceptToken) continue;
-      if (String(linked || "").trim() === normalizedLink) {
-        return token;
-      }
-    }
-
-    return "";
-  }
-
-  function validateSenderLinkAssociation(sender: string, link: string) {
-    const token = senderToken(sender);
-    const normalizedLink = String(link || "").trim();
-
-    if (!token || !normalizedLink) {
-      return { ok: true as const };
-    }
-
-    const existingForSender = String(feedbackSenderLinkMap[token] || "").trim();
-    if (existingForSender && existingForSender !== normalizedLink) {
-      return {
-        ok: false as const,
-        message: `Sender ${sender} já está associado a outro link. Envio bloqueado para evitar link errado.`
-      };
-    }
-
-    const linkedToOtherSender = getLinkedSenderTokenForLink(normalizedLink, token);
-    if (linkedToOtherSender) {
-      return {
-        ok: false as const,
-        message: "Este link já está associado a outro sender. Envio bloqueado para evitar associação cruzada."
-      };
-    }
-
-    return { ok: true as const };
-  }
-
-  function rememberSenderLinkAssociation(sender: string, link: string) {
-    const token = senderToken(sender);
-    const normalizedLink = String(link || "").trim();
-    if (!token || !normalizedLink) return;
-
-    setFeedbackSenderLinkMap((current) => {
-      if (String(current[token] || "").trim() === normalizedLink) return current;
-      return {
-        ...current,
-        [token]: normalizedLink
-      };
-    });
-  }
-
-  function resolveDeliveredFeedbackMatch(row: TmsDeliveredShipment, sourceRows: ConsumivelItem[] = feedbackRows) {
-    const sender = String(row.sender || "").trim();
-    const recipient = String(row.recipient || "").trim();
-    const senderNeedle = normalizeLookupToken(sender);
-    const recipientNeedle = normalizeLookupToken(recipient);
-    const trackingNeedle = normalizeLookupToken(String(row.providerTrackingCode || ""));
-    const parcelNeedle = normalizeLookupToken(String(row.parcelId || ""));
-
-    const candidates = sourceRows
-      .map((item) => {
-      const fields = item.fields || {};
-      const link = String(fields["Feedback URL"] || "").trim() || String(item.url || "").trim();
-      if (!link) return null;
-
-      const joined = [
-        item.client,
-        fields["Nome Cliente"],
-        fields["Morada Destinatário"],
-        fields["Morada Destinat�rio"],
-        fields["Destinatário"],
-        fields["Destinat�rio"],
-        fields["Referência"],
-        fields["Refer�ncia"],
-        fields["Cod. Serviço"],
-        fields["Cod. Servi�o"],
-        fields["TRK Secundário"],
-        fields["TRK Secund�rio"]
-      ]
-        .map((value) => normalizeLookupToken(String(value || "")))
-        .join(" ");
-
-      let score = 0;
-      if (trackingNeedle && joined.includes(trackingNeedle)) score += 6;
-      if (senderNeedle && joined.includes(senderNeedle)) score += 4;
-      if (recipientNeedle && joined.includes(recipientNeedle)) score += 3;
-      if (parcelNeedle && joined.includes(parcelNeedle)) score += 2;
-
-      if (score <= 0) return null;
-
-      return {
-        item,
-        score
-      };
-    })
-      .filter(Boolean) as Array<{ item: ConsumivelItem; score: number }>;
-
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    const best = [...candidates].sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const bTs = parseFeedbackEntregaTimestamp(b.item.fields["Data Entrega"] || "");
-      const aTs = parseFeedbackEntregaTimestamp(a.item.fields["Data Entrega"] || "");
-      if (Number.isFinite(aTs) && Number.isFinite(bTs)) return bTs - aTs;
-      if (Number.isFinite(aTs)) return -1;
-      if (Number.isFinite(bTs)) return 1;
-      return 0;
-    })[0]?.item;
-
-    if (!best) {
-      return null;
-    }
-
-    const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
-    if (!matchedLink) {
-      return null;
-    }
-
-    return {
-      sender,
-      recipient,
-      matchedLink
-    };
-  }
-
-  async function createFeedbackFollowUpEntry({
-    shopName,
-    feedbackUrl,
-    referencia,
-    whatsappTemplate
-  }: {
-    shopName: string;
-    feedbackUrl: string;
-    referencia: string;
-    whatsappTemplate: string;
-  }) {
-    const response = await fetch(apiUrl("/api/feedback-tracker"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        shopName,
-        feedbackUrl,
-        referencia,
-        whatsappTemplate,
-        status: "enviado",
-        whatsappFollowUpSms: "enviado"
-      })
-    });
-
-    const data = await parseResponse(response);
-    if (!response.ok) {
-      throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
-    }
-
-    loadFeedbackTracker();
-    return data;
+    const tracking = String(sentVars[0] || "").trim();
+    const shopName = String(sentVars[1] || "").trim();
+    setFeedbackLookupStatus(`Template enviado${shopName ? ` para ${shopName}` : ""}${tracking ? ` (${tracking})` : ""}.`);
   }
 
   async function sendDeliveredFeedbackSurvey(row: TmsDeliveredShipment) {
@@ -4934,105 +4626,34 @@ function App() {
     setDeliveredSendingKey(rowKey);
 
     try {
-    const targetTo = digitsOnly(row.finalClientPhone || "");
-    if (!targetTo) {
-      setGenericStatus("Número inválido");
-      setGenericResponse("O campo Final Client Phone desta linha está vazio ou inválido.");
-      return;
-    }
-
-    const manualFallbackLink = String(genericButtonUrlVariable || genericBodyVars[3] || "").trim();
-    const cachedLink = getCachedFeedbackLink([
-      String(row.sender || ""),
-      String(row.recipient || ""),
-      String(row.providerTrackingCode || ""),
-      String(row.parcelId || "")
-    ]);
-    setFeedbackLookupStatus("A atualizar links no Notion antes de enviar...");
-
-    let freshFeedbackRows: ConsumivelItem[] = feedbackRows;
-    try {
-      freshFeedbackRows = await fetchFeedbackTrackerRows();
-      setFeedbackRows(freshFeedbackRows);
-      setFeedbackColumns(FEEDBACK_COLUMNS_ORDER);
-      setFeedbackError("");
-    } catch (error) {
-      setFeedbackLookupStatus(
-        error instanceof Error
-          ? `Não foi possível atualizar Notion antes do envio: ${error.message}`
-          : "Não foi possível atualizar Notion antes do envio."
-      );
-      return;
-    }
-
-    const resolved = resolveDeliveredFeedbackMatch(row, freshFeedbackRows);
-    const sender = String(resolved?.sender || row.sender || "").trim();
-    const recipient = String(resolved?.recipient || row.recipient || "").trim();
-    const matchedLink = String(resolved?.matchedLink || cachedLink).trim();
-
-    if (!matchedLink) {
-      const suggestedShop = sender || recipient || String(row.sender || row.recipient || "").trim() || "";
-      if (suggestedShop) {
-        setFeedbackStoreLookup(suggestedShop);
-        setFeedbackCreateShopName((current) => current.trim() || suggestedShop);
+      const targetTo = digitsOnly(row.finalClientPhone || "");
+      if (!targetTo) {
+        setGenericStatus("Número inválido");
+        setGenericResponse("O campo Final Client Phone desta linha está vazio ou inválido.");
+        return;
       }
-      setFeedbackCreateOpen(true);
-      setFeedbackLookupStatus(
-        `Sem link para ${suggestedShop || "esta loja"}. Adiciona em \"Adicionar nova loja\" para memorizar antes de enviar.`
-      );
-      return;
-    }
 
-    const senderAssociation = validateSenderLinkAssociation(sender, matchedLink);
-    if (!senderAssociation.ok) {
-      setFeedbackLookupStatus(senderAssociation.message);
-      return;
-    }
-
-    rememberSenderLinkAssociation(sender, matchedLink);
-
+    const shopName = String(row.sender || row.recipient || "").trim();
+    const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
     const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
-    const varsLength = Math.max(3, requiredMax, feedbackPreviewBodyVars.length);
+    const varsLength = Math.max(2, requiredMax, feedbackPreviewBodyVars.length);
     const variables = Array.from({ length: varsLength }, (_, index) => String(feedbackPreviewBodyVars[index] || "").trim());
-    variables[0] = recipient || variables[0] || "";
-    variables[1] = sender || variables[1] || "";
-    variables[2] = matchedLink;
+    variables[0] = tracking || variables[0] || "";
+    variables[1] = shopName || variables[1] || "";
 
     setGenericTo(targetTo);
     setGenericBodyVars((current) => ({
       ...current,
       1: variables[0],
-      2: variables[1],
-      3: variables[2]
+      2: variables[1]
     }));
-    if (feedbackNeedsUrlButtonVariable) {
-      setGenericButtonUrlVariable(matchedLink);
-    }
 
-    cacheFeedbackLink(matchedLink, [
-      sender,
-      recipient,
-      String(row.sender || ""),
-      String(row.recipient || ""),
-      String(row.providerTrackingCode || ""),
-      String(row.parcelId || "")
-    ]);
-
-    if (resolved?.matchedLink) {
-      setFeedbackLookupStatus(`Link associado para ${sender || "-"} e pronto para envio.`);
-    } else if (cachedLink) {
-      setFeedbackLookupStatus(`A usar link em cache para ${sender || "-"}.`);
-    } else if (manualFallbackLink) {
-      setFeedbackLookupStatus(`Sem match exato no Notion, a usar link manual para ${sender || "-"}.`);
-    } else {
-      setFeedbackLookupStatus(`Link associado para ${sender || "-"}.`);
-    }
+    setFeedbackLookupStatus(`Template preparado para ${shopName || "-"}.`);
     const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
       overrides: {
         to: targetTo,
         bodyVariables: variables,
-        buttonUrlVariable: feedbackNeedsUrlButtonVariable ? matchedLink : undefined,
         templateName: feedbackTemplateName,
         languageCode: feedbackLanguage,
         requiredIndexes: feedbackRequiredBodyIndexes,
@@ -5048,155 +4669,9 @@ function App() {
       [rowKey]: true
     }));
 
-    try {
-      await createFeedbackFollowUpEntry({
-        shopName: sender || recipient || "Cliente",
-        feedbackUrl: matchedLink,
-        referencia: String(row.providerTrackingCode || row.parcelId || "Template Feedback Survey").trim(),
-        whatsappTemplate: feedbackTemplateName
-      });
-      setFeedbackLookupStatus(`Template enviado para ${sender || "-"} e marcado como enviado no Notion.`);
-    } catch (error) {
-      setFeedbackLookupStatus(
-        error instanceof Error
-          ? `Template enviado, mas falhou ao marcar Follow-up SMS: ${error.message}`
-          : "Template enviado, mas falhou ao marcar Follow-up SMS no Notion."
-      );
-    }
+    setFeedbackLookupStatus(`Template enviado para ${shopName || "-"}.`);
     } finally {
       setDeliveredSendingKey("");
-    }
-  }
-
-  function autofillFeedbackLinkByStore() {
-    const needle = normalizeLookupToken(feedbackStoreLookup);
-    if (!needle) {
-      setFeedbackLookupStatus("Introduz a loja para pesquisar no Notion.");
-      return;
-    }
-
-    const candidates = feedbackRows.filter((row) => {
-      const fields = row.fields || {};
-      const link = String(fields["Feedback URL"] || "").trim() || String(row.url || "").trim();
-      if (!link) return false;
-
-      const joined = [
-        row.client,
-        fields["Nome Cliente"],
-        fields["Morada Destinatário"],
-        fields["Morada Destinat�rio"],
-        fields["Destinatário"],
-        fields["Destinat�rio"],
-        fields["Referência"],
-        fields["Refer�ncia"],
-        fields["Cod. Serviço"],
-        fields["Cod. Servi�o"]
-      ]
-        .map((value) => normalizeLookupToken(String(value || "")))
-        .join(" ");
-
-      return joined.includes(needle);
-    });
-
-    if (candidates.length === 0) {
-      setFeedbackLookupStatus(`Sem match no Notion para "${feedbackStoreLookup}".`);
-      return;
-    }
-
-    const best = [...candidates].sort((a, b) => {
-      const bTs = parseFeedbackEntregaTimestamp(b.fields["Data Entrega"] || "");
-      const aTs = parseFeedbackEntregaTimestamp(a.fields["Data Entrega"] || "");
-      if (Number.isFinite(aTs) && Number.isFinite(bTs)) {
-        return bTs - aTs;
-      }
-      if (Number.isFinite(aTs)) return -1;
-      if (Number.isFinite(bTs)) return 1;
-      return 0;
-    })[0];
-
-    const matchedLink = String(best.fields["Feedback URL"] || "").trim() || String(best.url || "").trim();
-    if (!matchedLink) {
-      setFeedbackLookupStatus("Match encontrado, mas sem Feedback URL nessa linha.");
-      return;
-    }
-
-    const association = validateSenderLinkAssociation(feedbackStoreLookup, matchedLink);
-    if (!association.ok) {
-      setFeedbackLookupStatus(association.message);
-      return;
-    }
-
-    rememberSenderLinkAssociation(feedbackStoreLookup, matchedLink);
-
-    if (feedbackNeedsUrlButtonVariable) {
-      setGenericButtonUrlVariable(matchedLink);
-    } else if (feedbackRequiredBodyIndexes.length > 0) {
-      const preferredIndex = feedbackRequiredBodyIndexes.includes(3)
-        ? 3
-        : feedbackRequiredBodyIndexes.find((index) => {
-            const currentValue = String(genericBodyVars[index] || "").trim();
-            return !currentValue || /^https?:\/\//i.test(currentValue);
-          }) || feedbackRequiredBodyIndexes[feedbackRequiredBodyIndexes.length - 1];
-
-      setGenericBodyVars((current) => ({
-        ...current,
-        [preferredIndex]: matchedLink
-      }));
-    }
-
-    const matchedStore = String(best.fields["Nome Cliente"] || best.fields["Destinatário"] || feedbackStoreLookup || "-");
-    cacheFeedbackLink(matchedLink, [matchedStore, feedbackStoreLookup]);
-    setFeedbackLookupStatus(`Link associado automaticamente para: ${matchedStore}`);
-  }
-
-  async function createFeedbackShopLink(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!feedbackCreateShopName.trim()) {
-      setFeedbackCreateStatus("Nome da loja é obrigatório.");
-      return;
-    }
-    if (!feedbackCreateLink.trim()) {
-      setFeedbackCreateStatus("Feedback link é obrigatório.");
-      return;
-    }
-
-    const association = validateSenderLinkAssociation(feedbackCreateShopName.trim(), feedbackCreateLink.trim());
-    if (!association.ok) {
-      setFeedbackCreateStatus(association.message);
-      return;
-    }
-
-    setFeedbackCreateLoading(true);
-    setFeedbackCreateStatus("");
-
-    try {
-      const response = await fetch(apiUrl("/api/feedback-tracker"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shopName: feedbackCreateShopName.trim(),
-          feedbackUrl: feedbackCreateLink.trim(),
-          whatsappTemplate: feedbackTemplateName.trim() || genericTemplateName.trim()
-        })
-      });
-
-      const data = await parseResponse(response);
-      if (!response.ok) {
-        throw new Error(String(data?.details || data?.error || `Falha Feedback Tracker (${response.status})`));
-      }
-
-      setFeedbackCreateStatus("Loja e link criados no Notion com sucesso.");
-      setFeedbackStoreLookup(feedbackCreateShopName.trim());
-      cacheFeedbackLink(feedbackCreateLink.trim(), [feedbackCreateShopName.trim()]);
-      rememberSenderLinkAssociation(feedbackCreateShopName.trim(), feedbackCreateLink.trim());
-      setFeedbackCreateShopName("");
-      setFeedbackCreateLink("");
-      loadFeedbackTracker();
-    } catch (error) {
-      setFeedbackCreateStatus(error instanceof Error ? error.message : "Não foi possível criar loja/link no Notion.");
-    } finally {
-      setFeedbackCreateLoading(false);
     }
   }
 
@@ -5368,7 +4843,6 @@ function App() {
     }
 
     setWebservicesSelectedId(webservicesSelectedRow.id);
-    setWebservicesForm(webservicesConfigMap[webservicesSelectedRow.id] || emptyWebserviceCredential);
   }, [webservicesConfigMap, webservicesSelectedRow]);
 
   useEffect(() => {
@@ -5378,93 +4852,6 @@ function App() {
       // Ignore localStorage failures for private browsing contexts.
     }
   }, [webservicesConfigMap]);
-
-  function selectWebserviceRow(rowId: string) {
-    const target = webservicesRows.find((row) => row.id === rowId);
-    if (!target) {
-      return;
-    }
-    setWebservicesSelectedId(rowId);
-    setWebservicesForm(webservicesConfigMap[rowId] || emptyWebserviceCredential);
-    setWebservicesStatus("");
-  }
-
-  function handleSaveWebserviceKeys(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!webservicesSelectedRow) {
-      setWebservicesStatus("Seleciona um webservice para configurar.");
-      return;
-    }
-
-    setWebservicesConfigMap((current) => ({
-      ...current,
-      [webservicesSelectedRow.id]: {
-        ...webservicesForm,
-        baseUrl: webservicesForm.baseUrl.trim(),
-        apiKey: webservicesForm.apiKey.trim(),
-        bearerToken: webservicesForm.bearerToken.trim(),
-        username: webservicesForm.username.trim(),
-        password: webservicesForm.password,
-        accountCode: webservicesForm.accountCode.trim(),
-        agencyCode: webservicesForm.agencyCode.trim(),
-        sessionId: webservicesForm.sessionId.trim(),
-        notes: webservicesForm.notes.trim()
-      }
-    }));
-    setWebservicesStatus(`Credenciais guardadas para ${webservicesSelectedRow.description}.`);
-  }
-
-  async function handleTestWebserviceCttConnection() {
-    setWebservicesCttTest({
-      status: "loading",
-      message: "A testar ligação CTT no TMS...",
-      endpoint: "",
-      cttRows: 0,
-      checkedAt: ""
-    });
-
-    try {
-      const response = await fetch("/api/tms/webservices/discovery?type=shipping&limit=50");
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok || payload?.ok !== true) {
-        const details = String(payload?.details || payload?.error || `HTTP ${response.status}`).trim();
-        throw new Error(details || "Falha na descoberta de webservices no TMS.");
-      }
-
-      const endpoint = String(payload?.data?.endpoint || "").trim();
-      const cttRows = Array.isArray(payload?.data?.cttRows) ? payload.data.cttRows.length : 0;
-      const checkedAt = new Date().toLocaleString("pt-PT");
-
-      if (cttRows > 0) {
-        setWebservicesCttTest({
-          status: "ok",
-          message: `Ligação CTT OK. Encontrados ${cttRows} registos CTT no TMS.`,
-          endpoint,
-          cttRows,
-          checkedAt
-        });
-        return;
-      }
-
-      setWebservicesCttTest({
-        status: "error",
-        message: "Ligação respondeu, mas não foram encontrados registos CTT no datatable shipping.",
-        endpoint,
-        cttRows,
-        checkedAt
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro desconhecido ao testar ligação CTT.";
-      setWebservicesCttTest({
-        status: "error",
-        message,
-        endpoint: "",
-        cttRows: 0,
-        checkedAt: new Date().toLocaleString("pt-PT")
-      });
-    }
-  }
 
   if (!authUser) {
     return (
@@ -8889,66 +8276,9 @@ function App() {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    Loja (Notion)
-                    <input
-                      value={feedbackStoreLookup}
-                      onChange={(event) => setFeedbackStoreLookup(event.target.value)}
-                      placeholder="Nome da loja para buscar Feedback URL"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={autofillFeedbackLinkByStore}
-                    disabled={feedbackLoading}
-                  >
-                    {feedbackLoading ? "A carregar Notion..." : "Buscar no Notion e preencher link"}
-                  </button>
                 </div>
 
                 {feedbackLookupStatus ? <p className="status">{feedbackLookupStatus}</p> : null}
-
-                <div className="tracker-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => setFeedbackCreateOpen((open) => !open)}
-                  >
-                    {feedbackCreateOpen ? "Fechar" : "Adicionar nova loja"}
-                  </button>
-                </div>
-
-                {feedbackCreateOpen ? (
-                  <form className="api-form feedback-create-form" onSubmit={createFeedbackShopLink}>
-                    <h4>Adicionar nova loja</h4>
-                    <div className="template-var-grid feedback-template-vars">
-                      <label>
-                        Loja
-                        <input
-                          value={feedbackCreateShopName}
-                          onChange={(event) => setFeedbackCreateShopName(event.target.value)}
-                          placeholder="Nome da loja"
-                        />
-                      </label>
-                      <label>
-                        Feedback Link
-                        <input
-                          value={feedbackCreateLink}
-                          onChange={(event) => setFeedbackCreateLink(event.target.value)}
-                          placeholder="https://..."
-                        />
-                      </label>
-                    </div>
-
-                    <div className="api-actions feedback-bridge-actions">
-                      <button type="submit" className="btn btn-secondary" disabled={feedbackCreateLoading}>
-                        {feedbackCreateLoading ? "A criar..." : "Guardar nova loja"}
-                      </button>
-                      {feedbackCreateStatus ? <span className="status">{feedbackCreateStatus}</span> : null}
-                    </div>
-                  </form>
-                ) : null}
 
                 <article className="template-chat-box feedback-template-preview">
                   <header>

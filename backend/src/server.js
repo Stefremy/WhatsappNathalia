@@ -4213,6 +4213,125 @@ function buildFeedbackCreateProperties(databaseProperties, input) {
   return properties;
 }
 
+function buildFeedbackCreatePropertiesFromEnv(input) {
+  const properties = {};
+
+  const assignValue = (propName, propType, value) => {
+    const cleanName = String(propName || "").trim();
+    const cleanType = String(propType || "").trim().toLowerCase();
+    if (!cleanName) return;
+    if (value === undefined || value === null || String(value).trim() === "") return;
+
+    const cleanValue = String(value).trim();
+
+    if (cleanType === "title") {
+      properties[cleanName] = { title: titleText(cleanValue) };
+      return;
+    }
+    if (cleanType === "rich_text") {
+      properties[cleanName] = { rich_text: richText(cleanValue) };
+      return;
+    }
+    if (cleanType === "url") {
+      properties[cleanName] = { url: cleanValue };
+      return;
+    }
+    if (cleanType === "phone_number") {
+      properties[cleanName] = { phone_number: cleanValue };
+      return;
+    }
+    if (cleanType === "date") {
+      properties[cleanName] = { date: { start: cleanValue } };
+      return;
+    }
+    if (cleanType === "number") {
+      const parsed = Number(cleanValue);
+      if (Number.isFinite(parsed)) {
+        properties[cleanName] = { number: parsed };
+      }
+      return;
+    }
+    if (cleanType === "select") {
+      properties[cleanName] = { select: { name: cleanValue } };
+      return;
+    }
+    if (cleanType === "status") {
+      properties[cleanName] = { status: { name: cleanValue } };
+      return;
+    }
+    if (cleanType === "checkbox") {
+      properties[cleanName] = { checkbox: parseBooleanLike(cleanValue) };
+      return;
+    }
+
+    // Default mapping keeps compatibility with text-like properties.
+    properties[cleanName] = { rich_text: richText(cleanValue) };
+  };
+
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_SHOP_NAME", "Nome Cliente"),
+    notionPropName("NOTION_FEEDBACK_PROP_SHOP_NAME_TYPE", "title"),
+    input.shopName || input.referencia || "Feedback Survey"
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_FEEDBACK_URL", "Feedback URL"),
+    notionPropName("NOTION_FEEDBACK_PROP_FEEDBACK_URL_TYPE", "url"),
+    input.feedbackUrl
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_REFERENCIA", "Referência"),
+    notionPropName("NOTION_FEEDBACK_PROP_REFERENCIA_TYPE", "rich_text"),
+    input.referencia
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_WHATSAPP_TEMPLATE", "Whatsapp Template"),
+    notionPropName("NOTION_FEEDBACK_PROP_WHATSAPP_TEMPLATE_TYPE", "rich_text"),
+    input.whatsappTemplate
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_COD_SERVICO", "Cod. Serviço"),
+    notionPropName("NOTION_FEEDBACK_PROP_COD_SERVICO_TYPE", "rich_text"),
+    input.codServico
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_DESTINATARIO", "Destinatário"),
+    notionPropName("NOTION_FEEDBACK_PROP_DESTINATARIO_TYPE", "rich_text"),
+    input.destinatario
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_CONTACTO_DESTINATARIO", "Contacto Destinatário"),
+    notionPropName("NOTION_FEEDBACK_PROP_CONTACTO_DESTINATARIO_TYPE", "rich_text"),
+    input.contactoDestinatario
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_TRK_SECUNDARIO", "TRK Secundário"),
+    notionPropName("NOTION_FEEDBACK_PROP_TRK_SECUNDARIO_TYPE", "rich_text"),
+    input.trkSecundario
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_DATA_ENTREGA", "Data Entrega"),
+    notionPropName("NOTION_FEEDBACK_PROP_DATA_ENTREGA_TYPE", "date"),
+    input.dataEntrega
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_SENT_DATE", "Sent Date"),
+    notionPropName("NOTION_FEEDBACK_PROP_SENT_DATE_TYPE", "date"),
+    input.sentDate
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_STATUS", "Status"),
+    notionPropName("NOTION_FEEDBACK_PROP_STATUS_TYPE", "status"),
+    input.status
+  );
+  assignValue(
+    notionPropName("NOTION_FEEDBACK_PROP_WHATSAPP_FOLLOW_UP_SMS", "Whatsapp Follow-up SMS"),
+    notionPropName("NOTION_FEEDBACK_PROP_WHATSAPP_FOLLOW_UP_SMS_TYPE", "status"),
+    input.whatsappFollowUpSms
+  );
+
+  return properties;
+}
+
 function buildConsumiveisCreateProperties(databaseProperties, input) {
   const properties = {};
 
@@ -5902,7 +6021,7 @@ app.post("/api/feedback-tracker", async (req, res) => {
   if (!notionFeedbackEnabled || !notionFeedback) {
     return res.status(503).json({
       error: "Feedback Tracker Notion integration is not configured.",
-      details: "Set NOTION_FEEDBACK_API_KEY and NOTION_FEEDBACK_DATABASE_ID or NOTION_FEEDBACK_PAGE_ID"
+      details: "Set NOTION_FEEDBACK_API_KEY and NOTION_FEEDBACK_DATABASE_ID"
     });
   }
 
@@ -5911,45 +6030,20 @@ app.post("/api/feedback-tracker", async (req, res) => {
     if (!input.shopName) {
       return res.status(400).json({ error: "Field 'shopName' is required." });
     }
-    if (!input.feedbackUrl) {
-      return res.status(400).json({ error: "Field 'feedbackUrl' is required." });
-    }
-
-    const pageDerivedDatabaseId = await resolveFeedbackDatabaseIdFromPage();
-    let resolvedDatabaseId = notionFeedbackDatabaseId || pageDerivedDatabaseId;
-    const initialDatabaseId = resolvedDatabaseId;
-    let pageFallbackUsed = !notionFeedbackDatabaseId && Boolean(pageDerivedDatabaseId);
-
+    const resolvedDatabaseId = notionFeedbackDatabaseId;
     if (!resolvedDatabaseId) {
-      return res.status(404).json({
-        error: "Could not resolve feedback tracker database from page.",
-        details: "Ensure NOTION_FEEDBACK_DATABASE_ID is valid or page contains a child database and is shared with integration."
+      return res.status(503).json({
+        error: "Feedback tracker database id is not configured.",
+        details: "Set NOTION_FEEDBACK_DATABASE_ID to create feedback tracker records without schema fetch."
       });
     }
 
-    let databaseInfo;
-    try {
-      databaseInfo = await notionFeedback.databases.retrieve({ database_id: resolvedDatabaseId });
-    } catch (error) {
-      const canFallbackToPageDb =
-        Boolean(pageDerivedDatabaseId) && !pageFallbackUsed && pageDerivedDatabaseId !== resolvedDatabaseId;
-
-      if (!canFallbackToPageDb) {
-        throw error;
-      }
-
-      resolvedDatabaseId = pageDerivedDatabaseId;
-      pageFallbackUsed = true;
-      databaseInfo = await notionFeedback.databases.retrieve({ database_id: resolvedDatabaseId });
-    }
-
-    const databaseProperties = databaseInfo?.properties || {};
-    const notionProperties = buildFeedbackCreateProperties(databaseProperties, input);
+    const notionProperties = buildFeedbackCreatePropertiesFromEnv(input);
 
     if (!Object.keys(notionProperties).length) {
       return res.status(400).json({
-        error: "No writable properties matched the feedback tracker database schema.",
-        details: "Check property names and property types in Notion database."
+        error: "No writable feedback tracker properties were generated.",
+        details: "Check request body and NOTION_FEEDBACK_PROP_* configuration."
       });
     }
 
@@ -5958,13 +6052,12 @@ app.post("/api/feedback-tracker", async (req, res) => {
       properties: notionProperties
     });
 
-    const columns = Object.keys(databaseProperties);
+    const columns = Object.keys(created?.properties || {});
     return res.status(201).json({
       data: normalizeConsumiveisRow(created, columns),
       meta: {
         createdAt: new Date().toISOString(),
-        databaseId: resolvedDatabaseId,
-        fallbackFromDatabaseId: pageFallbackUsed ? initialDatabaseId : ""
+        databaseId: resolvedDatabaseId
       }
     });
   } catch (error) {
