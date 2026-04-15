@@ -3548,6 +3548,14 @@ function isIncidenciaMessageType(value) {
   return normalized.includes("incid");
 }
 
+function isFeedbackTemplateName(value) {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+  return /feedback|survey|satisfa|inquerito/.test(normalized);
+}
+
 const SMS_FALLBACK_TEMPLATE_BODIES = {
   notificaoc_de_incidencia:
     "Ola {{1}}, houve um atraso/problema na entrega da sua encomenda no {{2}}. Encomenda da loja {{3}}. Estamos a trabalhar para resolver o problema o mais rapidamente possivel. Lamentamos qualquer inconveniente. Enviaremos o estado atualizado da entrega assim que possivel.",
@@ -6569,8 +6577,9 @@ async function sendGenericTemplateMessage({
     const smsFallbackDisabledForIncidencia =
       isIncidenciaMessageType(cleanTrackerContext?.messageType) &&
       !isIncidenciaSmsFallbackEnabled();
+    const smsFallbackDisabledForFeedbackTemplate = isFeedbackTemplateName(cleanTemplateName);
 
-    const smsFallback = !response.ok && !smsFallbackDisabledForIncidencia
+    const smsFallback = !response.ok && !smsFallbackDisabledForIncidencia && !smsFallbackDisabledForFeedbackTemplate
       ? await maybeSendAutomaticSmsFallback({
           to: normalizedTo,
           message: smsFallbackMessage,
@@ -6585,7 +6594,13 @@ async function sendGenericTemplateMessage({
             status: "skipped_for_incidencia",
             reason: "sms_fallback_disabled_for_incidencia"
           }
-        : null);
+        : (!response.ok && smsFallbackDisabledForFeedbackTemplate
+          ? {
+              attempted: false,
+              status: "skipped_for_feedback_template",
+              reason: "sms_fallback_disabled_for_feedback_template"
+            }
+          : null));
 
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null
@@ -6770,7 +6785,8 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
       bodyVariables: [customerName, storeName]
     });
 
-    const smsFallback = !response.ok
+    const smsFallbackDisabledForFeedbackTemplate = isFeedbackTemplateName(templateName);
+    const smsFallback = !response.ok && !smsFallbackDisabledForFeedbackTemplate
       ? await maybeSendAutomaticSmsFallback({
           to,
           message: smsFallbackMessage,
@@ -6779,7 +6795,13 @@ app.post("/api/templates/send-feedback-request", async (req, res) => {
           waStatus: `failed_${response.status}`,
           waResponse: responseBody
         })
-      : null;
+      : (!response.ok && smsFallbackDisabledForFeedbackTemplate
+        ? {
+            attempted: false,
+            status: "skipped_for_feedback_template",
+            reason: "sms_fallback_disabled_for_feedback_template"
+          }
+        : null);
 
     const finalBody =
       notionWarning && typeof responseBody === "object" && responseBody !== null

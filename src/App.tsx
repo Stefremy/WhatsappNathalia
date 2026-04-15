@@ -1182,6 +1182,7 @@ function App() {
     }
   });
   const [notificacaoSendingKey, setNotificacaoSendingKey] = useState("");
+  const [trackerSmsSendingKey, setTrackerSmsSendingKey] = useState("");
   const [notificacaoSentKeys, setNotificacaoSentKeys] = useState<Record<string, true>>(() => {
     try {
       return JSON.parse(localStorage.getItem("wa_notificacao_sent_keys") || "{}") as Record<string, true>;
@@ -2109,6 +2110,154 @@ function App() {
     } finally {
       if (shipmentKey) {
         setNotificacaoSendingKey("");
+      }
+    }
+  }
+
+  function buildNotificacaoEnvioSmsText(
+    recipientInput: string,
+    senderInput: string,
+    trackingInput: string
+  ) {
+    const recipient = String(recipientInput || "").trim() || "cliente";
+    const sender = String(senderInput || "").trim() || "loja";
+    const tracking = String(trackingInput || "").trim() || "-";
+
+    return [
+      "A sua encomenda já está a caminho.",
+      `Olá, ${recipient}, seu pedido da ${sender} está em transporte.`,
+      "",
+      `Numero de tracking: ${tracking}`,
+      "",
+      "Vamos fornecer uma atualização quando a tua encomenda for entregue.",
+      "",
+      "Se este envio for à cobrança, por favor tenha o montante exato disponível.",
+      "Um adulto deve estar em casa para aceitar este pacote."
+    ].join("\n");
+  }
+
+  function buildNotificacaoIncidenciaSmsText(
+    recipientInput: string,
+    senderInput: string,
+    trackingInput: string
+  ) {
+    const recipient = String(recipientInput || "").trim() || "cliente";
+    const sender = String(senderInput || "").trim() || "loja";
+    const tracking = String(trackingInput || "").trim() || "-";
+
+    return [
+      `Olá ${recipient}, houve um atraso/problema na entrega da sua encomenda nº ${tracking}.`,
+      `*Encomenda da loja ${sender}*`,
+      "Estamos a trabalhar para resolver o problema o mais rapidamente possível.",
+      "Lamentamos qualquer inconveniente.",
+      "Enviaremos o estado atualizado da entrega assim que possível."
+    ].join("\n");
+  }
+
+  function extractSenderFromTrackerMessage(messageInput: string, trackingInput: string) {
+    const message = String(messageInput || "");
+    const tracking = String(trackingInput || "").trim();
+    const pipeParts = message
+      .split("|")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (pipeParts.length >= 2) {
+      let candidate = pipeParts[1];
+      if (tracking && candidate.includes(tracking)) {
+        candidate = candidate.replace(tracking, "").trim();
+      }
+      return candidate;
+    }
+
+    return "";
+  }
+
+  function findInDistributionShipmentByTracking(trackingInput: string) {
+    const tracking = String(trackingInput || "").trim().toLowerCase();
+    if (!tracking) return null;
+
+    return inDistributionRows.find((item) => {
+      const parcelId = String(item.parcelId || "").trim().toLowerCase();
+      const providerTracking = String(item.providerTrackingCode || "").trim().toLowerCase();
+      return parcelId === tracking || providerTracking === tracking;
+    }) || null;
+  }
+
+  async function sendNotificacaoEnvioSms(options: {
+    to: string;
+    recipient: string;
+    sender: string;
+    tracking: string;
+    templateName?: string;
+  }) {
+    const to = digitsOnly(options.to || "");
+    const recipient = String(options.recipient || "").trim();
+    const sender = String(options.sender || "").trim();
+    const tracking = String(options.tracking || "").trim();
+    const templateName = String(options.templateName || "").trim().toLowerCase();
+
+    if (!to) {
+      setSmsStatus("Número inválido");
+      setSmsResponse("Não foi possível enviar SMS: número do cliente inválido.");
+      return;
+    }
+
+    const message = templateName === "notificacao_auto_incidencia"
+      ? buildNotificacaoIncidenciaSmsText(recipient, sender, tracking)
+      : buildNotificacaoEnvioSmsText(recipient, sender, tracking);
+    setSmsTo(to);
+    setSmsText(message);
+    setSmsLoading(true);
+    setSmsStatus("A enviar SMS...");
+
+    try {
+      const response = await fetch(apiUrl("/api/sms/clicksend"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, message })
+      });
+
+      const data = await parseResponse(response);
+      setSmsStatus(response.ok ? "SMS enviado ✓" : `Falhou (${response.status})`);
+      setSmsResponse(JSON.stringify(data, null, 2));
+    } catch {
+      setSmsStatus("Erro de rede");
+      setSmsResponse("Não foi possível contactar o backend SMS.");
+    } finally {
+      setSmsLoading(false);
+    }
+  }
+
+  async function sendNotificacaoSmsFromTrackerRow(row: {
+    id: string;
+    clientPhone: string;
+    clientName: string;
+    parcelId: string;
+    message: string;
+    messageTitle: string;
+  }) {
+    const actionKey = String(row.id || "");
+    if (actionKey) {
+      setTrackerSmsSendingKey(actionKey);
+    }
+
+    try {
+      const shipment = findInDistributionShipmentByTracking(String(row.parcelId || ""));
+      const recipient = String(shipment?.recipient || row.clientName || "").trim();
+      const sender = String(shipment?.sender || extractSenderFromTrackerMessage(row.message, row.parcelId) || "").trim();
+      const tracking = String(shipment?.providerTrackingCode || shipment?.parcelId || row.parcelId || "").trim();
+
+      await sendNotificacaoEnvioSms({
+        to: String(shipment?.finalClientPhone || row.clientPhone || ""),
+        recipient,
+        sender,
+        tracking,
+        templateName: row.messageTitle
+      });
+    } finally {
+      if (actionKey) {
+        setTrackerSmsSendingKey("");
       }
     }
   }
@@ -4611,15 +4760,22 @@ function App() {
   }
 
   async function sendFeedbackSurveyNow() {
+    const feedbackBodyVariables = [
+      String(feedbackPreviewBodyVars[0] || "").trim(),
+      String(feedbackPreviewBodyVars[1] || "").trim()
+    ];
+    const feedbackButtonUrlVariable = String(genericButtonUrlVariable || feedbackPreviewBodyVars[2] || "").trim();
+
     const sendResult = await executeGenericTemplateSend({
       allowSchedule: false,
       overrides: {
         templateName: feedbackTemplateName,
         languageCode: feedbackLanguage,
-        requiredIndexes: feedbackRequiredBodyIndexes,
+        requiredIndexes: [1, 2],
         templateBody: selectedFeedbackTemplateBody,
         needsUrlButtonVariable: feedbackNeedsUrlButtonVariable,
-        bodyVariables: feedbackPreviewBodyVars
+        bodyVariables: feedbackBodyVariables,
+        buttonUrlVariable: feedbackNeedsUrlButtonVariable ? feedbackButtonUrlVariable : ""
       }
     });
 
@@ -4644,9 +4800,11 @@ function App() {
 
     const shopName = String(row.sender || row.recipient || "").trim();
     const tracking = String(row.providerTrackingCode || row.parcelId || "").trim();
-    const requiredMax = feedbackRequiredBodyIndexes.length > 0 ? Math.max(...feedbackRequiredBodyIndexes) : 0;
-    const varsLength = Math.max(2, requiredMax, feedbackPreviewBodyVars.length);
-    const variables = Array.from({ length: varsLength }, (_, index) => String(feedbackPreviewBodyVars[index] || "").trim());
+    const variables = [
+      String(feedbackPreviewBodyVars[0] || "").trim(),
+      String(feedbackPreviewBodyVars[1] || "").trim()
+    ];
+    const feedbackButtonUrlVariable = String(genericButtonUrlVariable || feedbackPreviewBodyVars[2] || "").trim();
     variables[0] = tracking || variables[0] || "";
     variables[1] = shopName || variables[1] || "";
 
@@ -4663,9 +4821,10 @@ function App() {
       overrides: {
         to: targetTo,
         bodyVariables: variables,
+        buttonUrlVariable: feedbackNeedsUrlButtonVariable ? feedbackButtonUrlVariable : "",
         templateName: feedbackTemplateName,
         languageCode: feedbackLanguage,
-        requiredIndexes: feedbackRequiredBodyIndexes,
+        requiredIndexes: [1, 2],
         templateBody: selectedFeedbackTemplateBody,
         needsUrlButtonVariable: feedbackNeedsUrlButtonVariable
       }
@@ -6373,7 +6532,7 @@ function App() {
                         notificacaoRows.map((row, index) => (
                           <tr key={`in-distribution-${row.parcelId || row.providerTrackingCode || index}-${index}`}>
                             <td>
-                              <div className="tracker-pudo-actions">
+                              <div className="tracker-pudo-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.35rem" }}>
                                 <button
                                   type="button"
                                   className="btn btn-secondary tms-mini-btn"
@@ -7437,14 +7596,26 @@ function App() {
                           <td>{row.messageTitle}</td>
                           <td>{row.incidentReason || "-"}</td>
                           <td>
-                            <button
-                              type="button"
-                              className="btn btn-secondary tms-mini-btn"
-                              onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId, row.messageType, row.message)}
-                              disabled={!digitsOnly(row.clientPhone || "")}
-                            >
-                              Preencher template
-                            </button>
+                            <div className="tracker-pudo-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.35rem" }}>
+                              <button
+                                type="button"
+                                className="btn btn-secondary tms-mini-btn"
+                                onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId, row.messageType, row.message)}
+                                disabled={!digitsOnly(row.clientPhone || "")}
+                              >
+                                Preencher template
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary tms-mini-btn"
+                                onClick={() => {
+                                  void sendNotificacaoSmsFromTrackerRow(row);
+                                }}
+                                disabled={!digitsOnly(row.clientPhone || "") || smsLoading || trackerSmsSendingKey === String(row.id || "")}
+                              >
+                                {trackerSmsSendingKey === String(row.id || "") ? "A enviar SMS..." : "Preencher SMS"}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
