@@ -6213,27 +6213,23 @@ function App() {
                             ? "Atualizar incidencias"
                             : "Atualizar em transporte"}
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
-                      setNotificacaoRowsLimit(nextLimit);
-                      if (notificacaoEnvioSection === "distribuicao") {
-                        loadInDistributionShipments(1);
-                      } else if (notificacaoEnvioSection === "entregue") {
+                  {notificacaoEnvioSection === "entregue" ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
+                        setNotificacaoRowsLimit(nextLimit);
                         loadDeliveredShipments(1);
-                      } else if (notificacaoEnvioSection === "incidencias") {
-                        loadIncidenciasShipments(1);
-                      } else {
-                        loadInTransportShipments(1);
-                      }
-                    }}
-                    disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
-                  >
-                    {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
-                  </button>
-                  <span className="status">rows: {notificacaoRowsLimit}</span>
+                      }}
+                      disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
+                    >
+                      {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
+                    </button>
+                  ) : (
+                    <span className="status">Rows fixas: {notificacaoPageSize}</span>
+                  )}
+                  <span className="status">rows: {notificacaoPageSize}</span>
                   <button
                     type="button"
                     className="btn btn-secondary"
@@ -6324,27 +6320,23 @@ function App() {
                 {notificacaoError ? <p className="status">{notificacaoError}</p> : null}
 
                 <div className="tracker-actions" style={{ marginBottom: "0.75rem" }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
-                      setNotificacaoRowsLimit(nextLimit);
-                      if (notificacaoEnvioSection === "distribuicao") {
-                        loadInDistributionShipments(1);
-                      } else if (notificacaoEnvioSection === "entregue") {
+                  {notificacaoEnvioSection === "entregue" ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        const nextLimit = Math.min(1000, notificacaoRowsLimit + 50);
+                        setNotificacaoRowsLimit(nextLimit);
                         loadDeliveredShipments(1);
-                      } else if (notificacaoEnvioSection === "incidencias") {
-                        loadIncidenciasShipments(1);
-                      } else {
-                        loadInTransportShipments(1);
-                      }
-                    }}
-                    disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
-                  >
-                    {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
-                  </button>
-                  <span className="status">Rows por carregamento: {notificacaoRowsLimit}</span>
+                      }}
+                      disabled={notificacaoLoading || notificacaoRowsLimit >= 1000}
+                    >
+                      {notificacaoRowsLimit >= 1000 ? "Limite máximo" : "Carregar +50"}
+                    </button>
+                  ) : (
+                    <span className="status">Rows fixas: {notificacaoPageSize}</span>
+                  )}
+                  <span className="status">Rows por carregamento: {notificacaoPageSize}</span>
                 </div>
 
                 <div className="tracker-table-wrap delivered-scroll-wrap delivered-table-wrap">
