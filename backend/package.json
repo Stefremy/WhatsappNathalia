@@ -10,7 +10,7 @@
   "dependencies": {
     "@notionhq/client": "^2.3.0",
     "@supabase/supabase-js": "^2.99.2",
-    "@vercel/blob": "^2.3.0",
+    "@vercel/blob": "^2.3.3",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.1",
