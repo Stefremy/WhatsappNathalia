@@ -1168,6 +1168,15 @@ function App() {
     texto2: ""
   });
   const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices">("workspace");
+  // Incidências WhatsApp inbox (2nd number)
+  const [incChatLogs, setIncChatLogs] = useState<Array<{
+    id: string; created_at: string; direction: string; channel: string;
+    to_number: string; contact_name: string | null; message_text: string | null;
+    status: string | null; api_message_id: string | null;
+  }>>([]);
+  const [incChatLoading, setIncChatLoading] = useState(false);
+  const [incChatError, setIncChatError] = useState("");
+  const [incChatTab, setIncChatTab] = useState<"chat" | "incidencias">("chat");
   const [cttDateFrom, setCttDateFrom] = useState(() => {
     const end = new Date();
     const start = new Date(end);
@@ -2820,11 +2829,33 @@ function App() {
           text?: string;
           mediaType?: string;
           mediaId?: string;
+          channel?: string;
           status?: string;
         };
 
         const fromDigits = digitsOnly(String(data.from || "").trim());
         if (!fromDigits) {
+          return;
+        }
+
+        // If this came from the incidências number, add to incChatLogs and skip main chat
+        if (String(data.channel || "").trim() === "chat_incidencias") {
+          const inboundApiId = String(data.messageId || "").trim();
+          setIncChatLogs((prev) => {
+            if (inboundApiId && prev.some((r) => r.api_message_id === inboundApiId)) return prev;
+            const newRow = {
+              id: `sse-${inboundApiId || Date.now()}`,
+              created_at: new Date().toISOString(),
+              direction: "in",
+              channel: "chat_incidencias",
+              to_number: fromDigits,
+              contact_name: String(data.contactName || "").trim() || null,
+              message_text: String(data.text || "[mensagem recebida]").trim(),
+              status: "received",
+              api_message_id: inboundApiId || null
+            };
+            return [newRow, ...prev];
+          });
           return;
         }
 
@@ -4321,6 +4352,25 @@ function App() {
     void fetchMetaTemplates();
   }, [activeView, metaTemplatesLoading, metaTemplates.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load incidências chat inbox from 2nd WhatsApp number
+  function loadIncChatLogs() {
+    setIncChatLoading(true);
+    setIncChatError("");
+    fetch(apiUrl("/api/messages/incidencias?limit=100"))
+      .then((r) => r.json())
+      .then((body) => {
+        setIncChatLogs(Array.isArray(body?.data) ? body.data : []);
+      })
+      .catch((err) => setIncChatError(err instanceof Error ? err.message : "Erro ao carregar mensagens."))
+      .finally(() => setIncChatLoading(false));
+  }
+
+  useEffect(() => {
+    if (activeView === "workspace" && incChatTab === "incidencias" && incChatLogs.length === 0 && !incChatLoading) {
+      loadIncChatLogs();
+    }
+  }, [activeView, incChatTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (activeView !== "notificacao-envio") {
       return;
@@ -5234,7 +5284,67 @@ function App() {
           com autenticação Bearer e payload JSON, encaminhado pelo backend da equipa.
         </p>
 
-        <div className="wa-console">
+        {/* Chat inbox tab switcher */}
+        <div className="inc-chat-tabs">
+          <button
+            type="button"
+            className={`inc-chat-tab${incChatTab === "chat" ? " active" : ""}`}
+            onClick={() => setIncChatTab("chat")}
+          >
+            💬 Chat Principal
+          </button>
+          <button
+            type="button"
+            className={`inc-chat-tab${incChatTab === "incidencias" ? " active" : ""}`}
+            onClick={() => {
+              setIncChatTab("incidencias");
+              if (incChatLogs.length === 0 && !incChatLoading) loadIncChatLogs();
+            }}
+          >
+            ⚠️ Respostas Incidências
+            {incChatLogs.filter((r) => r.direction === "in").length > 0
+              ? <span className="inc-chat-badge">{incChatLogs.filter((r) => r.direction === "in").length}</span>
+              : null}
+          </button>
+        </div>
+
+        {/* Incidências chat inbox */}
+        {incChatTab === "incidencias" ? (
+          <div className="inc-chat-box">
+            <div className="inc-chat-box-header">
+              <span>📱 Número incidências: +351 923 354 371</span>
+              <button type="button" className="btn btn-secondary" onClick={loadIncChatLogs} disabled={incChatLoading}>
+                {incChatLoading ? "A carregar..." : "Atualizar"}
+              </button>
+            </div>
+            {incChatError ? <p className="status">{incChatError}</p> : null}
+            {incChatLogs.length === 0 && !incChatLoading ? (
+              <p className="inc-chat-empty">Ainda não há mensagens recebidas neste número.</p>
+            ) : (
+              <div className="inc-chat-messages">
+                {incChatLogs.map((row) => (
+                  <article
+                    key={row.id}
+                    className={`inc-chat-message inc-chat-message-${row.direction === "in" ? "in" : "out"}`}
+                  >
+                    <header>
+                      <strong>
+                        {row.direction === "in"
+                          ? (row.contact_name || row.to_number || "Cliente")
+                          : "📤 Envio automático"}
+                      </strong>
+                      <span>{new Date(row.created_at).toLocaleString("pt-PT")}</span>
+                    </header>
+                    <p>{row.message_text || row.channel || "[sem conteúdo]"}</p>
+                    {row.status ? <span className={`status sent-history-status sent-history-status-${row.status === "received" || row.status === "accepted" ? "ok" : "warn"}`}>{row.status}</span> : null}
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <div className="wa-console" style={incChatTab === "incidencias" ? { display: "none" } : {}}>
           <aside className="wa-sidebar">
             <div className="wa-search">
               <input
