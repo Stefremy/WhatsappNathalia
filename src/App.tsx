@@ -1177,6 +1177,13 @@ function App() {
   const [incChatLoading, setIncChatLoading] = useState(false);
   const [incChatError, setIncChatError] = useState("");
   const [incChatTab, setIncChatTab] = useState<"chat" | "incidencias">("chat");
+  const [incActivePhone, setIncActivePhone] = useState("");
+  const [incReplyText, setIncReplyText] = useState("");
+  const [incReplySending, setIncReplySending] = useState(false);
+  const [incReplyStatus, setIncReplyStatus] = useState("");
+  const [incEmojiOpen, setIncEmojiOpen] = useState(false);
+  const [incComposeMedia, setIncComposeMedia] = useState<File | null>(null);
+  const [incComposeMediaLoading, setIncComposeMediaLoading] = useState(false);
   const [cttDateFrom, setCttDateFrom] = useState(() => {
     const end = new Date();
     const start = new Date(end);
@@ -2838,7 +2845,7 @@ function App() {
           return;
         }
 
-        // If this came from the incidências number, add to incChatLogs and skip main chat
+        // If this came from the incidências number (inbound reply from client)
         if (String(data.channel || "").trim() === "chat_incidencias") {
           const inboundApiId = String(data.messageId || "").trim();
           setIncChatLogs((prev) => {
@@ -2856,6 +2863,8 @@ function App() {
             };
             return [newRow, ...prev];
           });
+          // Auto-select this contact in inc chat
+          setIncActivePhone((prev) => prev || fromDigits);
           return;
         }
 
@@ -4356,13 +4365,126 @@ function App() {
   function loadIncChatLogs() {
     setIncChatLoading(true);
     setIncChatError("");
-    fetch(apiUrl("/api/messages/incidencias?limit=100"))
+    fetch(apiUrl("/api/messages/incidencias?limit=200"))
       .then((r) => r.json())
       .then((body) => {
         setIncChatLogs(Array.isArray(body?.data) ? body.data : []);
       })
       .catch((err) => setIncChatError(err instanceof Error ? err.message : "Erro ao carregar mensagens."))
       .finally(() => setIncChatLoading(false));
+  }
+
+  // Contacts derived from incidências logs (unique phones, sorted by last message)
+  const incContacts = useMemo(() => {
+    const byPhone = new Map<string, { phone: string; name: string; lastText: string; lastAt: string; unread: number }>();
+    for (const row of [...incChatLogs].reverse()) {
+      const phone = digitsOnly(String(row.to_number || ""));
+      if (!phone) continue;
+      const existing = byPhone.get(phone);
+      if (!existing) {
+        byPhone.set(phone, {
+          phone,
+          name: String(row.contact_name || "").trim() || resolveContactName(phone, savedContacts),
+          lastText: String(row.message_text || "").trim(),
+          lastAt: new Date(row.created_at).toLocaleString("pt-PT"),
+          unread: row.direction === "in" ? 1 : 0
+        });
+      } else {
+        existing.lastText = String(row.message_text || "").trim();
+        existing.lastAt = new Date(row.created_at).toLocaleString("pt-PT");
+        if (row.direction === "in") existing.unread += 1;
+      }
+    }
+    return Array.from(byPhone.values()).reverse();
+  }, [incChatLogs, savedContacts]);
+
+  // Messages for the active incidências contact
+  const incActiveMessages = useMemo(() => {
+    if (!incActivePhone) return [];
+    return incChatLogs
+      .filter((r) => digitsOnly(String(r.to_number || "")) === incActivePhone)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }, [incActivePhone, incChatLogs]);
+
+  async function sendIncReply() {
+    if (!incActivePhone || !incReplyText.trim() || incReplySending) return;
+    setIncReplySending(true);
+    setIncReplyStatus("A enviar...");
+    try {
+      const to = incActivePhone.startsWith("+") ? incActivePhone : `+${incActivePhone}`;
+      const res = await fetch(apiUrl("/api/messages/incidencias/send"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, text: incReplyText.trim() })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIncReplyStatus(`Erro: ${body?.error || res.status}`);
+        return;
+      }
+      setIncReplyStatus("Enviado ✓");
+      setIncReplyText("");
+      // Optimistic update + reload
+      const newRow = {
+        id: `opt-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        direction: "out",
+        channel: "chat_incidencias",
+        to_number: digitsOnly(incActivePhone),
+        contact_name: null,
+        message_text: incReplyText.trim(),
+        status: "accepted",
+        api_message_id: String(body?.messages?.[0]?.id || "")
+      };
+      setIncChatLogs((prev) => [newRow, ...prev]);
+      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 2500);
+    } catch (err) {
+      setIncReplyStatus(err instanceof Error ? err.message : "Erro ao enviar.");
+    } finally {
+      setIncReplySending(false);
+    }
+  }
+
+  async function sendIncMediaMessage() {
+    if (!incComposeMedia || !incActivePhone || incComposeMediaLoading) return;
+    setIncComposeMediaLoading(true);
+    setIncReplyStatus("A enviar media...");
+    try {
+      const to = incActivePhone.startsWith("+") ? incActivePhone : `+${incActivePhone}`;
+      const formData = new FormData();
+      formData.append("file", incComposeMedia);
+      formData.append("to", to);
+      const res = await fetch(apiUrl("/api/messages/incidencias/send-media"), {
+        method: "POST",
+        body: formData
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIncReplyStatus(`Erro: ${body?.error || res.status}`);
+        return;
+      }
+      setIncReplyStatus("Enviado ✓");
+      const mediaLabel = `[📎 ${incComposeMedia.name}]`;
+      const newRow = {
+        id: `opt-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        direction: "out",
+        channel: "chat_incidencias",
+        to_number: digitsOnly(incActivePhone),
+        contact_name: null,
+        message_text: mediaLabel,
+        status: "accepted",
+        api_message_id: String(body?.messages?.[0]?.id || ""),
+        payload: {}
+      };
+      setIncChatLogs((prev) => [newRow, ...prev]);
+      setIncComposeMedia(null);
+      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 2500);
+    } catch (err) {
+      setIncReplyStatus(err instanceof Error ? err.message : "Erro ao enviar media.");
+    } finally {
+      setIncComposeMediaLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -5308,39 +5430,174 @@ function App() {
           </button>
         </div>
 
-        {/* Incidências chat inbox */}
+        {/* Incidências full chat box */}
         {incChatTab === "incidencias" ? (
-          <div className="inc-chat-box">
-            <div className="inc-chat-box-header">
-              <span>📱 Número incidências: +351 923 354 371</span>
-              <button type="button" className="btn btn-secondary" onClick={loadIncChatLogs} disabled={incChatLoading}>
-                {incChatLoading ? "A carregar..." : "Atualizar"}
-              </button>
-            </div>
-            {incChatError ? <p className="status">{incChatError}</p> : null}
-            {incChatLogs.length === 0 && !incChatLoading ? (
-              <p className="inc-chat-empty">Ainda não há mensagens recebidas neste número.</p>
-            ) : (
-              <div className="inc-chat-messages">
-                {incChatLogs.map((row) => (
-                  <article
-                    key={row.id}
-                    className={`inc-chat-message inc-chat-message-${row.direction === "in" ? "in" : "out"}`}
+          <div className="wa-console inc-chat-console">
+            {/* Sidebar — lista de contactos */}
+            <aside className="wa-sidebar">
+              <div className="wa-search">
+                <span style={{ fontSize: "0.78rem", color: "var(--muted)", padding: "0 0.25rem" }}>
+                  📱 +351 923 354 371
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: "0.4rem", padding: "0.4rem 0.6rem" }}>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: "0.78rem", padding: "0.3rem 0.7rem" }}
+                  onClick={loadIncChatLogs} disabled={incChatLoading}>
+                  {incChatLoading ? "⟳" : "↻ Atualizar"}
+                </button>
+              </div>
+              <div className="wa-contact-list">
+                {incContacts.length === 0 && !incChatLoading ? (
+                  <div className="wa-empty-contacts">Sem respostas recebidas ainda.</div>
+                ) : null}
+                {incContacts.map((c) => (
+                  <button
+                    key={c.phone}
+                    type="button"
+                    className={`wa-contact${incActivePhone === c.phone ? " active" : ""}`}
+                    onClick={() => setIncActivePhone(c.phone)}
                   >
-                    <header>
-                      <strong>
-                        {row.direction === "in"
-                          ? (row.contact_name || row.to_number || "Cliente")
-                          : "📤 Envio automático"}
-                      </strong>
-                      <span>{new Date(row.created_at).toLocaleString("pt-PT")}</span>
-                    </header>
-                    <p>{row.message_text || row.channel || "[sem conteúdo]"}</p>
-                    {row.status ? <span className={`status sent-history-status sent-history-status-${row.status === "received" || row.status === "accepted" ? "ok" : "warn"}`}>{row.status}</span> : null}
-                  </article>
+                    <span className="wa-contact-avatar">{(c.name || c.phone).slice(0, 2).toUpperCase()}</span>
+                    <span className="wa-contact-meta">
+                      <strong>{c.name || c.phone}</strong>
+                      <small>{c.lastText || "Sem mensagens"}</small>
+                    </span>
+                    <span className="wa-contact-right">
+                      <small>{c.lastAt}</small>
+                      {c.unread > 0 ? <b>{c.unread}</b> : null}
+                    </span>
+                  </button>
                 ))}
               </div>
-            )}
+            </aside>
+
+            {/* Chat thread + composer */}
+            <div className="wa-phone">
+              <header className="wa-phone-header">
+                <div className="wa-avatar" style={{ background: "#e53e3e" }}>⚠️</div>
+                <div>
+                  <strong>
+                    {incActivePhone
+                      ? (resolveContactName(incActivePhone, savedContacts) || incActivePhone)
+                      : "Seleciona um contacto"}
+                  </strong>
+                  <small>{incActivePhone ? `+${incActivePhone}` : "Respostas às notificações de incidência"}</small>
+                </div>
+                <div className="wa-header-right">
+                  {incChatError ? <span className="status">{incChatError}</span> : null}
+                </div>
+              </header>
+
+              <main className="wa-thread">
+                {!incActivePhone ? (
+                  <div style={{ margin: "auto", textAlign: "center", color: "var(--muted)", padding: "2rem" }}>
+                    <p>👈 Seleciona um contacto para ver a conversa</p>
+                  </div>
+                ) : incActiveMessages.length === 0 ? (
+                  <div style={{ margin: "auto", textAlign: "center", color: "var(--muted)", padding: "2rem" }}>
+                    <p>Sem mensagens nesta conversa.</p>
+                  </div>
+                ) : (
+                  incActiveMessages.map((row) => {
+                    const mediaInfo = extractInboundMediaFromLog(row as unknown as SharedLogItem);
+                    const mediaUrl = mediaInfo.mediaId ? apiUrl(`/api/media/${encodeURIComponent(mediaInfo.mediaId)}`) : "";
+                    const mediaType = mediaInfo.mediaType;
+                    return (
+                      <article key={row.id} className={`wa-msg ${row.direction === "in" ? "in" : "out"}`}>
+                        {mediaUrl && (mediaType === "image" || mediaType === "sticker") ? (
+                          <img className="wa-msg-media" src={mediaUrl} alt={mediaType} loading="lazy" />
+                        ) : null}
+                        {mediaUrl && mediaType === "video" ? (
+                          <video className="wa-msg-media" src={mediaUrl} controls preload="metadata" />
+                        ) : null}
+                        {mediaUrl && mediaType === "audio" ? (
+                          <audio className="wa-msg-audio" src={mediaUrl} controls preload="metadata" />
+                        ) : null}
+                        {mediaUrl && mediaType === "document" ? (
+                          <a className="wa-msg-doc" href={mediaUrl} target="_blank" rel="noreferrer">Abrir documento</a>
+                        ) : null}
+                        <p>{row.message_text || "[sem texto]"}</p>
+                        <time>
+                          {new Date(row.created_at).toLocaleString("pt-PT")}
+                          {row.direction === "out" ? (
+                            <span className={`wa-tick${row.status === "read" ? " wa-tick-read" : row.status === "delivered" ? " wa-tick-delivered" : ""}`}>
+                              {row.status === "read" ? " ✓✓" : row.status === "delivered" ? " ✓✓" : " ✓"}
+                            </span>
+                          ) : null}
+                        </time>
+                      </article>
+                    );
+                  })
+                )}
+              </main>
+
+              <form className="wa-compose" onSubmit={(e) => { e.preventDefault(); void sendIncReply(); }}>
+                <label>
+                  Responder a {incActivePhone ? `+${incActivePhone}` : "—"}
+                  <div className="wa-message-bar">
+                    <div className="wa-emoji-wrap">
+                      <button
+                        type="button"
+                        className="wa-emoji"
+                        onClick={() => setIncEmojiOpen((o) => !o)}
+                        aria-label="Abrir seletor de emoji"
+                        title="Emoji"
+                        disabled={!incActivePhone}
+                      >🙂</button>
+                      {incEmojiOpen ? (
+                        <div className="wa-emoji-picker" role="menu">
+                          {"😀 😅 😂 😊 😉 😍 😎 🙌 👍 👌 ✅ 🎉 ❤️ ⚠️ 🚛 📦 🔧 📋 🕐 📞".split(" ").map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className="wa-emoji-item"
+                              onClick={() => { setIncReplyText((t) => t + emoji); setIncEmojiOpen(false); }}
+                            >{emoji}</button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <textarea
+                      value={incReplyText}
+                      onChange={(e) => setIncReplyText(e.target.value)}
+                      rows={2}
+                      placeholder={incActivePhone ? "Escreve a resposta..." : "Seleciona um contacto primeiro"}
+                      disabled={!incActivePhone}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendIncReply(); }
+                      }}
+                    />
+                    <label className="wa-attach-btn" title="Anexar ficheiro" style={{ display: "grid", placeItems: "center", width: 40, height: 40, borderRadius: 10, cursor: "pointer", fontSize: "1rem" }}>
+                      📎
+                      <input
+                        type="file"
+                        className="wa-attach-input"
+                        accept="image/*,video/*,audio/*,.pdf,.doc,.docx"
+                        style={{ display: "none" }}
+                        onChange={(e) => { setIncComposeMedia(e.target.files?.[0] || null); e.target.value = ""; }}
+                        disabled={!incActivePhone}
+                      />
+                    </label>
+                  </div>
+                </label>
+                {incComposeMedia ? (
+                  <div className="wa-compose-file-bar">
+                    <span className="wa-compose-file-name">📎 {incComposeMedia.name}</span>
+                    <button
+                      type="button"
+                      className="wa-send"
+                      onClick={() => void sendIncMediaMessage()}
+                      disabled={incComposeMediaLoading}
+                    >{incComposeMediaLoading ? "A enviar..." : "Enviar ficheiro"}</button>
+                    <button type="button" className="wa-attach-clear" onClick={() => setIncComposeMedia(null)}>×</button>
+                  </div>
+                ) : null}
+                {incReplyStatus ? <span className="status">{incReplyStatus}</span> : null}
+                <button className="wa-send" type="submit" disabled={!incActivePhone || !incReplyText.trim() || incReplySending}>
+                  {incReplySending ? "A enviar..." : "Enviar resposta"}
+                </button>
+              </form>
+            </div>
           </div>
         ) : null}
 

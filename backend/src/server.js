@@ -8286,6 +8286,157 @@ app.get("/api/logs", async (req, res) => {
 });
 
 // ── Incidências chat messages (inbound from the 2nd WhatsApp number) ────────
+
+// Send a plain text reply FROM the incidências number
+app.post("/api/messages/incidencias/send", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  try {
+    const to = normalizeRecipient(req.body?.to || "");
+    const text = String(req.body?.text || "").trim();
+    if (!to || !text) {
+      return res.status(400).json({ error: "Fields 'to' and 'text' are required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = String(process.env.INC_WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    const token = String(process.env.INC_WHATSAPP_ACCESS_TOKEN || "").trim();
+
+    if (!phoneNumberId || !token) {
+      return res.status(500).json({ error: "INC_WHATSAPP_PHONE_NUMBER_ID or INC_WHATSAPP_ACCESS_TOKEN not configured." });
+    }
+
+    const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { body: text }
+      })
+    });
+
+    const responseBody = await response.json().catch(() => ({}));
+    const messageId = responseBody?.messages?.[0]?.id || "";
+
+    await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "chat_incidencias",
+        to,
+        messageText: text,
+        status: response.ok ? "accepted" : `failed_${response.status}`,
+        apiMessageId: messageId,
+        payload: responseBody
+      })
+    );
+
+    // Broadcast to SSE so UI updates instantly
+    broadcastSSE("inbound", {
+      messageId,
+      from: to,
+      text,
+      channel: "chat_incidencias_out",
+      status: response.ok ? "accepted" : "failed"
+    });
+
+    return res.status(response.ok ? 200 : response.status).json(responseBody);
+  } catch (error) {
+    warnSoftError("messages.incidencias.send", error, { route: "/api/messages/incidencias/send", requestId });
+    return res.status(500).json({ error: "Failed to send incidências message", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
+// ── Incidências media send ────────────────────────────────────────────────
+app.post("/api/messages/incidencias/send-media", upload.single("file"), async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  try {
+    const to = normalizeRecipient(req.body?.to || "");
+    if (!req.file || !to) {
+      return res.status(400).json({ error: "Fields 'file' (multipart) and 'to' are required." });
+    }
+
+    const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
+    const phoneNumberId = String(process.env.INC_WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    const token = String(process.env.INC_WHATSAPP_ACCESS_TOKEN || "").trim();
+
+    if (!phoneNumberId || !token) {
+      return res.status(500).json({ error: "INC_WHATSAPP_PHONE_NUMBER_ID or INC_WHATSAPP_ACCESS_TOKEN not configured." });
+    }
+
+    // Step 1 – upload media to Meta via INC number
+    const uploadMultipart = new FormData();
+    const blob = new Blob([req.file.buffer], { type: req.file.mimetype || "application/octet-stream" });
+    uploadMultipart.append("messaging_product", "whatsapp");
+    uploadMultipart.append("file", blob, req.file.originalname || "upload.bin");
+
+    const uploadRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: uploadMultipart
+    });
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json();
+      return res.status(uploadRes.status).json({ error: "Media upload failed", details: err });
+    }
+    const uploadBody = await uploadRes.json();
+    const mediaId = String(uploadBody?.id || "").trim();
+    if (!mediaId) {
+      return res.status(500).json({ error: "Media upload returned no ID" });
+    }
+
+    // Step 2 – determine media type from mime
+    const mime = req.file.mimetype || "";
+    let mediaType = "document";
+    if (mime.startsWith("image/")) mediaType = "image";
+    else if (mime.startsWith("video/")) mediaType = "video";
+    else if (mime.startsWith("audio/")) mediaType = "audio";
+
+    // Step 3 – send message
+    const sendPayload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: mediaType,
+      [mediaType]: { id: mediaId, filename: mediaType === "document" ? (req.file.originalname || "file") : undefined }
+    };
+    const sendRes = await fetch(`https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(sendPayload)
+    });
+    const sendBody = await sendRes.json();
+    const messageId = sendBody?.messages?.[0]?.id || "";
+
+    await safeSupabaseLog(() =>
+      createSupabaseLogRow({
+        direction: "out",
+        channel: "chat_incidencias",
+        to,
+        messageText: req.file?.originalname || "[media]",
+        status: sendRes.ok ? "accepted" : `failed_${sendRes.status}`,
+        apiMessageId: messageId,
+        payload: sendBody
+      })
+    );
+
+    broadcastSSE("inbound", {
+      messageId,
+      from: to,
+      text: `[📎 ${req.file?.originalname || "media"}]`,
+      channel: "chat_incidencias_out",
+      status: sendRes.ok ? "accepted" : "failed"
+    });
+
+    return res.status(sendRes.ok ? 200 : sendRes.status).json(sendBody);
+  } catch (error) {
+    warnSoftError("messages.incidencias.send_media", error, { route: "/api/messages/incidencias/send-media", requestId });
+    return res.status(500).json({ error: "Failed to send incidências media", details: error instanceof Error ? error.message : "Unknown error" });
+  }
+});
+
 app.get("/api/messages/incidencias", async (req, res) => {
   const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));

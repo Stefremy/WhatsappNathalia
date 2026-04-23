@@ -4446,3 +4446,133 @@ p {
   background: #f4faf6;
   margin-left: 2rem;
 }
+
+/* ── Incidências console (usa o mesmo layout wa-console) ─────────────────── */
+.inc-chat-console {
+  border: 2px solid rgba(229, 62, 62, 0.25);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.inc-chat-console .wa-phone-header .wa-avatar {
+  background: #e53e3e !important;
+  font-size: 1rem;
+}
+
+.inc-chat-console .wa-msg.in {
+  background: #fff8f8;
+  border-left: 3px solid #e53e3e;
+}
+
+/* ── Inc chat — legible text in both bubble types ───────────────────────── */
+.inc-chat-console .wa-msg.in p,
+.inc-chat-console .wa-msg.in time {
+  color: #1a202c;
+}
+
+.inc-chat-console .wa-msg.in time {
+  color: #718096;
+}
+
+.inc-chat-console .wa-msg.out p {
+  color: #e9f3ef;
+}
+
+.inc-chat-console .wa-msg.out time {
+  color: rgba(233, 243, 239, 0.75);
+}
+
+/* ── Incidências composer — light/readable overrides ────────────────────── */
+.inc-chat-console .wa-compose {
+  background: #f7f9fb;
+  border-top: 1px solid rgba(229, 62, 62, 0.18);
+}
+
+.inc-chat-console .wa-compose label {
+  color: #2d3748;
+}
+
+.inc-chat-console .wa-compose input,
+.inc-chat-console .wa-compose textarea {
+  background: #ffffff;
+  border: 1px solid #cbd5e0;
+  color: #1a202c;
+}
+
+.inc-chat-console .wa-compose input::placeholder,
+.inc-chat-console .wa-compose textarea::placeholder {
+  color: #a0aec0;
+}
+
+.inc-chat-console .wa-emoji {
+  background: rgba(229, 62, 62, 0.08);
+  border: 1px solid rgba(229, 62, 62, 0.3);
+  color: #1a202c;
+}
+
+.inc-chat-console .wa-emoji:hover {
+  background: rgba(229, 62, 62, 0.16);
+}
+
+.inc-chat-console .wa-emoji-picker {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.inc-chat-console .wa-emoji-item {
+  color: #1a202c;
+}
+
+.inc-chat-console .wa-emoji-item:hover {
+  background: rgba(229, 62, 62, 0.1);
+}
+
+.inc-chat-console .wa-send {
+  background: linear-gradient(120deg, #e53e3e, #c53030);
+  box-shadow: 0 8px 20px rgba(229, 62, 62, 0.28);
+}
+
+.inc-chat-console .wa-attach-btn {
+  background: rgba(229, 62, 62, 0.08);
+  border: 1px solid rgba(229, 62, 62, 0.3);
+  color: #c53030;
+}
+
+.inc-chat-console .wa-attach-btn:hover {
+  background: rgba(229, 62, 62, 0.16);
+}
+
+.inc-chat-console .wa-compose-file-bar {
+  background: #fff5f5;
+  border: 1px solid rgba(229, 62, 62, 0.25);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #c53030;
+}
+
+.inc-chat-console .wa-compose-file-bar .wa-attach-clear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  color: #c53030;
+}
+
+/* Atualizar button in inc sidebar */
+.inc-chat-console .btn-secondary {
+  background: rgba(229, 62, 62, 0.1);
+  border: 1px solid rgba(229, 62, 62, 0.35);
+  color: #c53030;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.inc-chat-console .btn-secondary:hover:not(:disabled) {
+  background: rgba(229, 62, 62, 0.2);
+}
