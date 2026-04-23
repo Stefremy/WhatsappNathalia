@@ -1292,6 +1292,12 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
 
       const shipmentKey = entry.shipmentKey;
       processed += 1;
+
+      // Use the dedicated incidências number when configured.
+      const useSeparateNumber = String(process.env.AUTO_NOTIFICACAO_INCIDENCIA_USE_SEPARATE_NUMBER || "").trim() === "true";
+      const incPhoneNumberId = String(process.env.INC_WHATSAPP_PHONE_NUMBER_ID || "").trim();
+      const incAccessToken = String(process.env.INC_WHATSAPP_ACCESS_TOKEN || "").trim();
+
       const result = await sendGenericTemplateMessage({
         to: entry.to,
         templateName,
@@ -1302,7 +1308,9 @@ async function maybeRunAutoNotificacaoIncidenciaSchedule(options = {}) {
           parcelId: entry.parcelId,
           messageType: "Incidencia",
           notes: String(entry.incidentReason || entry.sender || "").trim()
-        }
+        },
+        phoneNumberIdOverride: useSeparateNumber && incPhoneNumberId ? incPhoneNumberId : null,
+        accessTokenOverride: useSeparateNumber && incAccessToken ? incAccessToken : null
       });
 
       if (result.ok) {
@@ -5248,7 +5256,7 @@ async function uploadInboundMediaToBlob({ from, messageId, mediaType, mediaId })
   };
 }
 
-async function logInboundMessage({ from, message, contact }) {
+async function logInboundMessage({ from, message, contact, channel = "chat" }) {
   const inboundMessageId = String(message?.id || "").trim();
   if (!inboundMessageId) {
     return null;
@@ -5288,7 +5296,7 @@ async function logInboundMessage({ from, message, contact }) {
     await safeSupabaseLog(() =>
       createSupabaseLogRow({
         direction: "in",
-        channel: "chat",
+        channel: channel,
         to: fromWaId,
         contactName,
         messageText: summaryText,
@@ -6464,7 +6472,9 @@ async function sendGenericTemplateMessage({
   languageCode,
   bodyVariables = [],
   buttonUrlVariable = "",
-  trackerContext = null
+  trackerContext = null,
+  phoneNumberIdOverride = null,
+  accessTokenOverride = null
 }) {
   try {
     const normalizedTo = normalizeRecipient(to || "");
@@ -6494,8 +6504,8 @@ async function sendGenericTemplateMessage({
     }
 
     const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
-    const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
-    const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
+    const phoneNumberId = phoneNumberIdOverride || requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
+    const token = accessTokenOverride || requiredEnv("WHATSAPP_ACCESS_TOKEN");
 
     const endpoint = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
     const components = [];
@@ -6581,7 +6591,7 @@ async function sendGenericTemplateMessage({
     const supabaseWarning = await safeSupabaseLog(() =>
       createSupabaseLogRow({
         direction: "out",
-        channel: "template",
+        channel: phoneNumberIdOverride ? "template_incidencias" : "template",
         to: normalizedTo,
         messageText: cleanBodyVariables.join(" | "),
         templateName: cleanTemplateName,
@@ -6964,7 +6974,10 @@ function handleWebhookVerify(req, res) {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+  const mainToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  const incToken = process.env.INC_WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+
+  if (mode === "subscribe" && (token === mainToken || (incToken && token === incToken))) {
     return res.status(200).send(challenge);
   }
 
@@ -7004,6 +7017,15 @@ async function handleWebhookEvent(req, res) {
       const messages = value?.messages || [];
       const contacts = value?.contacts || [];
 
+      // Detect which WhatsApp number received this event so we can tag the channel.
+      const eventPhoneNumberId = String(value?.metadata?.phone_number_id || "").trim();
+      const incPhoneNumberId = String(process.env.INC_WHATSAPP_PHONE_NUMBER_ID || "").trim();
+      const isIncidenciasNumber =
+        incPhoneNumberId &&
+        eventPhoneNumberId &&
+        eventPhoneNumberId === incPhoneNumberId;
+      const inboundChannel = isIncidenciasNumber ? "chat_incidencias" : "chat";
+
       for (const statusEvent of statuses) {
         const messageId = statusEvent?.id;
         const status = statusEvent?.status;
@@ -7038,7 +7060,7 @@ async function handleWebhookEvent(req, res) {
         const summaryText = inboundMessageText(inboundMessage);
         const mediaInfo = inboundMessageMediaInfo(inboundMessage);
 
-        await logInboundMessage({ from, message: inboundMessage, contact });
+        await logInboundMessage({ from, message: inboundMessage, contact, channel: inboundChannel });
 
         broadcastSSE("inbound", {
           messageId: inboundMessageId,
@@ -7047,6 +7069,7 @@ async function handleWebhookEvent(req, res) {
           text: summaryText,
           mediaType: mediaInfo.mediaType || undefined,
           mediaId: mediaInfo.mediaId || undefined,
+          channel: inboundChannel,
           status: "received"
         });
       }
@@ -8259,6 +8282,46 @@ app.get("/api/logs", async (req, res) => {
       error: "Failed to fetch logs",
       details: error instanceof Error ? error.message : "Unknown error"
     });
+  }
+});
+
+// ── Incidências chat messages (inbound from the 2nd WhatsApp number) ────────
+app.get("/api/messages/incidencias", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 100)));
+
+  try {
+    if (supabaseEnabled && supabase) {
+      const { data, error } = await supabase
+        .from("whatsapp_logs")
+        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
+        .in("channel", ["chat_incidencias", "template_incidencias"])
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (error) {
+        warnSoftError("messages.incidencias.supabase", error, { route: "/api/messages/incidencias", requestId });
+        return res.status(500).json({ error: "Failed to fetch incidências messages", details: error.message });
+      }
+
+      return res.json({ data: Array.isArray(data) ? data : [] });
+    }
+
+    if (pgEnabled && pgPool) {
+      const pgResult = await pgPool.query(
+        `select id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload
+         from public.whatsapp_logs
+         where channel in ('chat_incidencias','template_incidencias')
+         order by created_at desc limit $1`,
+        [limit]
+      );
+      return res.json({ data: pgResult.rows || [] });
+    }
+
+    return res.json({ data: [] });
+  } catch (error) {
+    warnSoftError("messages.incidencias.unhandled", error, { route: "/api/messages/incidencias", requestId });
+    return res.status(500).json({ error: "Failed to fetch incidências messages", details: error instanceof Error ? error.message : "Unknown error" });
   }
 });
 
