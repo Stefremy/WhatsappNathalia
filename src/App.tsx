@@ -674,18 +674,6 @@ function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function smartTimeLabel(ts: number | undefined, fallback: string): string {
-  if (!ts) return fallback;
-  const d = new Date(ts);
-  const now = new Date();
-  const isToday = d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (isToday) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  // Yesterday or older — show dd/mm
-  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
-}
-
 function statusTone(status: string, channelOrType?: string) {
   const normalized = String(status || "").toLowerCase();
   const context = String(channelOrType || "").toLowerCase();
@@ -1079,7 +1067,7 @@ function App() {
   const [sharedLogs, setSharedLogs] = useState<SharedLogItem[]>([]);
   const [sharedLogsLoading, setSharedLogsLoading] = useState(false);
   const [sharedLogsError, setSharedLogsError] = useState("");
-  const [sharedLogsLimit, setSharedLogsLimit] = useState(150);
+  const [sharedLogsLimit, setSharedLogsLimit] = useState(500);
   const [notificacaoRowsLimit, setNotificacaoRowsLimit] = useState(250);
   const [consumiveisRows, setConsumiveisRows] = useState<ConsumivelItem[]>([]);
   const [consumiveisColumns, setConsumiveisColumns] = useState<string[]>([]);
@@ -5504,7 +5492,15 @@ function App() {
                       <small>{c.lastText || "Sem mensagens"}</small>
                     </span>
                     <span className="wa-contact-right">
-                      <small>{smartTimeLabel(c.lastTs, c.lastAt)}</small>
+                      <small>{c.lastAt}</small>
+                      {(() => {
+                        if (!c.lastTs) return null;
+                        const d = new Date(c.lastTs);
+                        const now = new Date();
+                        const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+                        if (isToday) return null;
+                        return <small style={{ fontSize: "0.65em", opacity: 0.7, display: "block" }}>{d.getDate()}/{d.getMonth() + 1}</small>;
+                      })()}
                       {c.unread > 0 ? <b>{c.unread}</b> : null}
                     </span>
                   </button>
@@ -5680,7 +5676,19 @@ function App() {
                       <small>{last?.text || "Sem mensagens"}</small>
                     </span>
                     <span className="wa-contact-right">
-                      <small>{smartTimeLabel(contact.lastTs, contact.lastAt)}</small>
+                      {(() => {
+                        const ts = latestSharedLogTimestampByPhone[digitsOnly(contact.phone)] ?? contact.lastTs ?? getLocalConversationTimestamp(contact);
+                        if (!ts || !Number.isFinite(ts) || ts <= 0) {
+                          return <small>{contact.lastAt}</small>;
+                        }
+                        const d = new Date(ts);
+                        const now = new Date();
+                        const isToday = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+                        return <>
+                          <small>{d.toLocaleString("pt-PT")}</small>
+                          {!isToday && <small style={{ fontSize: "0.65em", opacity: 0.7, display: "block" }}>{d.getDate()}/{d.getMonth() + 1}</small>}
+                        </>;
+                      })()}
                       {contact.unread > 0 ? <b>{contact.unread}</b> : null}
                     </span>
                   </button>
