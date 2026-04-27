@@ -4145,11 +4145,12 @@ function App() {
     });
   }, [activeConversationId, savedContacts, sharedLogs]);
 
-  // Rehydrate outbound manually written text messages from shared logs so all devices see the same typed history.
+  // Rehydrate outbound messages from shared logs: text replies, template sends (pickup/feedback/generic) and media from main number.
   useEffect(() => {
+    const MAIN_OUT_CHANNELS = new Set(["text", "template", "media"]);
     const outboundLogs = sharedLogs
       .filter((item) => String(item.direction || "").toLowerCase() === "out")
-      .filter((item) => String(item.channel || "").toLowerCase() === "text")
+      .filter((item) => MAIN_OUT_CHANNELS.has(String(item.channel || "").toLowerCase()))
       .filter((item) => String(item.to_number || "").trim().length > 0)
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
@@ -4167,7 +4168,14 @@ function App() {
         }
 
         const apiMessageId = String(item.api_message_id || "").trim();
-        const text = String(item.message_text || item.template_name || "[mensagem enviada]").trim() || "[mensagem enviada]";
+        const channel = String(item.channel || "").toLowerCase();
+        const rawText = String(item.message_text || "").trim();
+        const templateLabel = item.template_name ? `📋 ${item.template_name}${rawText ? `: ${rawText}` : ""}` : "";
+        const text = channel === "template"
+          ? (templateLabel || "[template enviado]")
+          : channel === "media"
+          ? (rawText ? `📎 ${rawText}` : "[media enviada]")
+          : (rawText || item.template_name || "[mensagem enviada]");
         const parsedTime = new Date(item.created_at);
         const timeLabel = isNaN(parsedTime.getTime())
           ? nowLabel()
@@ -4236,11 +4244,13 @@ function App() {
   }, [savedContacts, sharedLogs]);
 
   // Cleanup previously persisted non-text outbound entries from chat threads.
+  // Only removes entries from channels that should NOT appear in the main chat (e.g. incidências).
   useEffect(() => {
+    const EXCLUDED_CHANNELS = new Set(["chat_incidencias", "template_incidencias"]);
     const nonTextOutboundLogs = sharedLogs.filter(
       (item) =>
         String(item.direction || "").toLowerCase() === "out" &&
-        String(item.channel || "").toLowerCase() !== "text"
+        EXCLUDED_CHANNELS.has(String(item.channel || "").toLowerCase())
     );
 
     if (nonTextOutboundLogs.length === 0) {
