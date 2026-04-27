@@ -4147,7 +4147,7 @@ function App() {
 
   // Rehydrate outbound messages from shared logs: text replies, template sends (pickup/feedback/generic) and media from main number.
   useEffect(() => {
-    const MAIN_OUT_CHANNELS = new Set(["text", "template", "media"]);
+    const MAIN_OUT_CHANNELS = new Set(["text"]);
     const outboundLogs = sharedLogs
       .filter((item) => String(item.direction || "").toLowerCase() === "out")
       .filter((item) => MAIN_OUT_CHANNELS.has(String(item.channel || "").toLowerCase()))
