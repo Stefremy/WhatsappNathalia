@@ -77,6 +77,7 @@ type ConversationContact = {
   name: string;
   phone: string;
   lastAt: string;
+  lastTs?: number;
   unread: number;
   messages: ConversationMessage[];
 };
@@ -671,6 +672,18 @@ function deliveryTickMark(status?: ConversationMessage["deliveryStatus"]) {
 
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function smartTimeLabel(ts: number | undefined, fallback: string): string {
+  if (!ts) return fallback;
+  const d = new Date(ts);
+  const now = new Date();
+  const isToday = d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (isToday) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Yesterday or older — show dd/mm
+  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
 }
 
 function statusTone(status: string, channelOrType?: string) {
@@ -2573,9 +2586,10 @@ function App() {
           apiMessageId: apiMsgId || undefined,
           deliveryStatus: apiMsgId ? "sent" : undefined
         };
+        const sentTs = Date.now();
         if (existing) {
           return current
-            .map((c) => c.id !== existing.id ? c : { ...c, lastAt: sentTime, messages: [...c.messages, msg] })
+            .map((c) => c.id !== existing.id ? c : { ...c, lastAt: sentTime, lastTs: sentTs, messages: [...c.messages, msg] })
             .sort((a, b) => (a.id === existing.id ? -1 : b.id === existing.id ? 1 : 0));
         }
         const created: ConversationContact = {
@@ -2584,6 +2598,7 @@ function App() {
           phone: targetPhone,
           unread: 0,
           lastAt: sentTime,
+          lastTs: sentTs,
           messages: [msg]
         };
         setActiveConversationId(created.id);
@@ -2877,6 +2892,7 @@ function App() {
 
         setConversations((current) => {
           const existing = current.find((item) => digitsOnly(item.phone) === fromDigits);
+          const inboundTs = Date.now();
 
           if (existing) {
             if (inboundApiId && existing.messages.some((item) => item.apiMessageId === inboundApiId)) {
@@ -2900,6 +2916,7 @@ function App() {
                   : {
                       ...item,
                       lastAt: inboundTime,
+                      lastTs: inboundTs,
                       unread: item.id === activeConversationId ? item.unread : item.unread + 1,
                       messages: [...item.messages, nextMessage]
                     }
@@ -2913,6 +2930,7 @@ function App() {
             phone: fromDigits,
             unread: activeConversationId ? 1 : 0,
             lastAt: inboundTime,
+            lastTs: inboundTs,
             messages: [
               {
                 id: `in-${inboundApiId || Date.now()}`,
@@ -2960,6 +2978,7 @@ function App() {
             deliveryStatus: "sent"
           };
 
+          const outboundTs = Date.now();
           if (existing) {
             if (outboundApiId && existing.messages.some((item) => item.apiMessageId === outboundApiId)) {
               return current;
@@ -2972,6 +2991,7 @@ function App() {
                   : {
                       ...item,
                       lastAt: outboundTime,
+                      lastTs: outboundTs,
                       messages: [...item.messages, nextMessage]
                     }
               )
@@ -2984,6 +3004,7 @@ function App() {
             phone: toDigits,
             unread: 0,
             lastAt: outboundTime,
+            lastTs: outboundTs,
             messages: [nextMessage]
           };
 
@@ -4099,6 +4120,7 @@ function App() {
           const updated = {
             ...existing,
             lastAt: timeLabel,
+            lastTs: parsedTime.getTime() || Date.now(),
             unread: existing.id === activeConversationId ? existing.unread : existing.unread + 1,
             messages: [
               ...existing.messages,
@@ -4125,6 +4147,7 @@ function App() {
             phone: fromDigits,
             unread: activeConversationId ? 1 : 0,
             lastAt: timeLabel,
+            lastTs: parsedTime.getTime() || Date.now(),
             messages: [
               {
                 id: `in-log-${item.id}`,
@@ -4200,6 +4223,7 @@ function App() {
           const updated = {
             ...existing,
             lastAt: timeLabel,
+            lastTs: parsedTime.getTime() || Date.now(),
             messages: [
               ...existing.messages,
               {
@@ -4224,6 +4248,7 @@ function App() {
             phone: toDigits,
             unread: 0,
             lastAt: timeLabel,
+            lastTs: parsedTime.getTime() || Date.now(),
             messages: [
               {
                 id: `out-log-${item.id}`,
@@ -4386,22 +4411,25 @@ function App() {
 
   // Contacts derived from incidências logs (unique phones, sorted by last message)
   const incContacts = useMemo(() => {
-    const byPhone = new Map<string, { phone: string; name: string; lastText: string; lastAt: string; unread: number }>();
+    const byPhone = new Map<string, { phone: string; name: string; lastText: string; lastAt: string; lastTs: number; unread: number }>();
     for (const row of [...incChatLogs].reverse()) {
       const phone = digitsOnly(String(row.to_number || ""));
       if (!phone) continue;
       const existing = byPhone.get(phone);
+      const rowTs = new Date(row.created_at).getTime();
       if (!existing) {
         byPhone.set(phone, {
           phone,
           name: String(row.contact_name || "").trim() || resolveContactName(phone, savedContacts),
           lastText: String(row.message_text || "").trim(),
           lastAt: new Date(row.created_at).toLocaleString("pt-PT"),
+          lastTs: rowTs,
           unread: row.direction === "in" ? 1 : 0
         });
       } else {
         existing.lastText = String(row.message_text || "").trim();
         existing.lastAt = new Date(row.created_at).toLocaleString("pt-PT");
+        existing.lastTs = rowTs;
         if (row.direction === "in") existing.unread += 1;
       }
     }
@@ -4634,6 +4662,7 @@ function App() {
                 name: targetName,
                 phone: targetPhone,
                 lastAt: sentTime,
+                lastTs: Date.now(),
                 messages: [...item.messages, nextMessage]
               };
             })
@@ -4646,6 +4675,7 @@ function App() {
           phone: targetPhone,
           unread: 0,
           lastAt: sentTime,
+          lastTs: Date.now(),
           messages: [nextMessage]
         };
 
@@ -5474,7 +5504,7 @@ function App() {
                       <small>{c.lastText || "Sem mensagens"}</small>
                     </span>
                     <span className="wa-contact-right">
-                      <small>{c.lastAt}</small>
+                      <small>{smartTimeLabel(c.lastTs, c.lastAt)}</small>
                       {c.unread > 0 ? <b>{c.unread}</b> : null}
                     </span>
                   </button>
@@ -5650,7 +5680,7 @@ function App() {
                       <small>{last?.text || "Sem mensagens"}</small>
                     </span>
                     <span className="wa-contact-right">
-                      <small>{contact.lastAt}</small>
+                      <small>{smartTimeLabel(contact.lastTs, contact.lastAt)}</small>
                       {contact.unread > 0 ? <b>{contact.unread}</b> : null}
                     </span>
                   </button>
