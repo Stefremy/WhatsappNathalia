@@ -4147,7 +4147,7 @@ function App() {
 
   // Rehydrate outbound messages from shared logs: text replies, template sends (pickup/feedback/generic) and media from main number.
   useEffect(() => {
-    const MAIN_OUT_CHANNELS = new Set(["text"]);
+    const MAIN_OUT_CHANNELS = new Set(["text", "media"]);
     const outboundLogs = sharedLogs
       .filter((item) => String(item.direction || "").toLowerCase() === "out")
       .filter((item) => MAIN_OUT_CHANNELS.has(String(item.channel || "").toLowerCase()))
@@ -4413,6 +4413,7 @@ function App() {
     if (!incActivePhone) return [];
     return incChatLogs
       .filter((r) => digitsOnly(String(r.to_number || "")) === incActivePhone)
+      .filter((r) => String(r.channel || "").toLowerCase() === "chat_incidencias")
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [incActivePhone, incChatLogs]);
 
