@@ -7019,11 +7019,20 @@ async function handleWebhookEvent(req, res) {
 
       // Detect which WhatsApp number received this event so we can tag the channel.
       const eventPhoneNumberId = String(value?.metadata?.phone_number_id || "").trim();
+      const eventDisplayPhoneNumber = String(value?.metadata?.display_phone_number || "").trim();
       const incPhoneNumberId = String(process.env.INC_WHATSAPP_PHONE_NUMBER_ID || "").trim();
+      const incPhoneNumber = String(process.env.INC_WHATSAPP_PHONE_NUMBER || "").trim();
+
+      // Debug log — helps confirm which number ID Meta is sending
+      if (eventPhoneNumberId || eventDisplayPhoneNumber) {
+        console.log(`[webhook] phone_number_id="${eventPhoneNumberId}" display_phone_number="${eventDisplayPhoneNumber}" inc_expected_id="${incPhoneNumberId}" inc_expected_number="${incPhoneNumber}"`);
+      }
+
+      // Match by phone_number_id (primary) OR by display_phone_number (fallback, strips non-digits)
+      const digitsOnly = (s) => String(s || "").replace(/\D/g, "");
       const isIncidenciasNumber =
-        incPhoneNumberId &&
-        eventPhoneNumberId &&
-        eventPhoneNumberId === incPhoneNumberId;
+        (incPhoneNumberId && eventPhoneNumberId && eventPhoneNumberId === incPhoneNumberId) ||
+        (incPhoneNumber && eventDisplayPhoneNumber && digitsOnly(eventDisplayPhoneNumber) === digitsOnly(incPhoneNumber));
       const inboundChannel = isIncidenciasNumber ? "chat_incidencias" : "chat";
 
       for (const statusEvent of statuses) {

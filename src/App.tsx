@@ -2868,6 +2868,65 @@ function App() {
           });
           // Auto-select this contact in inc chat
           setIncActivePhone((prev) => prev || fromDigits);
+
+          // Also push into main Chat Principal so it is visible there too
+          const inboundText = String(data.text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+          const inboundMediaType = String(data.mediaType || "").trim().toLowerCase();
+          const inboundMediaId = String(data.mediaId || "").trim();
+          const inboundMediaUrl = inboundMediaId ? apiUrl(`/api/media/${encodeURIComponent(inboundMediaId)}`) : "";
+          const inboundTime = nowLabel();
+          const inboundTs = Date.now();
+
+          setConversations((current) => {
+            const existing = current.find((item) => digitsOnly(item.phone) === fromDigits);
+            if (existing) {
+              if (inboundApiId && existing.messages.some((item) => item.apiMessageId === inboundApiId)) {
+                return current;
+              }
+              const nextMessage: ConversationMessage = {
+                id: `in-inc-${inboundApiId || Date.now()}`,
+                direction: "in",
+                text: `⚠️ ${inboundText}`,
+                time: inboundTime,
+                apiMessageId: inboundApiId || undefined,
+                mediaType: inboundMediaType || undefined,
+                mediaUrl: inboundMediaUrl || undefined
+              };
+              return current
+                .map((item) =>
+                  item.id !== existing.id
+                    ? item
+                    : {
+                        ...item,
+                        lastAt: inboundTime,
+                        lastTs: inboundTs,
+                        unread: item.id === activeConversationId ? item.unread : item.unread + 1,
+                        messages: [...item.messages, nextMessage]
+                      }
+                )
+                .sort((a, b) => (a.id === existing.id ? -1 : b.id === existing.id ? 1 : 0));
+            }
+            const created: ConversationContact = {
+              id: `c-in-inc-${Date.now()}`,
+              name: String(data.contactName || "").trim() || resolveContactName(fromDigits, savedContacts),
+              phone: fromDigits,
+              unread: activeConversationId ? 1 : 0,
+              lastAt: inboundTime,
+              lastTs: inboundTs,
+              messages: [
+                {
+                  id: `in-inc-${inboundApiId || Date.now()}`,
+                  direction: "in",
+                  text: `⚠️ ${inboundText}`,
+                  time: inboundTime,
+                  apiMessageId: inboundApiId || undefined,
+                  mediaType: inboundMediaType || undefined,
+                  mediaUrl: inboundMediaUrl || undefined
+                }
+              ]
+            };
+            return [created, ...current];
+          });
           return;
         }
 
@@ -4063,7 +4122,10 @@ function App() {
   useEffect(() => {
     const inboundLogs = sharedLogs
       .filter((item) => String(item.direction || "").toLowerCase() === "in")
-      .filter((item) => String(item.channel || "").toLowerCase() === "chat")
+      .filter((item) => {
+        const ch = String(item.channel || "").toLowerCase();
+        return ch === "chat" || ch === "chat_incidencias";
+      })
       .filter((item) => String(item.to_number || "").trim().length > 0)
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
@@ -4081,7 +4143,9 @@ function App() {
         }
 
         const apiMessageId = String(item.api_message_id || "").trim();
-        const text = String(item.message_text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+        const isIncChannel = String(item.channel || "").toLowerCase() === "chat_incidencias";
+        const rawText = String(item.message_text || "[mensagem recebida]").trim() || "[mensagem recebida]";
+        const text = isIncChannel ? `⚠️ ${rawText}` : rawText;
         const mediaInfo = extractInboundMediaFromLog(item);
         const mediaUrl = mediaInfo.mediaId ? apiUrl(`/api/media/${encodeURIComponent(mediaInfo.mediaId)}`) : "";
         const parsedTime = new Date(item.created_at);
