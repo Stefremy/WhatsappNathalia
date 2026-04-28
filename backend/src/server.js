@@ -6861,10 +6861,15 @@ app.get("/api/templates", async (req, res) => {
   try {
     const apiVersion = process.env.WHATSAPP_API_VERSION || "v23.0";
     const token = requiredEnv("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = String(req.query.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || "").trim();
-    const providedWabaId = String(
-      req.query.wabaId || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || ""
-    ).trim();
+    const rawPhoneNumberId = String(req.query.phoneNumberId || "").trim();
+    // Ignore the frontend sentinel value that means "not configured"
+    const phoneNumberId = (rawPhoneNumberId && rawPhoneNumberId !== "configured in backend")
+      ? rawPhoneNumberId
+      : String(process.env.WHATSAPP_PHONE_NUMBER_ID || "").trim();
+    const rawWabaId = String(req.query.wabaId || "").trim();
+    const providedWabaId = (rawWabaId && rawWabaId !== "configured in backend")
+      ? rawWabaId
+      : String(process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || "").trim();
     const limit = String(req.query.limit || "50").trim();
     const fetchAll = String(req.query.fetchAll || "true").toLowerCase() !== "false";
 
