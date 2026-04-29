@@ -2346,9 +2346,14 @@ function normalizeRecipient(input) {
 
   const withoutInternationalPrefix = digits.startsWith("00") ? digits.slice(2) : digits;
 
-  // PT fallback: local mobile number (9 digits) -> prepend country code.
+  // PT fallback: local mobile number (9 digits starting with 9) -> prepend PT country code.
   if (withoutInternationalPrefix.length === 9 && withoutInternationalPrefix.startsWith("9")) {
     return `351${withoutInternationalPrefix}`;
+  }
+
+  // ES fallback: local mobile number (9 digits starting with 6 or 7) -> prepend ES country code.
+  if (withoutInternationalPrefix.length === 9 && /^[67]/.test(withoutInternationalPrefix)) {
+    return `34${withoutInternationalPrefix}`;
   }
 
   return withoutInternationalPrefix;
