@@ -1663,12 +1663,20 @@ function shouldRunAutoNotificacaoEnvioAtClock(parts) {
   // Primary window (e.g. 9:30)
   if (isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes)) return true;
 
-  // Secondary window to catch late entries (e.g. 10:15)
+  // Secondary window (e.g. 9:45)
   const allowSecondRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_SECOND_RUN, false);
   if (allowSecondRun) {
-    const secondHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR || targetHour + 1);
-    const secondMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE || 15);
+    const secondHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR || targetHour);
+    const secondMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE || 45);
     if (isWithinClockWindow(parts, secondHour, secondMinute, graceMinutes)) return true;
+  }
+
+  // Third window (e.g. 10:15)
+  const allowThirdRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_THIRD_RUN, false);
+  if (allowThirdRun) {
+    const thirdHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR || targetHour + 1);
+    const thirdMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE || 15);
+    if (isWithinClockWindow(parts, thirdHour, thirdMinute, graceMinutes)) return true;
   }
 
   return false;
@@ -7734,15 +7742,22 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
 
   if (!forceRun && autoNotificacaoEnvioLastRunDateKey === parts.dateKey) {
     const allowSecondRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_SECOND_RUN, false);
+    const allowThirdRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_THIRD_RUN, false);
     const targetHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_HOUR || 9);
     const targetMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_MINUTE || 30);
     const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
     const isInPrimaryWindow = isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 
-    // If second run is enabled and we're in the secondary window (not primary), allow it
-    if (allowSecondRun && !isInPrimaryWindow) {
-      // Allow second run — sentKeys will prevent duplicate sends
-      console.log("[auto-notificacao-envio] second run allowed for late entries");
+    const secondHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR || targetHour);
+    const secondMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE || 45);
+    const isInSecondWindow = allowSecondRun && isWithinClockWindow(parts, secondHour, secondMinute, graceMinutes);
+
+    const thirdHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR || targetHour + 1);
+    const thirdMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE || 15);
+    const isInThirdWindow = allowThirdRun && isWithinClockWindow(parts, thirdHour, thirdMinute, graceMinutes);
+
+    if (!isInPrimaryWindow && (isInSecondWindow || isInThirdWindow)) {
+      console.log("[auto-notificacao-envio] extra run allowed for late entries");
     } else {
       return res.json({ ok: true, skipped: true, reason: "already_ran_today", dateKey: parts.dateKey });
     }
