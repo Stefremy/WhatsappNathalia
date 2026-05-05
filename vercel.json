@@ -15,19 +15,11 @@
     },
     {
       "path": "/api/cron/auto-notificacao-envio",
-      "schedule": "45 8 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-envio",
-      "schedule": "15 9 * * 1-5"
+      "schedule": "15 10 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-envio-em-transporte",
       "schedule": "30 9 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-envio-em-transporte",
-      "schedule": "45 9 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
