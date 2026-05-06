@@ -4509,7 +4509,7 @@ function App() {
         if (row.direction === "in") existing.unread += 1;
       }
     }
-    return Array.from(byPhone.values()).reverse();
+    return Array.from(byPhone.values()).sort((a, b) => b.lastTs - a.lastTs);
   }, [incChatLogs, savedContacts]);
 
   // Messages for the active incidências contact
