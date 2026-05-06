@@ -1666,16 +1666,16 @@ function shouldRunAutoNotificacaoEnvioAtClock(parts) {
   // Secondary window (e.g. 9:45)
   const allowSecondRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_SECOND_RUN, false);
   if (allowSecondRun) {
-    const secondHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR || targetHour);
-    const secondMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE || 45);
+    const secondHour = process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR) : targetHour;
+    const secondMinute = process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE) : 45;
     if (isWithinClockWindow(parts, secondHour, secondMinute, graceMinutes)) return true;
   }
 
   // Third window (e.g. 10:15)
   const allowThirdRun = parseBooleanLike(process.env.AUTO_NOTIFICACAO_ENVIO_ALLOW_THIRD_RUN, false);
   if (allowThirdRun) {
-    const thirdHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR || targetHour + 1);
-    const thirdMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE || 15);
+    const thirdHour = process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR) : targetHour + 1;
+    const thirdMinute = process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE) : 15;
     if (isWithinClockWindow(parts, thirdHour, thirdMinute, graceMinutes)) return true;
   }
 
@@ -7748,12 +7748,12 @@ app.get("/api/cron/auto-notificacao-envio", async (req, res) => {
     const graceMinutes = getAutoNotificacaoEnvioGraceMinutes();
     const isInPrimaryWindow = isWithinClockWindow(parts, targetHour, targetMinute, graceMinutes);
 
-    const secondHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR || targetHour);
-    const secondMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE || 45);
+    const secondHour = process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_HOUR) : targetHour;
+    const secondMinute = process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_SECOND_RUN_MINUTE) : 45;
     const isInSecondWindow = allowSecondRun && isWithinClockWindow(parts, secondHour, secondMinute, graceMinutes);
 
-    const thirdHour = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR || targetHour + 1);
-    const thirdMinute = Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE || 15);
+    const thirdHour = process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_HOUR) : targetHour + 1;
+    const thirdMinute = process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE != null ? Number(process.env.AUTO_NOTIFICACAO_ENVIO_THIRD_RUN_MINUTE) : 15;
     const isInThirdWindow = allowThirdRun && isWithinClockWindow(parts, thirdHour, thirdMinute, graceMinutes);
 
     if (!isInPrimaryWindow && (isInSecondWindow || isInThirdWindow)) {
