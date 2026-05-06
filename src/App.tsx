@@ -2848,6 +2848,30 @@ function App() {
           return;
         }
 
+        // If this is an outbound reply we just sent from the incidências number
+        if (String(data.channel || "").trim() === "chat_incidencias_out") {
+          const outApiId = String(data.messageId || "").trim();
+          const outTo = digitsOnly(String(data.from || "").trim()); // server sets from=to for outbound
+          if (outTo) {
+            setIncChatLogs((prev) => {
+              if (outApiId && prev.some((r) => r.api_message_id === outApiId)) return prev;
+              const newRow = {
+                id: `sse-out-${outApiId || Date.now()}`,
+                created_at: new Date().toISOString(),
+                direction: "out",
+                channel: "chat_incidencias",
+                to_number: outTo,
+                contact_name: null,
+                message_text: String(data.text || "").trim(),
+                status: String(data.status || "accepted"),
+                api_message_id: outApiId || null
+              };
+              return [newRow, ...prev];
+            });
+          }
+          return;
+        }
+
         // If this came from the incidências number (inbound reply from client)
         if (String(data.channel || "").trim() === "chat_incidencias") {
           const inboundApiId = String(data.messageId || "").trim();
@@ -4515,20 +4539,9 @@ function App() {
       }
       setIncReplyStatus("Enviado ✓");
       setIncReplyText("");
-      // Optimistic update + reload
-      const newRow = {
-        id: `opt-${Date.now()}`,
-        created_at: new Date().toISOString(),
-        direction: "out",
-        channel: "chat_incidencias",
-        to_number: digitsOnly(incActivePhone),
-        contact_name: null,
-        message_text: incReplyText.trim(),
-        status: "accepted",
-        api_message_id: String(body?.messages?.[0]?.id || "")
-      };
-      setIncChatLogs((prev) => [newRow, ...prev]);
-      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 2500);
+      // SSE will add the message in real-time via chat_incidencias_out channel.
+      // Reload after 5s to sync from Supabase (gives time for write to complete).
+      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 5000);
     } catch (err) {
       setIncReplyStatus(err instanceof Error ? err.message : "Erro ao enviar.");
     } finally {
@@ -4555,6 +4568,7 @@ function App() {
         return;
       }
       setIncReplyStatus("Enviado ✓");
+      // Optimistic update for media (SSE channel_out doesn't carry the filename)
       const mediaLabel = `[📎 ${incComposeMedia.name}]`;
       const newRow = {
         id: `opt-${Date.now()}`,
@@ -4570,7 +4584,7 @@ function App() {
       };
       setIncChatLogs((prev) => [newRow, ...prev]);
       setIncComposeMedia(null);
-      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 2500);
+      setTimeout(() => { loadIncChatLogs(); setIncReplyStatus(""); }, 5000);
     } catch (err) {
       setIncReplyStatus(err instanceof Error ? err.message : "Erro ao enviar media.");
     } finally {
