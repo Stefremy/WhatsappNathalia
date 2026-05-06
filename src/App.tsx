@@ -457,7 +457,7 @@ const webservicesSeedRows: WebserviceRow[] = [
 
 const webservicesPrefilledCredentials: Record<string, WebserviceCredential> = {
   "ws-ctt-expresso": {
-    baseUrl: "https://whatsapplinke.vercel.app",
+    baseUrl: "https://whatsapplinke-topaz.vercel.app",
     apiKey: "1d7ad9a9-c7bb-43be-9f57-851d1baafb4b",
     bearerToken: "",
     username: "100032458",
