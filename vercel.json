@@ -27,75 +27,31 @@
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "30 13 * * 1-5"
+      "schedule": "30,50 13 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 14 * * 1-5"
+      "schedule": "0,20,30,50 14 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "30 15 * * 1-5"
+      "schedule": "0,20,30,50 15 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 16 * * 1-5"
+      "schedule": "0,20,30,50 16 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 17 * * 1-5"
+      "schedule": "0,20,30,50 17 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0 18 * * 1-5"
+      "schedule": "0,20,30,50 18 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "30 14 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 15 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "30 16 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0,30 18 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "0 19 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "50 13 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20,50 14 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20,50 15 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20,50 16 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20,50 17 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20,50 18 * * 1-5"
-    },
-    {
-      "path": "/api/cron/auto-notificacao-incidencia",
-      "schedule": "20 19 * * 1-5"
+      "schedule": "0,20 19 * * 1-5"
     }
   ],
   "rewrites": [
