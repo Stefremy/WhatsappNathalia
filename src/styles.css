@@ -2199,6 +2199,52 @@ p {
   gap: 0.2rem;
 }
 
+.invoice-checker-page {
+  gap: 0.9rem;
+}
+
+.invoice-checker-controls {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.invoice-checker-controls label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.invoice-checker-controls input {
+  border: 1px solid rgba(18, 34, 53, 0.2);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.62rem 0.74rem;
+  font: inherit;
+}
+
+.invoice-checker-frame {
+  width: 100%;
+  min-height: 62vh;
+  border: 1px solid rgba(18, 34, 53, 0.16);
+  border-radius: 14px;
+  background: #f2f6fb;
+}
+
+.invoice-checker-placeholder {
+  border: 1px dashed rgba(18, 34, 53, 0.3);
+  border-radius: 14px;
+  padding: 1rem;
+  background: linear-gradient(145deg, rgba(239, 248, 255, 0.68), rgba(245, 255, 246, 0.75));
+  display: grid;
+  gap: 0.45rem;
+}
+
+.invoice-checker-placeholder h3 {
+  margin: 0;
+}
+
 .webhook-debug-item header {
   display: flex;
   justify-content: space-between;

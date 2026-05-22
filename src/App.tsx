@@ -153,6 +153,14 @@ type ConsumivelItem = {
   url?: string;
 };
 
+type InvoiceParcelPreview = {
+  id: string;
+  tracking: string;
+  customer: string;
+  status: string;
+  updatedAt: string;
+};
+
 type CalendarEvent = {
   id: string;
   date: string;
@@ -559,7 +567,7 @@ function formatE164FromPortugalPhone(phoneInput: string) {
   return `+${phoneDigits}`;
 }
 
-function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" | "ctt" | "webservices" }) {
+function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" | "templates" | "notes" | "consumiveis" | "tracker" | "analytics" | "feedback" | "clientes" | "notificacao" | "ctt" | "webservices" | "invoice" }) {
   switch (name) {
     case "overview":
       return (
@@ -610,6 +618,13 @@ function SidebarIcon({ name }: { name: "overview" | "chat" | "logs" | "upload" |
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4.75 6.75h14.5A1.75 1.75 0 0 1 21 8.5v2.75A1.75 1.75 0 0 1 19.25 13h-14.5A1.75 1.75 0 0 1 3 11.25V8.5a1.75 1.75 0 0 1 1.75-1.75Zm0 6.25h14.5A1.75 1.75 0 0 1 21 14.75v2.75A1.75 1.75 0 0 1 19.25 19.25h-14.5A1.75 1.75 0 0 1 3 17.5v-2.75A1.75 1.75 0 0 1 4.75 13Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M7.5 9.9h.01M7.5 16.15h.01M11 9.9h6M11 16.15h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "invoice":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M7.5 4.75h9A2.75 2.75 0 0 1 19.25 7.5v9A2.75 2.75 0 0 1 16.5 19.25h-9A2.75 2.75 0 0 1 4.75 16.5v-9A2.75 2.75 0 0 1 7.5 4.75Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8.75 9.5h6.5M8.75 12h6.5M8.75 14.5h3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "consumiveis":
@@ -1168,7 +1183,22 @@ function App() {
     text: "",
     texto2: ""
   });
-  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices">("workspace");
+  const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices" | "invoice-checker">("workspace");
+  const [invoiceCheckerEmbedUrl, setInvoiceCheckerEmbedUrl] = useState(() => {
+    const envUrl = String(import.meta.env.VITE_INVOICE_CHECKER_URL || "").trim();
+    if (envUrl) {
+      return envUrl;
+    }
+    try {
+      return String(localStorage.getItem("wa_invoice_checker_embed_url") || "").trim();
+    } catch {
+      return "";
+    }
+  });
+  const [invoiceCheckerUrlInput, setInvoiceCheckerUrlInput] = useState(invoiceCheckerEmbedUrl);
+  const [invoiceParcelsPreview, setInvoiceParcelsPreview] = useState<InvoiceParcelPreview[]>([]);
+  const [invoiceParcelsLoading, setInvoiceParcelsLoading] = useState(false);
+  const [invoiceParcelsStatus, setInvoiceParcelsStatus] = useState("Clique em Atualizar para carregar dados de /api/parcels.");
   // Incidências WhatsApp inbox (2nd number)
   const [incChatLogs, setIncChatLogs] = useState<Array<{
     id: string; created_at: string; direction: string; channel: string;
@@ -3694,6 +3724,45 @@ function App() {
       });
   }
 
+  async function loadInvoiceParcelsPreview() {
+    setInvoiceParcelsLoading(true);
+    setInvoiceParcelsStatus("A carregar /api/parcels...");
+    try {
+      const response = await fetch(apiUrl("/api/parcels?limit=100"));
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(data?.details || data?.error || `Falha parcels (${response.status})`));
+      }
+
+      const rows = Array.isArray(data?.rows)
+        ? (data.rows as unknown[])
+        : Array.isArray(data?.data)
+          ? (data.data as unknown[])
+          : [];
+
+      const normalizedRows: InvoiceParcelPreview[] = rows.slice(0, 100).map((row, index) => {
+        const record = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+        const id = String(record.id || record.parcelId || record.providerTrackingCode || `parcel-${index + 1}`);
+        const tracking = String(record.providerTrackingCode || record.tracking || record.parcelId || "-");
+        const customer = String(record.customer || record.clientName || record.sender || "-");
+        const status = String(record.status || record.currentStatus || record.shipmentStatus || "-");
+        const updatedAt = String(record.updated_at || record.updatedAt || record.created_at || record.createdAt || "-");
+        return { id, tracking, customer, status, updatedAt };
+      });
+
+      setInvoiceParcelsPreview(normalizedRows);
+      setInvoiceParcelsStatus(
+        normalizedRows.length > 0
+          ? `${normalizedRows.length} parcels carregados de /api/parcels.`
+          : "Sem parcels para mostrar."
+      );
+    } catch (error) {
+      setInvoiceParcelsStatus(error instanceof Error ? error.message : "Não foi possível carregar /api/parcels.");
+    } finally {
+      setInvoiceParcelsLoading(false);
+    }
+  }
+
   function loadDeliveredShipments(page = deliveredPage) {
     const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
     const defaultRange = getLastNDaysDateRange(30);
@@ -4621,6 +4690,20 @@ function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (activeView === "invoice-checker" && invoiceParcelsPreview.length === 0 && !invoiceParcelsLoading) {
+      void loadInvoiceParcelsPreview();
+    }
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("wa_invoice_checker_embed_url", invoiceCheckerEmbedUrl.trim());
+    } catch {
+      // Ignore localStorage writes in restricted contexts.
+    }
+  }, [invoiceCheckerEmbedUrl]);
+
+  useEffect(() => {
     if (activeView === "clientes") {
       void refreshClientesGoogleStatus();
       void loadClientesInbox();
@@ -5479,6 +5562,14 @@ function App() {
             >
               <span className="workspace-nav-icon"><SidebarIcon name="clientes" /></span>
               <span>Clientes</span>
+            </button>
+            <button
+              type="button"
+              className={`workspace-nav-link workspace-nav-button${activeView === "invoice-checker" ? " active" : ""}`}
+              onClick={() => setActiveView("invoice-checker")}
+            >
+              <span className="workspace-nav-icon"><SidebarIcon name="invoice" /></span>
+              <span>Invoice Checker</span>
             </button>
           </nav>
         </aside>
@@ -9667,6 +9758,128 @@ function App() {
                                 Preparar resposta
                               </button>
                             </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </section>
+          ) : activeView === "invoice-checker" ? (
+            <section className="panel tracker-page invoice-checker-page" id="invoice-checker-page">
+              <div className="tracker-header">
+                <div>
+                  <h2>Invoice Checker</h2>
+                  <p>Nova janela integrada no sidebar para incorporar o projeto ctt-invoice-checker.</p>
+                </div>
+                <div className="tracker-actions">
+                  <a
+                    className="btn btn-secondary"
+                    href="https://github.com/Stefremy/ctt-invoice-checker"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Abrir repo
+                  </a>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      void loadInvoiceParcelsPreview();
+                    }}
+                    disabled={invoiceParcelsLoading}
+                  >
+                    {invoiceParcelsLoading ? "A atualizar..." : "Atualizar /api/parcels"}
+                  </button>
+                </div>
+              </div>
+
+              <section className="panel">
+                <div className="invoice-checker-controls">
+                  <label>
+                    URL do Invoice Checker (opcional para embed)
+                    <input
+                      value={invoiceCheckerUrlInput}
+                      onChange={(event) => setInvoiceCheckerUrlInput(event.target.value)}
+                      placeholder="https://..."
+                    />
+                  </label>
+                  <div className="api-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => setInvoiceCheckerEmbedUrl(invoiceCheckerUrlInput.trim())}
+                    >
+                      Aplicar URL
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setInvoiceCheckerEmbedUrl("");
+                        setInvoiceCheckerUrlInput("");
+                      }}
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                </div>
+
+                {invoiceCheckerEmbedUrl ? (
+                  <iframe
+                    title="Invoice Checker"
+                    src={invoiceCheckerEmbedUrl}
+                    className="invoice-checker-frame"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <article className="invoice-checker-placeholder">
+                    <h3>Wrapper pronto</h3>
+                    <p>
+                      Esta aba já está integrada no menu lateral. Quando tiveres uma URL pública do app
+                      (Vercel, Netlify, etc.), cola acima para carregar dentro desta página.
+                    </p>
+                  </article>
+                )}
+              </section>
+
+              <section className="panel">
+                <div className="tracker-header">
+                  <div>
+                    <h3>Preview de Parcels</h3>
+                    <p>Preparado para consumir dados do endpoint GET /api/parcels.</p>
+                  </div>
+                  <span className="status">{invoiceParcelsStatus}</span>
+                </div>
+
+                <div className="tracker-table-wrap">
+                  <table className="tracker-table">
+                    <thead>
+                      <tr>
+                        <th>Tracking</th>
+                        <th>Cliente</th>
+                        <th>Estado</th>
+                        <th>Atualizado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoiceParcelsPreview.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="tracker-empty">
+                            {invoiceParcelsLoading
+                              ? "A carregar parcels..."
+                              : "Sem dados. Atualiza quando o endpoint /api/parcels estiver disponível."}
+                          </td>
+                        </tr>
+                      ) : (
+                        invoiceParcelsPreview.map((row) => (
+                          <tr key={row.id}>
+                            <td>{row.tracking || "-"}</td>
+                            <td>{row.customer || "-"}</td>
+                            <td>{row.status || "-"}</td>
+                            <td>{row.updatedAt || "-"}</td>
                           </tr>
                         ))
                       )}
