@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Linke | CTT Invoice Checker</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    /* Custom overrides to bridge the gaps */
+    .workspace-app-shell {
+      width: 100vw;
+      margin: 0;
+    }
+
+    .workspace-topbar {
+      display: none;
+    }
+
+    .workspace-frame {
+      min-height: 100vh;
+      border-top-width: 0;
+      border-radius: 0;
+    }
+
+    .workspace-content {
+      overflow-y: auto;
+      max-height: 100vh;
+    }
+    .topbar-actions {
+      display: flex;
+      gap: 0.55rem;
+      align-items: center;
+    }
+    .icon-btn {
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.8);
+      color: var(--ink);
+      border-radius: 999px;
+      width: 34px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    .icon-btn:hover {
+      border-color: var(--accent);
+      background: rgba(73, 177, 111, 0.1);
+    }
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 18px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.4);
+      transition: all 0.2s ease;
+    }
+    .drop-zone:hover, .drop-zone.drag-over {
+      background: rgba(73, 177, 111, 0.05);
+      border-color: var(--accent);
+    }
+    .drop-zone.loaded {
+      background: rgba(73, 177, 111, 0.1);
+      border-color: var(--accent);
+      border-style: solid;
+    }
+    .dz-icon {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      display: block;
+    }
+    .dz-label {
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .dz-sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: block;
+      margin-top: 0.25rem;
+    }
+    .upload-progress {
+      margin-top: 0.75rem;
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(21, 27, 31, 0.08);
+      overflow: hidden;
+      display: none;
+    }
+    .upload-progress .bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #8dd4a5);
+      transition: width 0.25s ease;
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .quick-stats-row {
+      margin-top: 1rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.85rem;
+    }
+    .quick-stat {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 0.85rem 1rem;
+      box-shadow: var(--shadow-soft);
+    }
+    .quick-stat .k {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 700;
+    }
+    .quick-stat .v {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-top: 0.2rem;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 1.25rem;
+      box-shadow: var(--shadow-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .stat-card.filterable {
+      cursor: pointer;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .stat-card.filterable:hover {
+      transform: translateY(-2px);
+    }
+    .stat-card.active-filter {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(73, 177, 111, 0.2), var(--shadow-soft);
+    }
+    .stat-card .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .stat-card .value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      font-family: "Space Grotesk", sans-serif;
+    }
+    .stat-card.danger .value { color: #b83c2a; }
+    .stat-card.warning .value { color: #964219; }
+    .stat-card.success .value { color: var(--accent-dark); }
+    
+    .results-table-container {
+      margin-top: 1.5rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+    }
+    .table-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.5);
+    }
+    .search-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.5rem 0.75rem;
+      font-family: inherit;
+      width: 250px;
+    }
+    .filters-row {
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1.2fr 1fr repeat(2, 0.8fr) repeat(2, 1fr) auto;
+      gap: 0.65rem;
+      background: rgba(255, 255, 255, 0.3);
+    }
+    .filter-input {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.5rem 0.65rem;
+      font-family: inherit;
+      font-size: 0.85rem;
+      background: #fff;
+      min-width: 0;
+    }
+    .clear-filter-btn {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 600;
+      padding: 0.5rem 0.8rem;
+      cursor: pointer;
+    }
+    .clear-filter-btn:hover {
+      border-color: var(--accent);
+    }
+    .history-panel {
+      margin-top: 1rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow-soft);
+      overflow: hidden;
+    }
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.9rem 1.1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.45);
+    }
+    .history-list {
+      max-height: 230px;
+      overflow: auto;
+      padding: 0.4rem;
+    }
+    .history-item {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin: 0.5rem;
+      padding: 0.65rem 0.75rem;
+      display: grid;
+      gap: 0.35rem;
+    }
+    .history-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .history-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .mini-btn {
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 999px;
+      padding: 0.3rem 0.65rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .mini-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent-dark);
+    }
+    .mini-btn.danger {
+      border-color: rgba(184, 60, 42, 0.25);
+      color: #b83c2a;
+    }
+
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th .sort-arrow {
+      margin-left: 0.3rem;
+      opacity: 0.35;
+      font-size: 0.8em;
+    }
+    th.active-sort .sort-arrow {
+      opacity: 1;
+      color: var(--accent-dark);
+    }
+
+    .shortcut-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1200;
+      padding: 1rem;
+    }
+    .shortcut-modal.open {
+      display: flex;
+    }
+    .shortcut-card {
+      width: min(620px, 100%);
+      background: var(--card);
+      color: var(--ink);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow-soft);
+      padding: 1rem;
+    }
+    .shortcut-grid {
+      margin-top: 0.6rem;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.55rem 0.8rem;
+      align-items: center;
+    }
+    .shortcut-key {
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 8px;
+      padding: 0.2rem 0.5rem;
+      background: #fff;
+      font-weight: 700;
+      font-size: 0.8rem;
+    }
+
+    body.dark-theme {
+      --bg-1: #0f1518;
+      --bg-2: #1b2328;
+      --ink: #e7f1ec;
+      --muted: #b5c4bc;
+      --card: rgba(23, 34, 39, 0.9);
+      --border: rgba(227, 239, 233, 0.16);
+      --shadow-soft: 0 16px 34px rgba(0, 0, 0, 0.35);
+    }
+    @media (max-width: 1120px) {
+      .filters-row {
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+      }
+    }
+    .table-scroll {
+      overflow-x: auto;
+      max-height: 500px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th {
+      text-align: left;
+      padding: 0.75rem 1.25rem;
+      background: var(--bg-1);
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+    }
+    td {
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:hover td {
+      background: rgba(73, 177, 111, 0.02);
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+    .badge-danger { background: rgba(184, 60, 42, 0.1); color: #b83c2a; }
+    .badge-warning { background: rgba(150, 66, 25, 0.1); color: #964219; }
+    .badge-success { background: rgba(73, 177, 111, 0.1); color: var(--accent-dark); }
+    
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--ink);
+      color: #fff;
+      padding: 0.75rem 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      transform: translateY(100px);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 1000;
+    }
+    #toast.show { transform: translateY(0); }
+
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div id="toast"></div>
+  
+  <div class="workspace-app-shell">
+    <div class="workspace-frame">
+      <nav class="workspace-sidebar-nav">
+        <div class="workspace-nav">
+          <div class="workspace-nav-separator">
+            <span class="workspace-nav-separator-label">Tools</span>
+          </div>
+          <a href="#" class="workspace-nav-link active">
+            <span>📊</span> Checker
+          </a>
+          <a href="https://github.com/Stefremy/ctt-invoice-checker" target="_blank" class="workspace-nav-link">
+            <span>📖</span> Docs
+          </a>
+          
+          <div style="margin-top: auto; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 14px; color: rgba(255,255,255,0.6); font-size: 0.75rem;">
+            <strong>Pro Tip:</strong><br>
+            Drag & drop files directly into the boxes to start.
+          </div>
+        </div>
+      </nav>
+
+      <main class="workspace-content">
+        <div class="page">
+          <section class="hero">
+            <div class="badge">VITE POWERED</div>
+            <h1>CTT vs Linke Reconciliation</h1>
+            <p>Instantly detect unknown parcels and price mismatches between CTT's billing and your internal records.</p>
+          </section>
+
+          <div class="grid three">
+            <div class="panel">
+              <h3>📄 CTT Billing</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1rem;">Upload the .xlsx discriminativo.</p>
+              <div class="drop-zone" id="dropCTT" onclick="document.getElementById('fileCTT').click()">
+                <span class="dz-icon">📦</span>
+                <span class="dz-label">Click to select CTT file</span>
+                <span class="dz-sub">or drag & drop here</span>
+                <input type="file" id="fileCTT" accept=".xlsx,.xls,.csv" style="display:none">
+                <div class="upload-progress" id="progressCTT"><div class="bar"></div></div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>🗂️ Linke Records</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1rem;">Upload your shipment export.</p>
+              <div class="drop-zone" id="dropLinke" onclick="document.getElementById('fileLinke').click()">
+                <span class="dz-icon">📑</span>
+                <span class="dz-label">Click to select Linke file</span>
+                <span class="dz-sub">or drag & drop here</span>
+                <input type="file" id="fileLinke" accept=".xlsx,.xls,.csv" style="display:none">
+                <div class="upload-progress" id="progressLinke"><div class="bar"></div></div>
+              </div>
+            </div>
+
+            <div class="panel" style="justify-content: center; display: flex; flex-direction: column; align-items: center; text-align: center;">
+              <h3>Ready?</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1.5rem;">Press the button to run cross-check.</p>
+              <button class="btn btn-primary" id="btnRun" disabled onclick="runComparison()" style="width: 100%; font-size: 1.1rem; padding: 1rem;">
+                🚀 Run Comparison
+              </button>
+            </div>
+          </div>
+
+          <div id="resultsSection" style="display: none;">
+            <div class="stats-row">
+              <div class="stat-card danger filterable" id="cardUnknown" onclick="toggleStatusFilter('unknown')" title="Click to filter Unknown rows">
+                <span class="label">Unknown Parcels</span>
+                <span class="value" id="statUnknown">0</span>
+              </div>
+              <div class="stat-card warning filterable" id="cardMismatch" onclick="toggleStatusFilter('mismatch')" title="Click to filter Price High rows">
+                <span class="label">Price Too High</span>
+                <span class="value" id="statMismatch">0</span>
+              </div>
+              <div class="stat-card success filterable" id="cardOK" onclick="toggleStatusFilter('ok')" title="Click to filter Match OK rows">
+                <span class="label">Matches OK</span>
+                <span class="value" id="statOK">0</span>
+              </div>
+              <div class="stat-card filterable" id="cardTotal" onclick="toggleStatusFilter(null)" title="Click to clear status filter">
+                <span class="label">Total Processed</span>
+                <span class="value" id="statTotal">0</span>
+              </div>
+            </div>
+
+            <div class="quick-stats-row">
+              <div class="quick-stat">
+                <div class="k">Total At Risk (€)</div>
+                <div class="v" id="quickRisk">0.00</div>
+              </div>
+              <div class="quick-stat">
+                <div class="k">Largest Mismatch (€)</div>
+                <div class="v" id="quickMaxMismatch">0.00</div>
+              </div>
+              <div class="quick-stat">
+                <div class="k">Flagged Rate</div>
+                <div class="v" id="quickFlaggedRate">0%</div>
+              </div>
+            </div>
+
+            <div class="results-table-container">
+              <div class="table-header">
+                <h3>Detailed Audit</h3>
+                <div style="display: flex; gap: 0.75rem;">
+                  <button class="workspace-logout" onclick="exportCSV('filtered')" style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+                    📥 Export Visible
+                  </button>
+                  <button class="workspace-logout" onclick="exportCSV('all')" style="padding: 0.5rem 1rem; font-size: 0.8rem;">
+                    📥 Export Full
+                  </button>
+                  <input type="text" id="parcelSearch" class="search-box" placeholder="Filter by Parcel ID..." oninput="updateFilterState()">
+                </div>
+              </div>
+              <div class="filters-row">
+                <input type="text" id="clientSearch" class="filter-input" placeholder="Client contains..." oninput="updateFilterState()">
+                <input type="number" id="minDiff" class="filter-input" placeholder="Min Diff (€)" step="0.01" oninput="updateFilterState()">
+                <input type="number" id="maxDiff" class="filter-input" placeholder="Max Diff (€)" step="0.01" oninput="updateFilterState()">
+                <input type="date" id="fromDate" class="filter-input" oninput="updateFilterState()">
+                <input type="date" id="toDate" class="filter-input" oninput="updateFilterState()">
+                <button class="clear-filter-btn" onclick="undoLastFilter()">Undo Filter</button>
+                <button class="clear-filter-btn" onclick="resetFilters()">Clear Filters</button>
+              </div>
+              <div class="table-scroll">
+                <table id="resultsTable">
+                  <thead>
+                    <tr>
+                      <th class="sortable" onclick="sortTableBy('id')">Parcel ID<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('cttDateTs')">Date<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('cttPrice')">CTT (€)<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('lnkPrice')">Linke (€)<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('diff')">Diff (€)<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('lnkClient')">Client<span class="sort-arrow">↕</span></th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="resultsBody">
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="history-panel">
+              <div class="history-head">
+                <strong>Run History</strong>
+                <div style="display:flex; gap:0.5rem;">
+                  <button class="mini-btn" onclick="refreshHistory()">Refresh</button>
+                  <button class="mini-btn danger" onclick="clearHistory()">Clear All</button>
+                </div>
+              </div>
+              <div class="history-list" id="historyList"></div>
+            </div>
+          </div>
+
+          <div id="welcomeState" class="panel" style="text-align: center; padding: 4rem 2rem; background: rgba(255,255,255,0.2);">
+            <div style="font-size: 4rem; margin-bottom: 1.5rem; opacity: 0.5;">📤</div>
+            <h2>Waiting for data...</h2>
+            <p>Upload both files above to see the magic happen.</p>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="shortcut-modal" id="shortcutModal" onclick="closeShortcutModal(event)">
+    <div class="shortcut-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Keyboard Shortcuts</strong>
+        <button class="icon-btn" onclick="document.getElementById('shortcutModal').classList.remove('open')">✕</button>
+      </div>
+      <div class="shortcut-grid">
+        <div>Run comparison</div><div class="shortcut-key">Ctrl + Enter</div>
+        <div>Export visible rows</div><div class="shortcut-key">Ctrl + E</div>
+        <div>Export full rows</div><div class="shortcut-key">Ctrl + Shift + E</div>
+        <div>Clear all filters</div><div class="shortcut-key">Esc</div>
+        <div>Open this help</div><div class="shortcut-key">?</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let cttData = null, linkeData = null;
+    let tableData = { all: [], filtered: [] };
+    const TOLERANCE = 0.005;
+    let filterState = {
+      status: null,
+      parcelQuery: '',
+      clientQuery: '',
+      minDiff: NaN,
+      maxDiff: NaN,
+      fromDateTs: NaN,
+      toDateTs: NaN
+    };
+    let filterHistoryStack = [];
+    let sortState = { key: 'diff', dir: 'desc' };
+    const HISTORY_DB = 'ctt-audit-history';
+    const HISTORY_STORE = 'runs';
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 3500);
+    }
+
+    function readExcel(file, callback, progressId) {
+      const reader = new FileReader();
+      const progressWrap = document.getElementById(progressId);
+      const progressBar = progressWrap ? progressWrap.querySelector('.bar') : null;
+
+      if (progressWrap && progressBar) {
+        progressWrap.style.display = 'block';
+        progressBar.style.width = '0%';
+      }
+
+      reader.onprogress = e => {
+        if (!progressWrap || !progressBar || !e.lengthComputable) return;
+        const pct = Math.min(98, Math.round((e.loaded / e.total) * 100));
+        progressBar.style.width = `${pct}%`;
+      };
+
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: 'binary' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          
+          // Identify header row for CTT files (often starts at row 7 or has "Código do Objeto")
+          let json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+          
+          const isCTT = json.some(row => Object.values(row).some(v => String(v).includes('Código do Objeto') || String(v).includes('Nº Objeto')));
+          
+          if (isCTT) {
+            // Find the actual header row for CTT
+            const range = XLSX.utils.decode_range(ws['!ref']);
+            for (let R = range.s.r; R <= 20; ++R) { // Search first 20 rows
+              const row = [];
+              for (let C = range.s.c; C <= range.e.c; ++C) {
+                const cell = ws[XLSX.utils.encode_cell({r:R, c:C})];
+                row.push(cell ? cell.v : '');
+              }
+              if (row.some(v => String(v).includes('Código do Objeto') || String(v).includes('Nº Objeto'))) {
+                json = XLSX.utils.sheet_to_json(ws, { range: R, defval: '' });
+                break;
+              }
+            }
+          }
+          
+          if (progressWrap && progressBar) {
+            progressBar.style.width = '100%';
+            setTimeout(() => {
+              progressWrap.style.display = 'none';
+              progressBar.style.width = '0%';
+            }, 500);
+          }
+
+          callback(json);
+        } catch (err) {
+          if (progressWrap && progressBar) {
+            progressWrap.style.display = 'none';
+            progressBar.style.width = '0%';
+          }
+          showToast('Error reading file: ' + err.message);
+        }
+      };
+      reader.readAsBinaryString(file);
+    }
+
+    function setupDrop(dropId, fileId, progressId, onLoad) {
+      const dz = document.getElementById(dropId);
+      const fi = document.getElementById(fileId);
+      const handle = file => {
+        readExcel(file, data => {
+          dz.classList.add('loaded');
+          dz.querySelector('.dz-label').textContent = '✓ ' + file.name;
+          dz.querySelector('.dz-sub').textContent = data.length.toLocaleString() + ' rows detected';
+          onLoad(data);
+          checkReady();
+        }, progressId);
+      };
+      fi.addEventListener('change', e => e.target.files[0] && handle(e.target.files[0]));
+      dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+      dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+      dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); e.dataTransfer.files[0] && handle(e.dataTransfer.files[0]); });
+    }
+
+    setupDrop('dropCTT', 'fileCTT', 'progressCTT', data => { cttData = data; });
+    setupDrop('dropLinke', 'fileLinke', 'progressLinke', data => { linkeData = data; });
+
+    function checkReady() {
+      document.getElementById('btnRun').disabled = !(cttData && linkeData);
+    }
+
+    function parsePrice(v) {
+      if (v === '' || v === null || v === undefined) return NaN;
+      return parseFloat(String(v).replace(/\s/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.'));
+    }
+
+    function normalizeParcelId(v) {
+      return String(v || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, '')
+        .trim()
+        .toUpperCase();
+    }
+
+    function normalizeHeader(v) {
+      return String(v || '')
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    function parseDateToTs(value) {
+      const s = String(value || '').trim();
+      if (!s) return NaN;
+
+      const ddmmyyyy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (ddmmyyyy) {
+        const day = Number(ddmmyyyy[1]);
+        const month = Number(ddmmyyyy[2]) - 1;
+        const year = Number(ddmmyyyy[3]);
+        return new Date(year, month, day).getTime();
+      }
+
+      const parsed = new Date(s);
+      return isNaN(parsed.getTime()) ? NaN : new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+    }
+
+    function inputDateToTs(value) {
+      const s = String(value || '').trim();
+      if (!s) return NaN;
+      const parsed = new Date(s + 'T00:00:00');
+      return isNaN(parsed.getTime()) ? NaN : parsed.getTime();
+    }
+
+    function findCol(row, candidates) {
+      const keys = Object.keys(row);
+      const normalize = s => String(s || '').toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
+        .replace(/[^a-z0-9]/g, ""); // Remove spec characters
+      
+      const normCandidates = candidates.map(normalize);
+      
+      // 1. Try exact normalized match
+      for (const k of keys) {
+        if (normCandidates.includes(normalize(k))) return k;
+      }
+      
+      // 2. Try partial normalized match
+      for (const k of keys) {
+        const nk = normalize(k);
+        if (normCandidates.some(c => nk.includes(c) || c.includes(nk))) return k;
+      }
+      return null;
+    }
+
+    function findColByCandidatePriority(row, candidates) {
+      const keys = Object.keys(row);
+      const normalize = s => String(s || '').toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "");
+
+      const normalizedKeys = keys.map(k => ({ raw: k, norm: normalize(k) }));
+      const normalizedCandidates = candidates.map(c => normalize(c));
+
+      // Candidate-first exact match so higher-priority aliases win.
+      for (const candidate of normalizedCandidates) {
+        const hit = normalizedKeys.find(k => k.norm === candidate);
+        if (hit) return hit.raw;
+      }
+
+      // Candidate-first partial fallback.
+      for (const candidate of normalizedCandidates) {
+        const hit = normalizedKeys.find(k => k.norm.includes(candidate) || candidate.includes(k.norm));
+        if (hit) return hit.raw;
+      }
+
+      return null;
+    }
+
+    function runComparison() {
+      if (!cttData || !linkeData) return;
+      const cttSample = cttData[0] || {};
+      const linkeSample = linkeData[0] || {};
+      
+      const cttIdVariants = ['Código do Objeto', 'Codigo do Objeto', 'Nº Objeto', 'No Objeto', 'Referência', 'Nr Objeto', 'Envio', 'Object Code', 'ID', 'tracking', 'code'];
+      const cttPriceVariants = ['Valor sem IVA', 'Preço Líquido', 'Preco Liquido', 'Líquido', 'Liquido', 'Total', 'Valor', 'Price', 'Net Amount', 'preco', 'net', 'amount', 'valorsiva', 'S/ IVA'];
+      const lnkIdVariants = ['TRK Secundário', 'TRK Secundario', 'TRK secundario', 'trk secundario', 'Tracking', 'Secundario', 'ID', 'referencia'];
+      const lnkPriceVariants = ['Valor Transporte', 'Valor de Transporte', 'Valor do Transporte', 'Transporte', 'Price', 'Amount'];
+
+      const cttIdCol = findCol(cttSample, cttIdVariants);
+      const cttPriceCol = findCol(cttSample, cttPriceVariants);
+      const lnkIdCol = findCol(linkeSample, lnkIdVariants);
+      const lnkPriceCol = findColByCandidatePriority(linkeSample, lnkPriceVariants);
+
+      let missing = [];
+      if (!cttIdCol) missing.push('CTT: ID Column (e.g., Código do Objeto)');
+      if (!cttPriceCol) missing.push('CTT: Price Column (e.g., Valor sem IVA)');
+      if (!lnkIdCol) missing.push('Linke: ID Column (e.g., TRK Secundário)');
+      if (!lnkPriceCol) missing.push('Linke: Price Column (e.g., Valor Transporte)');
+
+      if (missing.length > 0) {
+        showToast('Missing columns: ' + missing.join(', '));
+        console.log('CTT Headers:', Object.keys(cttSample));
+        console.log('Linke Headers:', Object.keys(linkeSample));
+        return;
+      }
+
+      if (normalizeHeader(lnkPriceCol).includes('custo')) {
+        showToast('Blocked: Linke price column resolved to Preco Custo. Please use Valor Transporte.');
+        console.log('Blocked Linke price column:', lnkPriceCol);
+        return;
+      }
+
+      const linkeMap = {};
+      linkeData.forEach(row => {
+        const id = normalizeParcelId(row[lnkIdCol]);
+        if (id) linkeMap[id] = row;
+      });
+
+      // Use one CTT entry per parcel ID: keep the row with the highest CTT price.
+      const cttBestById = {};
+      cttData.forEach(row => {
+        const cttId = normalizeParcelId(row[cttIdCol]);
+        if (!cttId) return;
+
+        const cttPrice = parsePrice(row[cttPriceCol]);
+        const current = cttBestById[cttId];
+
+        if (!current || isNaN(current.cttPrice) || (!isNaN(cttPrice) && cttPrice > current.cttPrice)) {
+          cttBestById[cttId] = { row, cttPrice };
+        }
+      });
+
+      const results = [];
+      Object.entries(cttBestById).forEach(([cttId, best]) => {
+        const row = best.row;
+        const cttPrice = best.cttPrice;
+
+        const linkeRow = linkeMap[cttId];
+        const lnkPrice = linkeRow ? parsePrice(linkeRow[lnkPriceCol]) : NaN;
+
+        let status;
+        if (!linkeRow) status = 'unknown';
+        else if (!isNaN(cttPrice) && !isNaN(lnkPrice) && cttPrice > lnkPrice + TOLERANCE) status = 'mismatch';
+        else status = 'ok';
+
+        results.push({
+          id: cttId,
+          idLower: cttId.toLowerCase(),
+          cttPrice,
+          lnkPrice,
+          diff: (!isNaN(cttPrice) && !isNaN(lnkPrice)) ? +(cttPrice - lnkPrice).toFixed(4) : NaN,
+          status,
+          cttDate: row['Data do Objeto'] || row['Data'] || '',
+          cttDateTs: parseDateToTs(row['Data do Objeto'] || row['Data'] || ''),
+          lnkClient: linkeRow ? (linkeRow['Nome Cliente'] || linkeRow['Destinatário'] || '') : ''
+        });
+      });
+
+      tableData.all = results;
+      
+      document.getElementById('statTotal').textContent = results.length.toLocaleString();
+      document.getElementById('statUnknown').textContent = results.filter(r => r.status === 'unknown').length.toLocaleString();
+      document.getElementById('statMismatch').textContent = results.filter(r => r.status === 'mismatch').length.toLocaleString();
+      document.getElementById('statOK').textContent = results.filter(r => r.status === 'ok').length.toLocaleString();
+      updateQuickStats(results);
+
+      filterHistoryStack = [];
+      resetFilters();
+      document.getElementById('resultsSection').style.display = 'block';
+      document.getElementById('welcomeState').style.display = 'none';
+      document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      saveRunToHistory({
+        at: new Date().toISOString(),
+        rows: results,
+        stats: {
+          total: results.length,
+          unknown: results.filter(r => r.status === 'unknown').length,
+          mismatch: results.filter(r => r.status === 'mismatch').length,
+          ok: results.filter(r => r.status === 'ok').length
+        },
+        files: {
+          ctt: document.getElementById('dropCTT')?.querySelector('.dz-label')?.textContent || '',
+          linke: document.getElementById('dropLinke')?.querySelector('.dz-label')?.textContent || ''
+        }
+      });
+    }
+
+    function updateQuickStats(rows) {
+      const mismatches = rows.filter(r => r.status === 'mismatch' && !isNaN(r.diff));
+      const total = rows.length;
+      const flagged = rows.filter(r => r.status !== 'ok').length;
+      const risk = mismatches.reduce((sum, r) => sum + Math.max(0, r.diff), 0);
+      const maxMismatch = mismatches.reduce((m, r) => Math.max(m, r.diff), 0);
+      const rate = total ? ((flagged / total) * 100).toFixed(1) : '0.0';
+
+      document.getElementById('quickRisk').textContent = risk.toFixed(2);
+      document.getElementById('quickMaxMismatch').textContent = maxMismatch.toFixed(2);
+      document.getElementById('quickFlaggedRate').textContent = `${rate}%`;
+    }
+
+    function cloneFilterState() {
+      return {
+        status: filterState.status,
+        parcelQuery: filterState.parcelQuery,
+        clientQuery: filterState.clientQuery,
+        minDiff: filterState.minDiff,
+        maxDiff: filterState.maxDiff,
+        fromDateTs: filterState.fromDateTs,
+        toDateTs: filterState.toDateTs
+      };
+    }
+
+    function updateActiveFilterCards() {
+      const statusToCard = {
+        unknown: 'cardUnknown',
+        mismatch: 'cardMismatch',
+        ok: 'cardOK'
+      };
+
+      ['cardUnknown', 'cardMismatch', 'cardOK', 'cardTotal'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('active-filter');
+      });
+
+      const activeCard = statusToCard[filterState.status] || 'cardTotal';
+      const cardEl = document.getElementById(activeCard);
+      if (cardEl) cardEl.classList.add('active-filter');
+    }
+
+    function sortRows(rows) {
+      const { key, dir } = sortState;
+      const mul = dir === 'asc' ? 1 : -1;
+      const sorted = [...rows].sort((a, b) => {
+        const va = a[key];
+        const vb = b[key];
+
+        const na = typeof va === 'number' ? va : parseFloat(va);
+        const nb = typeof vb === 'number' ? vb : parseFloat(vb);
+        const bothNumbers = !isNaN(na) && !isNaN(nb);
+
+        if (bothNumbers) return (na - nb) * mul;
+        return String(va || '').localeCompare(String(vb || ''), undefined, { sensitivity: 'base' }) * mul;
+      });
+      return sorted;
+    }
+
+    function sortTableBy(key) {
+      if (sortState.key === key) {
+        sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortState.key = key;
+        sortState.dir = key === 'id' || key === 'lnkClient' ? 'asc' : 'desc';
+      }
+      applyFilters();
+    }
+
+    function updateSortHeaders() {
+      const sortableHeaders = document.querySelectorAll('th.sortable');
+      sortableHeaders.forEach(th => {
+        th.classList.remove('active-sort');
+        const arrow = th.querySelector('.sort-arrow');
+        if (arrow) arrow.textContent = '↕';
+      });
+
+      const keyToHeaderText = {
+        id: 'Parcel ID',
+        cttDateTs: 'Date',
+        cttPrice: 'CTT (€)',
+        lnkPrice: 'Linke (€)',
+        diff: 'Diff (€)',
+        lnkClient: 'Client'
+      };
+
+      const activeText = keyToHeaderText[sortState.key];
+      const activeHeader = Array.from(sortableHeaders).find(th => th.textContent.includes(activeText));
+      if (activeHeader) {
+        activeHeader.classList.add('active-sort');
+        const arrow = activeHeader.querySelector('.sort-arrow');
+        if (arrow) arrow.textContent = sortState.dir === 'asc' ? '↑' : '↓';
+      }
+    }
+
+    function applyFilters() {
+      const filtered = tableData.all.filter(r => {
+        if (filterState.status && r.status !== filterState.status) return false;
+
+        if (filterState.parcelQuery && !r.idLower.includes(filterState.parcelQuery)) return false;
+
+        const clientLower = String(r.lnkClient || '').toLowerCase();
+        if (filterState.clientQuery && !clientLower.includes(filterState.clientQuery)) return false;
+
+        if (!isNaN(filterState.minDiff) && (isNaN(r.diff) || r.diff < filterState.minDiff)) return false;
+        if (!isNaN(filterState.maxDiff) && (isNaN(r.diff) || r.diff > filterState.maxDiff)) return false;
+
+        if (!isNaN(filterState.fromDateTs)) {
+          if (isNaN(r.cttDateTs) || r.cttDateTs < filterState.fromDateTs) return false;
+        }
+        if (!isNaN(filterState.toDateTs)) {
+          if (isNaN(r.cttDateTs) || r.cttDateTs > filterState.toDateTs) return false;
+        }
+
+        return true;
+      });
+
+      tableData.filtered = sortRows(filtered);
+      updateActiveFilterCards();
+      updateSortHeaders();
+      renderTable();
+    }
+
+    function updateFilterState() {
+      filterHistoryStack.push(cloneFilterState());
+      if (filterHistoryStack.length > 30) filterHistoryStack.shift();
+
+      filterState.parcelQuery = String(document.getElementById('parcelSearch')?.value || '').trim().toLowerCase();
+      filterState.clientQuery = String(document.getElementById('clientSearch')?.value || '').trim().toLowerCase();
+      filterState.minDiff = parsePrice(document.getElementById('minDiff')?.value);
+      filterState.maxDiff = parsePrice(document.getElementById('maxDiff')?.value);
+      filterState.fromDateTs = inputDateToTs(document.getElementById('fromDate')?.value);
+      filterState.toDateTs = inputDateToTs(document.getElementById('toDate')?.value);
+      applyFilters();
+    }
+
+    function applyFilterStateToInputs() {
+      const parcelSearch = document.getElementById('parcelSearch');
+      const clientSearch = document.getElementById('clientSearch');
+      const minDiff = document.getElementById('minDiff');
+      const maxDiff = document.getElementById('maxDiff');
+      const fromDate = document.getElementById('fromDate');
+      const toDate = document.getElementById('toDate');
+
+      if (parcelSearch) parcelSearch.value = filterState.parcelQuery || '';
+      if (clientSearch) clientSearch.value = filterState.clientQuery || '';
+      if (minDiff) minDiff.value = isNaN(filterState.minDiff) ? '' : String(filterState.minDiff);
+      if (maxDiff) maxDiff.value = isNaN(filterState.maxDiff) ? '' : String(filterState.maxDiff);
+      if (fromDate) fromDate.value = isNaN(filterState.fromDateTs) ? '' : new Date(filterState.fromDateTs).toISOString().slice(0, 10);
+      if (toDate) toDate.value = isNaN(filterState.toDateTs) ? '' : new Date(filterState.toDateTs).toISOString().slice(0, 10);
+    }
+
+    function undoLastFilter() {
+      if (!filterHistoryStack.length) {
+        showToast('No filter change to undo.');
+        return;
+      }
+      filterState = filterHistoryStack.pop();
+      applyFilterStateToInputs();
+      applyFilters();
+    }
+
+    function resetFilters() {
+      filterState = {
+        status: null,
+        parcelQuery: '',
+        clientQuery: '',
+        minDiff: NaN,
+        maxDiff: NaN,
+        fromDateTs: NaN,
+        toDateTs: NaN
+      };
+      applyFilterStateToInputs();
+      applyFilters();
+    }
+
+    function toggleStatusFilter(status) {
+      filterHistoryStack.push(cloneFilterState());
+      if (filterHistoryStack.length > 30) filterHistoryStack.shift();
+      filterState.status = (filterState.status === status) ? null : status;
+      applyFilters();
+    }
+
+    function renderTable() {
+      const body = document.getElementById('resultsBody');
+      const data = tableData.filtered;
+
+      if (!data.length) {
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--muted); padding: 1.5rem;">No rows match the current filters.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = data.map(r => {
+        const cP = isNaN(r.cttPrice) ? '—' : r.cttPrice.toFixed(2);
+        const lP = isNaN(r.lnkPrice) ? '—' : r.lnkPrice.toFixed(2);
+        const df = isNaN(r.diff) ? '—' : (r.diff > 0 ? '+' : '') + r.diff.toFixed(2);
+        const badge = r.status === 'unknown' ? '<span class="badge badge-danger">Unknown</span>' :
+                      r.status === 'mismatch' ? '<span class="badge badge-warning">Price High</span>' :
+                      '<span class="badge badge-success">Match OK</span>';
+
+        return `<tr data-search="${r.idLower}">
+          <td style="font-family: monospace; font-weight: 600;">${r.id}</td>
+          <td style="color: var(--muted);">${r.cttDate}</td>
+          <td style="${r.status === 'mismatch' ? 'color: #b83c2a; font-weight: 700;' : ''}">${cP}</td>
+          <td>${lP}</td>
+          <td style="${r.diff > 0 ? 'color: #b83c2a; font-weight: 700;' : ''}">${df}</td>
+          <td style="color: var(--muted); font-size: 0.75rem;">${r.lnkClient}</td>
+          <td>${badge}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function getHistoryDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(HISTORY_DB, 1);
+        req.onupgradeneeded = event => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains(HISTORY_STORE)) {
+            db.createObjectStore(HISTORY_STORE, { keyPath: 'id', autoIncrement: true });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function saveRunToHistory(run) {
+      try {
+        const db = await getHistoryDb();
+        const tx = db.transaction(HISTORY_STORE, 'readwrite');
+        tx.objectStore(HISTORY_STORE).add(run);
+        tx.oncomplete = () => {
+          db.close();
+          refreshHistory();
+        };
+      } catch (err) {
+        console.warn('History save failed:', err);
+      }
+    }
+
+    async function getAllHistoryRuns() {
+      const db = await getHistoryDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, 'readonly');
+        const req = tx.objectStore(HISTORY_STORE).getAll();
+        req.onsuccess = () => {
+          db.close();
+          resolve((req.result || []).sort((a, b) => String(b.at).localeCompare(String(a.at))));
+        };
+        req.onerror = () => {
+          db.close();
+          reject(req.error);
+        };
+      });
+    }
+
+    async function refreshHistory() {
+      const list = document.getElementById('historyList');
+      if (!list) return;
+
+      try {
+        const runs = await getAllHistoryRuns();
+        if (!runs.length) {
+          list.innerHTML = '<div class="history-item"><div class="history-meta">No saved runs yet.</div></div>';
+          return;
+        }
+
+        list.innerHTML = runs.map(r => {
+          const d = new Date(r.at);
+          const when = isNaN(d.getTime()) ? r.at : d.toLocaleString();
+          return `<div class="history-item">
+            <div><strong>${when}</strong></div>
+            <div class="history-meta">Rows: ${r.stats?.total || 0} | High: ${r.stats?.mismatch || 0} | Unknown: ${r.stats?.unknown || 0}</div>
+            <div class="history-meta">${r.files?.ctt || ''} | ${r.files?.linke || ''}</div>
+            <div class="history-actions">
+              <button class="mini-btn" onclick="loadHistoryRun(${r.id})">Load</button>
+              <button class="mini-btn" onclick="downloadHistoryRun(${r.id})">CSV</button>
+              <button class="mini-btn danger" onclick="deleteHistoryRun(${r.id})">Delete</button>
+            </div>
+          </div>`;
+        }).join('');
+      } catch (err) {
+        list.innerHTML = '<div class="history-item"><div class="history-meta">History unavailable in this browser.</div></div>';
+      }
+    }
+
+    async function getHistoryRunById(id) {
+      const db = await getHistoryDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, 'readonly');
+        const req = tx.objectStore(HISTORY_STORE).get(Number(id));
+        req.onsuccess = () => {
+          db.close();
+          resolve(req.result || null);
+        };
+        req.onerror = () => {
+          db.close();
+          reject(req.error);
+        };
+      });
+    }
+
+    async function loadHistoryRun(id) {
+      const run = await getHistoryRunById(id);
+      if (!run || !Array.isArray(run.rows)) return;
+
+      tableData.all = run.rows;
+      document.getElementById('statTotal').textContent = String(run.stats?.total || run.rows.length).toLocaleString();
+      document.getElementById('statUnknown').textContent = String(run.stats?.unknown || 0).toLocaleString();
+      document.getElementById('statMismatch').textContent = String(run.stats?.mismatch || 0).toLocaleString();
+      document.getElementById('statOK').textContent = String(run.stats?.ok || 0).toLocaleString();
+      updateQuickStats(run.rows);
+      filterHistoryStack = [];
+      resetFilters();
+      document.getElementById('resultsSection').style.display = 'block';
+      document.getElementById('welcomeState').style.display = 'none';
+      showToast('Loaded run from history.');
+    }
+
+    async function downloadHistoryRun(id) {
+      const run = await getHistoryRunById(id);
+      if (!run || !Array.isArray(run.rows)) return;
+      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Status']];
+      run.rows.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.status]));
+      const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = `audit-history-${id}.csv`;
+      a.click();
+    }
+
+    async function deleteHistoryRun(id) {
+      const db = await getHistoryDb();
+      const tx = db.transaction(HISTORY_STORE, 'readwrite');
+      tx.objectStore(HISTORY_STORE).delete(Number(id));
+      tx.oncomplete = () => {
+        db.close();
+        refreshHistory();
+      };
+    }
+
+    async function clearHistory() {
+      const db = await getHistoryDb();
+      const tx = db.transaction(HISTORY_STORE, 'readwrite');
+      tx.objectStore(HISTORY_STORE).clear();
+      tx.oncomplete = () => {
+        db.close();
+        refreshHistory();
+      };
+    }
+
+    function closeShortcutModal(event) {
+      if (event.target?.id === 'shortcutModal') {
+        document.getElementById('shortcutModal').classList.remove('open');
+      }
+    }
+
+    function applyTheme(theme) {
+      const dark = theme === 'dark';
+      document.body.classList.toggle('dark-theme', dark);
+      const btn = document.getElementById('btnTheme');
+      if (btn) btn.textContent = dark ? '☀️' : '🌙';
+    }
+
+    function initUiEnhancements() {
+      const savedTheme = localStorage.getItem('invoice-theme') || 'light';
+      applyTheme(savedTheme);
+
+      document.getElementById('btnTheme')?.addEventListener('click', () => {
+        const next = document.body.classList.contains('dark-theme') ? 'light' : 'dark';
+        localStorage.setItem('invoice-theme', next);
+        applyTheme(next);
+      });
+
+      document.getElementById('btnShortcuts')?.addEventListener('click', () => {
+        document.getElementById('shortcutModal')?.classList.add('open');
+      });
+
+      document.addEventListener('keydown', e => {
+        const key = String(e.key || '').toLowerCase();
+
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault();
+          runComparison();
+          return;
+        }
+
+        if ((e.ctrlKey || e.metaKey) && key === 'e') {
+          e.preventDefault();
+          if (e.shiftKey) exportCSV('all');
+          else exportCSV('filtered');
+          return;
+        }
+
+        if (key === '?' || (e.shiftKey && key === '/')) {
+          e.preventDefault();
+          document.getElementById('shortcutModal')?.classList.add('open');
+          return;
+        }
+
+        if (key === 'escape') {
+          if (document.getElementById('shortcutModal')?.classList.contains('open')) {
+            document.getElementById('shortcutModal').classList.remove('open');
+          } else {
+            resetFilters();
+          }
+        }
+      });
+
+      updateSortHeaders();
+      refreshHistory();
+    }
+
+    function exportCSV(type) {
+      const data = type === 'all' ? tableData.all : tableData.filtered;
+      if (!data.length) {
+        showToast('No rows to export for current selection.');
+        return;
+      }
+      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Status']];
+      data.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.status]));
+      const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const suffix = type === 'all' ? 'full' : 'filtered';
+      a.download = `audit-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    }
+
+    initUiEnhancements();
+
+    function postEmbedHeight() {
+      if (!window.parent || window.parent === window) {
+        return;
+      }
+      const bodyHeight = document.body ? document.body.scrollHeight : 0;
+      const docHeight = document.documentElement ? document.documentElement.scrollHeight : 0;
+      const height = Math.max(bodyHeight, docHeight, 900);
+      window.parent.postMessage({ type: 'invoice-checker:height', height }, window.location.origin);
+    }
+
+    window.addEventListener('load', () => {
+      postEmbedHeight();
+      setTimeout(postEmbedHeight, 220);
+      setTimeout(postEmbedHeight, 900);
+    });
+
+    window.addEventListener('resize', postEmbedHeight);
+
+    window.addEventListener('message', event => {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+      if (event.data?.type === 'invoice-checker:request-height') {
+        postEmbedHeight();
+      }
+    });
+
+    if ('ResizeObserver' in window) {
+      const heightObserver = new ResizeObserver(() => {
+        postEmbedHeight();
+      });
+      if (document.body) {
+        heightObserver.observe(document.body);
+      }
+      if (document.documentElement) {
+        heightObserver.observe(document.documentElement);
+      }
+    }
+  </script>
+</body>
+</html>

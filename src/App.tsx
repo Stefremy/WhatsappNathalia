@@ -153,14 +153,6 @@ type ConsumivelItem = {
   url?: string;
 };
 
-type InvoiceParcelPreview = {
-  id: string;
-  tracking: string;
-  customer: string;
-  status: string;
-  updatedAt: string;
-};
-
 type CalendarEvent = {
   id: string;
   date: string;
@@ -1184,21 +1176,9 @@ function App() {
     texto2: ""
   });
   const [activeView, setActiveView] = useState<"workspace" | "notificacao-envio" | "tracker" | "analytics" | "consumiveis" | "feedback" | "clientes" | "ctt" | "webservices" | "invoice-checker">("workspace");
-  const [invoiceCheckerEmbedUrl, setInvoiceCheckerEmbedUrl] = useState(() => {
-    const envUrl = String(import.meta.env.VITE_INVOICE_CHECKER_URL || "").trim();
-    if (envUrl) {
-      return envUrl;
-    }
-    try {
-      return String(localStorage.getItem("wa_invoice_checker_embed_url") || "").trim();
-    } catch {
-      return "";
-    }
-  });
-  const [invoiceCheckerUrlInput, setInvoiceCheckerUrlInput] = useState(invoiceCheckerEmbedUrl);
-  const [invoiceParcelsPreview, setInvoiceParcelsPreview] = useState<InvoiceParcelPreview[]>([]);
-  const [invoiceParcelsLoading, setInvoiceParcelsLoading] = useState(false);
-  const [invoiceParcelsStatus, setInvoiceParcelsStatus] = useState("Clique em Atualizar para carregar dados de /api/parcels.");
+  const invoiceCheckerAppUrl = String(import.meta.env.VITE_INVOICE_CHECKER_URL || "/invoice-checker/index.html").trim() || "/invoice-checker/index.html";
+  const invoiceCheckerFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const [invoiceCheckerFrameHeight, setInvoiceCheckerFrameHeight] = useState(980);
   // Incidências WhatsApp inbox (2nd number)
   const [incChatLogs, setIncChatLogs] = useState<Array<{
     id: string; created_at: string; direction: string; channel: string;
@@ -3724,45 +3704,6 @@ function App() {
       });
   }
 
-  async function loadInvoiceParcelsPreview() {
-    setInvoiceParcelsLoading(true);
-    setInvoiceParcelsStatus("A carregar /api/parcels...");
-    try {
-      const response = await fetch(apiUrl("/api/parcels?limit=100"));
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(String(data?.details || data?.error || `Falha parcels (${response.status})`));
-      }
-
-      const rows = Array.isArray(data?.rows)
-        ? (data.rows as unknown[])
-        : Array.isArray(data?.data)
-          ? (data.data as unknown[])
-          : [];
-
-      const normalizedRows: InvoiceParcelPreview[] = rows.slice(0, 100).map((row, index) => {
-        const record = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
-        const id = String(record.id || record.parcelId || record.providerTrackingCode || `parcel-${index + 1}`);
-        const tracking = String(record.providerTrackingCode || record.tracking || record.parcelId || "-");
-        const customer = String(record.customer || record.clientName || record.sender || "-");
-        const status = String(record.status || record.currentStatus || record.shipmentStatus || "-");
-        const updatedAt = String(record.updated_at || record.updatedAt || record.created_at || record.createdAt || "-");
-        return { id, tracking, customer, status, updatedAt };
-      });
-
-      setInvoiceParcelsPreview(normalizedRows);
-      setInvoiceParcelsStatus(
-        normalizedRows.length > 0
-          ? `${normalizedRows.length} parcels carregados de /api/parcels.`
-          : "Sem parcels para mostrar."
-      );
-    } catch (error) {
-      setInvoiceParcelsStatus(error instanceof Error ? error.message : "Não foi possível carregar /api/parcels.");
-    } finally {
-      setInvoiceParcelsLoading(false);
-    }
-  }
-
   function loadDeliveredShipments(page = deliveredPage) {
     const targetPage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
     const defaultRange = getLastNDaysDateRange(30);
@@ -4690,25 +4631,39 @@ function App() {
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (activeView === "invoice-checker" && invoiceParcelsPreview.length === 0 && !invoiceParcelsLoading) {
-      void loadInvoiceParcelsPreview();
-    }
-  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("wa_invoice_checker_embed_url", invoiceCheckerEmbedUrl.trim());
-    } catch {
-      // Ignore localStorage writes in restricted contexts.
-    }
-  }, [invoiceCheckerEmbedUrl]);
-
-  useEffect(() => {
     if (activeView === "clientes") {
       void refreshClientesGoogleStatus();
       void loadClientesInbox();
     }
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    function handleInvoiceCheckerHeightMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+      const payload = event.data as { type?: string; height?: unknown } | null;
+      if (!payload || payload.type !== "invoice-checker:height") {
+        return;
+      }
+      const nextHeight = Number(payload.height);
+      if (!Number.isFinite(nextHeight)) {
+        return;
+      }
+      const clampedHeight = Math.max(900, Math.min(6000, Math.ceil(nextHeight)));
+      setInvoiceCheckerFrameHeight((previousHeight) => {
+        if (Math.abs(previousHeight - clampedHeight) <= 6) {
+          return previousHeight;
+        }
+        return clampedHeight;
+      });
+    }
+
+    window.addEventListener("message", handleInvoiceCheckerHeightMessage);
+    return () => {
+      window.removeEventListener("message", handleInvoiceCheckerHeightMessage);
+    };
+  }, []);
 
   useEffect(() => {
     if (activeView !== "ctt") {
@@ -9771,121 +9726,27 @@ function App() {
               <div className="tracker-header">
                 <div>
                   <h2>Invoice Checker</h2>
-                  <p>Nova janela integrada no sidebar para incorporar o projeto ctt-invoice-checker.</p>
-                </div>
-                <div className="tracker-actions">
-                  <a
-                    className="btn btn-secondary"
-                    href="https://github.com/Stefremy/ctt-invoice-checker"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Abrir repo
-                  </a>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      void loadInvoiceParcelsPreview();
-                    }}
-                    disabled={invoiceParcelsLoading}
-                  >
-                    {invoiceParcelsLoading ? "A atualizar..." : "Atualizar /api/parcels"}
-                  </button>
+                  <p>Versão integrada diretamente do repositório ctt-invoice-checker.</p>
                 </div>
               </div>
 
-              <section className="panel">
-                <div className="invoice-checker-controls">
-                  <label>
-                    URL do Invoice Checker (opcional para embed)
-                    <input
-                      value={invoiceCheckerUrlInput}
-                      onChange={(event) => setInvoiceCheckerUrlInput(event.target.value)}
-                      placeholder="https://..."
-                    />
-                  </label>
-                  <div className="api-actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => setInvoiceCheckerEmbedUrl(invoiceCheckerUrlInput.trim())}
-                    >
-                      Aplicar URL
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => {
-                        setInvoiceCheckerEmbedUrl("");
-                        setInvoiceCheckerUrlInput("");
-                      }}
-                    >
-                      Limpar
-                    </button>
-                  </div>
-                </div>
-
-                {invoiceCheckerEmbedUrl ? (
-                  <iframe
-                    title="Invoice Checker"
-                    src={invoiceCheckerEmbedUrl}
-                    className="invoice-checker-frame"
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <article className="invoice-checker-placeholder">
-                    <h3>Wrapper pronto</h3>
-                    <p>
-                      Esta aba já está integrada no menu lateral. Quando tiveres uma URL pública do app
-                      (Vercel, Netlify, etc.), cola acima para carregar dentro desta página.
-                    </p>
-                  </article>
-                )}
-              </section>
-
-              <section className="panel">
-                <div className="tracker-header">
-                  <div>
-                    <h3>Preview de Parcels</h3>
-                    <p>Preparado para consumir dados do endpoint GET /api/parcels.</p>
-                  </div>
-                  <span className="status">{invoiceParcelsStatus}</span>
-                </div>
-
-                <div className="tracker-table-wrap">
-                  <table className="tracker-table">
-                    <thead>
-                      <tr>
-                        <th>Tracking</th>
-                        <th>Cliente</th>
-                        <th>Estado</th>
-                        <th>Atualizado</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invoiceParcelsPreview.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="tracker-empty">
-                            {invoiceParcelsLoading
-                              ? "A carregar parcels..."
-                              : "Sem dados. Atualiza quando o endpoint /api/parcels estiver disponível."}
-                          </td>
-                        </tr>
-                      ) : (
-                        invoiceParcelsPreview.map((row) => (
-                          <tr key={row.id}>
-                            <td>{row.tracking || "-"}</td>
-                            <td>{row.customer || "-"}</td>
-                            <td>{row.status || "-"}</td>
-                            <td>{row.updatedAt || "-"}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+              <section className="invoice-checker-shell">
+                <iframe
+                  ref={invoiceCheckerFrameRef}
+                  title="Invoice Checker"
+                  src={invoiceCheckerAppUrl}
+                  className="invoice-checker-frame"
+                  style={{ height: `${invoiceCheckerFrameHeight}px` }}
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  onLoad={() => {
+                    const targetWindow = invoiceCheckerFrameRef.current?.contentWindow;
+                    if (!targetWindow) {
+                      return;
+                    }
+                    targetWindow.postMessage({ type: "invoice-checker:request-height" }, window.location.origin);
+                  }}
+                />
               </section>
             </section>
           ) : null}
