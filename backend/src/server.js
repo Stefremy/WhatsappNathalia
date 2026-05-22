@@ -1115,6 +1115,145 @@ async function fetchAllTmsInTransportShipmentsData({ limit = 250, maxPages = 40 
   return allRows;
 }
 
+async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+  const allRows = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const pageData = await fetchTmsAllStatusesShipmentsData({ page, limit });
+    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
+    allRows.push(...rows);
+
+    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
+    page += 1;
+  }
+
+  return allRows;
+}
+
+function normalizeInvoiceDateKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!iso) return "";
+  const year = Number(iso[1]);
+  const month = Number(iso[2]);
+  const day = Number(iso[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return "";
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  return `${iso[1]}-${iso[2]}-${iso[3]}`;
+}
+
+async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, maxPages = 40 } = {}) {
+  const cleanFromKey = normalizeInvoiceDateKey(fromKey);
+  const cleanToKey = normalizeInvoiceDateKey(toKey);
+  if (!cleanFromKey || !cleanToKey) {
+    throw new Error("Invalid date range. Expected YYYY-MM-DD for 'from' and 'to'.");
+  }
+  if (cleanFromKey > cleanToKey) {
+    throw new Error("Invalid date range. 'from' must be before or equal to 'to'.");
+  }
+
+  const safeLimit = Number.isFinite(limit) ? Math.max(10, Math.min(250, Math.trunc(limit))) : 250;
+  const safeMaxPages = Number.isFinite(maxPages) ? Math.max(1, Math.min(40, Math.trunc(maxPages))) : 40;
+
+  let combinedRows = [];
+  let sourceMode = "all-status";
+
+  try {
+    combinedRows = await fetchAllTmsAllStatusesShipmentsData({
+      limit: safeLimit,
+      maxPages: safeMaxPages
+    });
+  } catch (error) {
+    sourceMode = "fallback-status-3-4-5-9";
+    warnSoftError("tms.invoice_linke_shipments.all_status_failed", error, {
+      route: "/api/tms/invoice-linke-shipments"
+    });
+
+    const [deliveredRows, inDistributionRows, inTransportRows, incidenceRows] = await Promise.all([
+      fetchAllTmsDeliveredShipmentsData({ limit: safeLimit, maxPages: safeMaxPages }),
+      fetchAllTmsInDistributionShipmentsData({ limit: safeLimit, maxPages: safeMaxPages }),
+      fetchAllTmsInTransportShipmentsData({ limit: safeLimit, maxPages: safeMaxPages }),
+      fetchAllTmsIncidenceShipmentsData({ limit: safeLimit, maxPages: safeMaxPages })
+    ]);
+
+    combinedRows = [
+      ...deliveredRows,
+      ...inDistributionRows,
+      ...inTransportRows,
+      ...incidenceRows
+    ];
+  }
+
+  const filteredRows = combinedRows.filter((row) => {
+    const dateInfo = resolveShipmentDateInfoWithinRange(row, cleanFromKey, cleanToKey);
+    return Boolean(dateInfo.key);
+  });
+
+  const dedupedByTracking = new Map();
+  for (const row of filteredRows) {
+    const tracking = String(row?.providerTrackingCode || row?.parcelId || "").trim().toUpperCase();
+    if (!tracking) continue;
+
+    const amount = Number.parseFloat(String(row?.chargeAmount || "").replace(/,/g, "."));
+    const previous = dedupedByTracking.get(tracking);
+
+    if (!previous) {
+      dedupedByTracking.set(tracking, row);
+      continue;
+    }
+
+    const previousAmount = Number.parseFloat(String(previous?.chargeAmount || "").replace(/,/g, "."));
+    const shouldReplace = (!Number.isFinite(previousAmount) && Number.isFinite(amount)) || (Number.isFinite(amount) && amount > previousAmount);
+    if (shouldReplace) {
+      dedupedByTracking.set(tracking, row);
+    }
+  }
+
+  const rows = Array.from(dedupedByTracking.values()).map((row, index) => {
+    const tracking = String(row?.providerTrackingCode || row?.parcelId || "").trim() || `tracking-${index + 1}`;
+    const transportAmountRaw = String(row?.chargeAmount || "").trim();
+    const transportAmount = transportAmountRaw ? Number.parseFloat(transportAmountRaw.replace(/,/g, ".")).toFixed(2) : "";
+
+    return {
+      id: tracking,
+      tracking,
+      parcelId: String(row?.parcelId || "").trim(),
+      providerTrackingCode: String(row?.providerTrackingCode || "").trim(),
+      service: String(row?.service || "").trim(),
+      recipient: String(row?.recipient || "").trim(),
+      pickupDate: String(row?.pickupDate || "").trim(),
+      deliveryDate: String(row?.deliveryDate || "").trim(),
+      status: String(row?.status || "").trim(),
+      chargeAmount: transportAmount,
+      hasCharge: Boolean(row?.hasCharge),
+      "TRK Secundário": tracking,
+      "Valor Transporte": transportAmount,
+      "Nome Cliente": String(row?.recipient || row?.sender || "").trim(),
+      "Destinatário": String(row?.recipient || "").trim(),
+      "Data Entrega": String(row?.deliveryDate || row?.pickupDate || "").trim()
+    };
+  });
+
+  return {
+    rows,
+    meta: {
+      fetchedAt: new Date().toISOString(),
+      from: cleanFromKey,
+      to: cleanToKey,
+      limit: safeLimit,
+      maxPages: safeMaxPages,
+      source: "tms:/admin/shipments/datatable",
+      sourceMode,
+      totalFetchedRows: combinedRows.length,
+      totalFilteredRows: filteredRows.length,
+      totalReturnedRows: rows.length
+    }
+  };
+}
+
 function shouldRunAutoNotificacaoIncidenciaAtClock(parts) {
   const isWeekend = ["Sat", "Sun"].includes(parts.weekday);
   // Monday-Friday only.
@@ -2760,6 +2899,22 @@ function resolveShipmentPrimaryDateInfo(row) {
   return extractShipmentDateInfo(row?.deliveryDate || "");
 }
 
+function resolveShipmentDateInfoWithinRange(row, fromKey, toKey) {
+  const delivery = extractShipmentDateInfo(row?.deliveryDate || "");
+  if (delivery.key && isDateKeyWithinRange(delivery.key, fromKey, toKey)) {
+    return delivery;
+  }
+
+  const pickup = extractShipmentDateInfo(row?.pickupDate || "");
+  if (pickup.key && isDateKeyWithinRange(pickup.key, fromKey, toKey)) {
+    return pickup;
+  }
+
+  if (delivery.key) return delivery;
+  if (pickup.key) return pickup;
+  return { key: "", ts: NaN };
+}
+
 function isDateKeyWithinRange(dateKey, fromKey, toKey) {
   const key = String(dateKey || "").trim();
   if (!key) return false;
@@ -3393,6 +3548,107 @@ async function fetchTmsInTransportShipmentsData({ page = 1, limit = 250 } = {}) 
       totalPages,
       fetchedAt: new Date().toISOString(),
       source: `${baseUrl}/admin/shipments?filter=1&status=${encodeURIComponent(transportStatus)}`
+    }
+  };
+}
+
+async function fetchTmsAllStatusesShipmentsData({ page = 1, limit = 250 } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchAllStatusesDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS all-status shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  // Datatable comes oldest -> newest; compute an offset from the end so page 1 is newest first.
+  const probePayload = await fetchAllStatusesDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPage = Math.min(safePage, totalPages);
+  const sourceStart = Math.max(0, total - (boundedPage * safeLimit));
+  const sourceEndExclusive = Math.max(0, total - ((boundedPage - 1) * safeLimit));
+  const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+
+  const payload = await fetchAllStatusesDatatablePage(boundedPage, sourceStart, sourceLength);
+  const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
+
+  return {
+    rows,
+    meta: {
+      page: boundedPage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      fetchedAt: new Date().toISOString(),
+      source: `${baseUrl}/admin/shipments?filter=1`
     }
   };
 }
@@ -9059,6 +9315,34 @@ app.get("/api/tms/em-transporte", async (req, res) => {
     return res.status(500).json({
       error: "Failed to fetch in-transport TMS shipments",
       details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+app.get("/api/tms/invoice-linke-shipments", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
+  try {
+    const from = String(req.query?.from || req.query?.fromDate || "").trim();
+    const to = String(req.query?.to || req.query?.toDate || "").trim();
+    const requestedLimit = Number(req.query?.limit || 250);
+    const requestedMaxPages = Number(req.query?.maxPages || 40);
+
+    const data = await fetchTmsInvoiceLinkeShipmentsData({
+      fromKey: from,
+      toKey: to,
+      limit: requestedLimit,
+      maxPages: requestedMaxPages
+    });
+
+    return res.json({ ok: true, data: data.rows, meta: data.meta });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : "Unknown error";
+    const isInputError = /invalid date range/i.test(details);
+    warnSoftError("tms.invoice_linke_shipments", error, { route: "/api/tms/invoice-linke-shipments", requestId });
+    return res.status(isInputError ? 400 : 500).json({
+      error: "Failed to fetch Linke shipments for invoice checker",
+      details
     });
   }
 });

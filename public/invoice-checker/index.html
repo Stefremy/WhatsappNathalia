@@ -416,6 +416,13 @@
           <a href="https://github.com/Stefremy/ctt-invoice-checker" target="_blank" class="workspace-nav-link">
             <span>📖</span> Docs
           </a>
+
+          <div class="workspace-nav-separator" style="margin-top: 0.85rem;">
+            <span class="workspace-nav-separator-label">API Mode</span>
+          </div>
+          <button class="workspace-nav-link workspace-nav-button" type="button" onclick="document.getElementById('api-mode-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })">
+            <span>🔌</span> Shipments API
+          </button>
           
           <div style="margin-top: auto; padding: 1rem; background: rgba(255,255,255,0.05); border-radius: 14px; color: rgba(255,255,255,0.6); font-size: 0.75rem;">
             <strong>Pro Tip:</strong><br>
@@ -462,6 +469,51 @@
               <p style="font-size: 0.8rem; margin-bottom: 1.5rem;">Press the button to run cross-check.</p>
               <button class="btn btn-primary" id="btnRun" disabled onclick="runComparison()" style="width: 100%; font-size: 1.1rem; padding: 1rem;">
                 🚀 Run Comparison
+              </button>
+            </div>
+          </div>
+
+          <section class="hero" id="api-mode-section" style="margin-top: 1.2rem;">
+            <div class="badge">API MODE</div>
+            <h2>CTT vs Shipments API Reconciliation</h2>
+            <p>Same audit flow, but Linke records come from shipments API by date range, including Valor Transporte.</p>
+          </section>
+
+          <div class="grid three">
+            <div class="panel">
+              <h3>📄 CTT Billing</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1rem;">Upload the .xlsx discriminativo.</p>
+              <div class="drop-zone" id="dropCTTApi" onclick="document.getElementById('fileCTTApi').click()">
+                <span class="dz-icon">📦</span>
+                <span class="dz-label">Click to select CTT file</span>
+                <span class="dz-sub">or drag & drop here</span>
+                <input type="file" id="fileCTTApi" accept=".xlsx,.xls,.csv" style="display:none">
+                <div class="upload-progress" id="progressCTTApi"><div class="bar"></div></div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>🔗 Linke Shipments API</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1rem;">Fetch data from /admin/shipments with a date range.</p>
+              <div style="display: grid; gap: 0.65rem;">
+                <label style="display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600;">
+                  From
+                  <input type="date" id="apiDateFrom" class="filter-input" onchange="checkReadyApi()">
+                </label>
+                <label style="display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600;">
+                  To
+                  <input type="date" id="apiDateTo" class="filter-input" onchange="checkReadyApi()">
+                </label>
+                <button class="btn btn-secondary" type="button" id="btnFetchLinkeApi" onclick="fetchLinkeShipmentsFromApi()">Fetch Shipments</button>
+                <p id="apiFetchStatus" style="font-size: 0.78rem; color: var(--muted); margin: 0;"></p>
+              </div>
+            </div>
+
+            <div class="panel" style="justify-content: center; display: flex; flex-direction: column; align-items: center; text-align: center;">
+              <h3>Ready?</h3>
+              <p style="font-size: 0.8rem; margin-bottom: 1.5rem;">Run the same comparison with API-loaded Linke data.</p>
+              <button class="btn btn-primary" id="btnRunApi" disabled onclick="runComparisonApi()" style="width: 100%; font-size: 1.1rem; padding: 1rem;">
+                🚀 Run API Comparison
               </button>
             </div>
           </div>
@@ -582,6 +634,7 @@
 
   <script>
     let cttData = null, linkeData = null;
+    let cttDataApi = null, linkeDataApi = null;
     let tableData = { all: [], filtered: [] };
     const TOLERANCE = 0.005;
     let filterState = {
@@ -687,9 +740,137 @@
 
     setupDrop('dropCTT', 'fileCTT', 'progressCTT', data => { cttData = data; });
     setupDrop('dropLinke', 'fileLinke', 'progressLinke', data => { linkeData = data; });
+    setupDrop('dropCTTApi', 'fileCTTApi', 'progressCTTApi', data => { cttDataApi = data; checkReadyApi(); });
 
     function checkReady() {
       document.getElementById('btnRun').disabled = !(cttData && linkeData);
+    }
+
+    function checkReadyApi() {
+      const from = String(document.getElementById('apiDateFrom')?.value || '').trim();
+      const to = String(document.getElementById('apiDateTo')?.value || '').trim();
+      const hasApiDateRange = Boolean(from && to);
+      const hasApiLinkeData = Array.isArray(linkeDataApi) && linkeDataApi.length > 0;
+      const hasCttData = Array.isArray(cttDataApi) && cttDataApi.length > 0;
+      const runButton = document.getElementById('btnRunApi');
+      if (runButton) {
+        runButton.disabled = !(hasApiDateRange && hasApiLinkeData && hasCttData);
+      }
+    }
+
+    function setDefaultApiDateRange() {
+      const toDate = new Date();
+      const fromDate = new Date(toDate);
+      fromDate.setDate(fromDate.getDate() - 7);
+
+      const fromInput = document.getElementById('apiDateFrom');
+      const toInput = document.getElementById('apiDateTo');
+
+      if (fromInput && !fromInput.value) {
+        fromInput.value = fromDate.toISOString().slice(0, 10);
+      }
+      if (toInput && !toInput.value) {
+        toInput.value = toDate.toISOString().slice(0, 10);
+      }
+
+      checkReadyApi();
+    }
+
+    async function fetchLinkeShipmentsFromApi() {
+      const statusEl = document.getElementById('apiFetchStatus');
+      const fetchBtn = document.getElementById('btnFetchLinkeApi');
+      const from = String(document.getElementById('apiDateFrom')?.value || '').trim();
+      const to = String(document.getElementById('apiDateTo')?.value || '').trim();
+
+      if (!from || !to) {
+        showToast('Please select both From and To dates for API mode.');
+        if (statusEl) statusEl.textContent = 'Date range is required.';
+        return;
+      }
+
+      try {
+        if (fetchBtn) fetchBtn.disabled = true;
+        if (statusEl) statusEl.textContent = 'Fetching shipments from API...';
+
+        const params = new URLSearchParams({
+          from,
+          to,
+          limit: '250',
+          maxPages: '40'
+        });
+
+        const response = await fetch(`/api/tms/invoice-linke-shipments?${params.toString()}`);
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(String(payload?.details || payload?.error || `Fetch failed (${response.status})`));
+        }
+
+        const rows = Array.isArray(payload?.data) ? payload.data : [];
+        linkeDataApi = rows;
+        checkReadyApi();
+
+        if (statusEl) {
+          statusEl.textContent = `${rows.length.toLocaleString()} shipments loaded (${from} to ${to}).`;
+        }
+
+        showToast(`API loaded ${rows.length.toLocaleString()} Linke shipments.`);
+        postEmbedHeight();
+      } catch (error) {
+        linkeDataApi = null;
+        checkReadyApi();
+        const message = error instanceof Error ? error.message : 'Failed to fetch shipments API data.';
+        if (statusEl) statusEl.textContent = message;
+        showToast(message);
+      } finally {
+        if (fetchBtn) fetchBtn.disabled = false;
+      }
+    }
+
+    function runComparisonApi() {
+      if (!cttDataApi || !linkeDataApi || !linkeDataApi.length) {
+        showToast('API mode requires CTT file and fetched Linke API rows.');
+        return;
+      }
+
+      const from = String(document.getElementById('apiDateFrom')?.value || '').trim();
+      const to = String(document.getElementById('apiDateTo')?.value || '').trim();
+      const sourceLabel = `API shipments ${from || '-'} to ${to || '-'}`;
+
+      const prevCttData = cttData;
+      const prevLinkeData = linkeData;
+
+      const dropCttLabelEl = document.getElementById('dropCTT')?.querySelector('.dz-label');
+      const dropCttSubEl = document.getElementById('dropCTT')?.querySelector('.dz-sub');
+      const dropLinkeLabelEl = document.getElementById('dropLinke')?.querySelector('.dz-label');
+      const dropLinkeSubEl = document.getElementById('dropLinke')?.querySelector('.dz-sub');
+
+      const prevCttLabel = dropCttLabelEl ? dropCttLabelEl.textContent : '';
+      const prevCttSub = dropCttSubEl ? dropCttSubEl.textContent : '';
+      const prevLinkeLabel = dropLinkeLabelEl ? dropLinkeLabelEl.textContent : '';
+      const prevLinkeSub = dropLinkeSubEl ? dropLinkeSubEl.textContent : '';
+
+      try {
+        cttData = cttDataApi;
+        linkeData = linkeDataApi;
+
+        const apiCttLabel = document.getElementById('dropCTTApi')?.querySelector('.dz-label')?.textContent || 'CTT API mode upload';
+        const apiCttSub = document.getElementById('dropCTTApi')?.querySelector('.dz-sub')?.textContent || '';
+
+        if (dropCttLabelEl) dropCttLabelEl.textContent = apiCttLabel;
+        if (dropCttSubEl) dropCttSubEl.textContent = apiCttSub;
+        if (dropLinkeLabelEl) dropLinkeLabelEl.textContent = sourceLabel;
+        if (dropLinkeSubEl) dropLinkeSubEl.textContent = `${linkeDataApi.length.toLocaleString()} rows from shipments API`;
+
+        runComparison();
+      } finally {
+        cttData = prevCttData;
+        linkeData = prevLinkeData;
+        if (dropCttLabelEl) dropCttLabelEl.textContent = prevCttLabel;
+        if (dropCttSubEl) dropCttSubEl.textContent = prevCttSub;
+        if (dropLinkeLabelEl) dropLinkeLabelEl.textContent = prevLinkeLabel;
+        if (dropLinkeSubEl) dropLinkeSubEl.textContent = prevLinkeSub;
+      }
     }
 
     function parsePrice(v) {
@@ -1321,6 +1502,7 @@
     }
 
     initUiEnhancements();
+    setDefaultApiDateRange();
 
     function postEmbedHeight() {
       if (!window.parent || window.parent === window) {
