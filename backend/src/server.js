@@ -1129,10 +1129,16 @@ async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40,
     throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
   }
 
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 1000;
   const safeMaxPages = Number.isFinite(maxPages) ? Math.max(1, Math.min(40, Math.trunc(maxPages))) : 40;
   const normalizedFromKey = normalizeInvoiceDateKey(fromKey);
   const normalizedToKey = normalizeInvoiceDateKey(toKey);
+  const portalFromDate = normalizedFromKey;
+  const portalToDate = normalizedToKey;
+  const hasDateWindow = Boolean(normalizedFromKey && normalizedToKey);
+  const shipmentsFilterQuery = hasDateWindow
+    ? `filter=1&date_min=${encodeURIComponent(portalFromDate)}&date_max=${encodeURIComponent(portalToDate)}`
+    : "filter=1";
 
   const cookieJar = new Map();
   const loginUrl = `${baseUrl}/admin/login`;
@@ -1164,6 +1170,18 @@ async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40,
   });
   updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
 
+  // Prime filter state in portal UI/session before requesting datatable.
+  const shipmentsPageUrl = `${baseUrl}/admin/shipments?${shipmentsFilterQuery}`;
+  const shipmentsPageRes = await fetch(shipmentsPageUrl, {
+    method: "GET",
+    headers: {
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    redirect: "manual"
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(shipmentsPageRes));
+
   const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
   async function fetchAllStatusesDatatablePage(draw, start, length) {
     const requestBody = new URLSearchParams();
@@ -1172,13 +1190,17 @@ async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40,
     requestBody.set("start", String(Math.max(0, Math.trunc(start))));
     requestBody.set("length", String(Math.max(1, Math.trunc(length))));
     requestBody.set("filter", "1");
+    if (hasDateWindow) {
+      requestBody.set("date_min", portalFromDate);
+      requestBody.set("date_max", portalToDate);
+    }
 
     const shipmentsRes = await fetch(shipmentsEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "X-Requested-With": "XMLHttpRequest",
-        Referer: `${baseUrl}/admin/shipments?filter=1`,
+        Referer: `${baseUrl}/admin/shipments?${shipmentsFilterQuery}`,
         Cookie: cookieJarHeader(cookieJar)
       },
       body: requestBody.toString(),
@@ -1196,43 +1218,65 @@ async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40,
   const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
   const totalPages = Math.max(1, Math.ceil(total / safeLimit));
   const boundedPages = Math.min(totalPages, safeMaxPages);
+  const pageConcurrency = 4;
 
-  const allRows = [];
-  for (let page = 1; page <= boundedPages; page += 1) {
-    // Datatable comes oldest -> newest; map API page 1 to newest chunk.
+  function getPageRangeForNewestFirst(page) {
     const sourceStart = Math.max(0, total - (page * safeLimit));
     const sourceEndExclusive = Math.max(0, total - ((page - 1) * safeLimit));
     const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
+    return { sourceStart, sourceLength };
+  }
 
-    const payload = await fetchAllStatusesDatatablePage(page, sourceStart, sourceLength);
-    const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
-
-    let oldestDeliveryKeyOnPage = "";
-    for (const row of rows) {
-      const delivery = extractShipmentDateInfo(row?.deliveryDate || "");
-      const deliveryKey = String(delivery?.key || "").trim();
-      if (!deliveryKey) {
-        continue;
-      }
-
-      if (!oldestDeliveryKeyOnPage || deliveryKey < oldestDeliveryKeyOnPage) {
-        oldestDeliveryKeyOnPage = deliveryKey;
-      }
-
-      if (normalizedFromKey && deliveryKey < normalizedFromKey) {
-        continue;
-      }
-      if (normalizedToKey && deliveryKey > normalizedToKey) {
-        continue;
-      }
-
-      allRows.push(row);
+  const allRows = [];
+  let shouldStop = false;
+  for (let page = 1; page <= boundedPages && !shouldStop; page += pageConcurrency) {
+    const batchPages = [];
+    for (let p = page; p < page + pageConcurrency && p <= boundedPages; p += 1) {
+      batchPages.push(p);
     }
 
-    // Pages are requested newest -> oldest. Once this page is already older than `from`,
-    // remaining pages will be older too, so we can stop early.
-    if (normalizedFromKey && oldestDeliveryKeyOnPage && oldestDeliveryKeyOnPage < normalizedFromKey) {
-      break;
+    const batchResults = await Promise.all(batchPages.map(async (batchPage) => {
+      const { sourceStart, sourceLength } = getPageRangeForNewestFirst(batchPage);
+      const payload = await fetchAllStatusesDatatablePage(batchPage, sourceStart, sourceLength);
+      return {
+        page: batchPage,
+        rows: parseTmsIncidenceShipmentsDatatable(payload).reverse()
+      };
+    }));
+
+    batchResults.sort((a, b) => a.page - b.page);
+
+    for (const pageResult of batchResults) {
+      const rows = Array.isArray(pageResult?.rows) ? pageResult.rows : [];
+      let oldestDeliveryKeyOnPage = "";
+
+      for (const row of rows) {
+        const delivery = extractShipmentDateInfo(row?.deliveryDate || "");
+        const deliveryKey = String(delivery?.key || "").trim();
+        if (!deliveryKey) {
+          continue;
+        }
+
+        if (!oldestDeliveryKeyOnPage || deliveryKey < oldestDeliveryKeyOnPage) {
+          oldestDeliveryKeyOnPage = deliveryKey;
+        }
+
+        if (normalizedFromKey && deliveryKey < normalizedFromKey) {
+          continue;
+        }
+        if (normalizedToKey && deliveryKey > normalizedToKey) {
+          continue;
+        }
+
+        allRows.push(row);
+      }
+
+      // Pages are processed newest -> oldest. Once this page is older than `from`,
+      // remaining pages will be older too, so we can stop.
+      if (normalizedFromKey && oldestDeliveryKeyOnPage && oldestDeliveryKeyOnPage < normalizedFromKey) {
+        shouldStop = true;
+        break;
+      }
     }
   }
 
@@ -1262,7 +1306,7 @@ async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, 
     throw new Error("Invalid date range. 'from' must be before or equal to 'to'.");
   }
 
-  const safeLimit = Number.isFinite(limit) ? Math.max(10, Math.min(250, Math.trunc(limit))) : 250;
+  const safeLimit = Number.isFinite(limit) ? Math.max(10, Math.min(1000, Math.trunc(limit))) : 1000;
   const safeMaxPages = Number.isFinite(maxPages) ? Math.max(1, Math.min(40, Math.trunc(maxPages))) : 40;
 
   let combinedRows = [];

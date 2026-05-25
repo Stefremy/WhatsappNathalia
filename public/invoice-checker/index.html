@@ -877,24 +877,28 @@
 
       try {
         if (fetchBtn) fetchBtn.disabled = true;
-        const windows = buildDateWindows(from, to, CHUNK_DAYS);
+        const windowsQueue = buildDateWindows(from, to, CHUNK_DAYS);
         const mergedRows = [];
+        let completedWindows = 0;
 
-        for (let i = 0; i < windows.length; i += 1) {
-          const window = windows[i];
+        while (windowsQueue.length > 0) {
+          const window = windowsQueue.shift();
+          if (!window) break;
+
           let attempt = 0;
-          let chunkDone = false;
+          let windowDone = false;
+          let shouldSplitWindow = false;
 
-          while (!chunkDone && attempt <= MAX_RETRIES_PER_CHUNK) {
+          while (!windowDone && attempt <= MAX_RETRIES_PER_CHUNK) {
             if (statusEl) {
               const retryLabel = attempt > 0 ? ` | retry ${attempt}/${MAX_RETRIES_PER_CHUNK}` : '';
-              statusEl.innerHTML = `<span class="loading-spinner"></span>Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${i + 1}/${windows.length}: ${window.from} to ${window.to}${retryLabel})`;
+              statusEl.innerHTML = `<span class="loading-spinner"></span>Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${completedWindows + 1} done/${completedWindows + windowsQueue.length + 1} total: ${window.from} to ${window.to}${retryLabel})`;
             }
 
             const params = new URLSearchParams({
               from: window.from,
               to: window.to,
-              limit: '250',
+              limit: '1000',
               maxPages: '40'
             });
 
@@ -923,16 +927,61 @@
                 continue;
               }
 
-              if (response.status === 504) {
-                throw new Error(`Fetch failed (504) for ${window.from} to ${window.to} after retry. Try a smaller range or retry.`);
+              if (isRetryable) {
+                shouldSplitWindow = true;
+                break;
               }
+
               throw new Error(details);
             }
 
             const rows = Array.isArray(payload?.data) ? payload.data : [];
             mergedRows.push(...rows);
-            chunkDone = true;
+            windowDone = true;
+            completedWindows += 1;
           }
+
+          if (windowDone) {
+            continue;
+          }
+
+          if (shouldSplitWindow) {
+            const splitFrom = parseIsoDateUtc(window.from);
+            const splitTo = parseIsoDateUtc(window.to);
+            if (!splitFrom || !splitTo || splitTo < splitFrom) {
+              throw new Error(`Failed to split invalid window ${window.from} to ${window.to}.`);
+            }
+
+            const windowDays = diffDaysInclusiveUtc(splitFrom, splitTo);
+            if (windowDays <= 1) {
+              throw new Error(`Fetch failed (504) for ${window.from} after retry. Please try again.`);
+            }
+
+            const leftSize = Math.floor(windowDays / 2);
+            const leftEnd = addDaysUtc(splitFrom, leftSize - 1);
+            const rightStart = addDaysUtc(leftEnd, 1);
+
+            const leftWindow = {
+              from: formatIsoDateUtc(splitFrom),
+              to: formatIsoDateUtc(leftEnd)
+            };
+            const rightWindow = {
+              from: formatIsoDateUtc(rightStart),
+              to: formatIsoDateUtc(splitTo)
+            };
+
+            if (statusEl) {
+              statusEl.innerHTML = `<span class="loading-spinner"></span>Timeout on ${window.from} to ${window.to}. Splitting into ${leftWindow.from} to ${leftWindow.to} and ${rightWindow.from} to ${rightWindow.to}...`;
+            }
+
+            // Process the smaller split windows next.
+            windowsQueue.unshift(rightWindow);
+            windowsQueue.unshift(leftWindow);
+            await sleep(250);
+            continue;
+          }
+
+          throw new Error(`Fetch failed for ${window.from} to ${window.to}.`);
         }
 
         linkeDataApi = mergedRows;
