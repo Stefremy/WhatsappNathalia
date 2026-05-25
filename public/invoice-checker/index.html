@@ -792,6 +792,55 @@
       checkReadyApi();
     }
 
+    function parseIsoDateUtc(isoDate) {
+      const parts = String(isoDate || '').split('-').map(Number);
+      if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+      return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    }
+
+    function formatIsoDateUtc(date) {
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function addDaysUtc(date, days) {
+      const next = new Date(date);
+      next.setUTCDate(next.getUTCDate() + days);
+      return next;
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function diffDaysInclusiveUtc(fromDate, toDate) {
+      const diffMs = toDate.getTime() - fromDate.getTime();
+      return Math.floor(diffMs / 86400000) + 1;
+    }
+
+    function buildDateWindows(fromIso, toIso, chunkSizeDays) {
+      const fromDate = parseIsoDateUtc(fromIso);
+      const toDate = parseIsoDateUtc(toIso);
+      if (!fromDate || !toDate || toDate < fromDate) return [];
+
+      const windows = [];
+      let cursor = fromDate;
+
+      while (cursor <= toDate) {
+        const end = addDaysUtc(cursor, chunkSizeDays - 1);
+        const windowEnd = end <= toDate ? end : toDate;
+        windows.push({
+          from: formatIsoDateUtc(cursor),
+          to: formatIsoDateUtc(windowEnd)
+        });
+        cursor = addDaysUtc(windowEnd, 1);
+      }
+
+      return windows;
+    }
+
     async function fetchLinkeShipmentsFromApi() {
       const statusEl = document.getElementById('apiFetchStatus');
       const fetchBtn = document.getElementById('btnFetchLinkeApi');
@@ -804,14 +853,23 @@
         return;
       }
 
-      // Validate date range doesn't exceed 31 days
-      const fromDate = new Date(from);
-      const toDate = new Date(to);
-      const diffMs = toDate - fromDate;
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const fromDate = parseIsoDateUtc(from);
+      const toDate = parseIsoDateUtc(to);
+      if (!fromDate || !toDate || toDate < fromDate) {
+        const msg = 'Invalid date range. Please check From and To dates.';
+        showToast(msg);
+        if (statusEl) statusEl.textContent = msg;
+        return;
+      }
 
-      if (diffDays > 31) {
-        const msg = `Date range cannot exceed 31 days. You selected ${diffDays + 1} days.`;
+      const MAX_RANGE_DAYS = 38;
+      const CHUNK_DAYS = 10;
+      const MAX_RETRIES_PER_CHUNK = 1;
+      const RETRY_DELAY_MS = 1200;
+      const selectedDays = diffDaysInclusiveUtc(fromDate, toDate);
+
+      if (selectedDays > MAX_RANGE_DAYS) {
+        const msg = `Date range cannot exceed ${MAX_RANGE_DAYS} days. You selected ${selectedDays} days.`;
         showToast(msg);
         if (statusEl) statusEl.textContent = msg;
         return;
@@ -819,31 +877,72 @@
 
       try {
         if (fetchBtn) fetchBtn.disabled = true;
-        if (statusEl) statusEl.innerHTML = '<span class="loading-spinner"></span>Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto';
+        const windows = buildDateWindows(from, to, CHUNK_DAYS);
+        const mergedRows = [];
 
-        const params = new URLSearchParams({
-          from,
-          to,
-          limit: '250',
-          maxPages: '40'
-        });
+        for (let i = 0; i < windows.length; i += 1) {
+          const window = windows[i];
+          let attempt = 0;
+          let chunkDone = false;
 
-        const response = await fetch(`/api/tms/invoice-linke-shipments?${params.toString()}`);
-        const payload = await response.json().catch(() => ({}));
+          while (!chunkDone && attempt <= MAX_RETRIES_PER_CHUNK) {
+            if (statusEl) {
+              const retryLabel = attempt > 0 ? ` | retry ${attempt}/${MAX_RETRIES_PER_CHUNK}` : '';
+              statusEl.innerHTML = `<span class="loading-spinner"></span>Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${i + 1}/${windows.length}: ${window.from} to ${window.to}${retryLabel})`;
+            }
 
-        if (!response.ok) {
-          throw new Error(String(payload?.details || payload?.error || `Fetch failed (${response.status})`));
+            const params = new URLSearchParams({
+              from: window.from,
+              to: window.to,
+              limit: '250',
+              maxPages: '40'
+            });
+
+            let response;
+            let payload;
+
+            try {
+              response = await fetch(`/api/tms/invoice-linke-shipments?${params.toString()}`);
+              payload = await response.json().catch(() => ({}));
+            } catch (networkError) {
+              if (attempt < MAX_RETRIES_PER_CHUNK) {
+                attempt += 1;
+                await sleep(RETRY_DELAY_MS);
+                continue;
+              }
+              throw networkError;
+            }
+
+            if (!response.ok) {
+              const details = String(payload?.details || payload?.error || `Fetch failed (${response.status})`);
+              const isRetryable = response.status === 504 || response.status >= 500;
+
+              if (isRetryable && attempt < MAX_RETRIES_PER_CHUNK) {
+                attempt += 1;
+                await sleep(RETRY_DELAY_MS);
+                continue;
+              }
+
+              if (response.status === 504) {
+                throw new Error(`Fetch failed (504) for ${window.from} to ${window.to} after retry. Try a smaller range or retry.`);
+              }
+              throw new Error(details);
+            }
+
+            const rows = Array.isArray(payload?.data) ? payload.data : [];
+            mergedRows.push(...rows);
+            chunkDone = true;
+          }
         }
 
-        const rows = Array.isArray(payload?.data) ? payload.data : [];
-        linkeDataApi = rows;
+        linkeDataApi = mergedRows;
         checkReadyApi();
 
         if (statusEl) {
-          statusEl.innerHTML = `<span style="color: var(--accent-dark); font-weight: 700;">✓</span> ${rows.length.toLocaleString()} shipments loaded (${from} to ${to}).`;
+          statusEl.innerHTML = `<span style="color: var(--accent-dark); font-weight: 700;">✓</span> ${mergedRows.length.toLocaleString()} shipments loaded (${from} to ${to}).`;
         }
 
-        showToast(`API loaded ${rows.length.toLocaleString()} Linke shipments.`);
+        showToast(`API loaded ${mergedRows.length.toLocaleString()} Linke shipments.`);
         postEmbedHeight();
       } catch (error) {
         linkeDataApi = null;
