@@ -1115,18 +1115,125 @@ async function fetchAllTmsInTransportShipmentsData({ limit = 250, maxPages = 40 
   return allRows;
 }
 
-async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40 } = {}) {
+async function fetchAllTmsAllStatusesShipmentsData({ limit = 250, maxPages = 40, fromKey = "", toKey = "" } = {}) {
+  const enabled = String(process.env.TMS_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    throw new Error("TMS integration disabled. Set TMS_ENABLED=true.");
+  }
+
+  const baseUrl = String(process.env.TMS_BASE_URL || "").trim().replace(/\/$/, "");
+  const email = String(process.env.TMS_ADMIN_EMAIL || "").trim();
+  const password = String(process.env.TMS_ADMIN_PASSWORD || "");
+
+  if (!baseUrl || !email || !password) {
+    throw new Error("Missing TMS_BASE_URL, TMS_ADMIN_EMAIL or TMS_ADMIN_PASSWORD.");
+  }
+
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(250, Math.trunc(limit))) : 250;
+  const safeMaxPages = Number.isFinite(maxPages) ? Math.max(1, Math.min(40, Math.trunc(maxPages))) : 40;
+  const normalizedFromKey = normalizeInvoiceDateKey(fromKey);
+  const normalizedToKey = normalizeInvoiceDateKey(toKey);
+
+  const cookieJar = new Map();
+  const loginUrl = `${baseUrl}/admin/login`;
+
+  const loginPageRes = await fetch(loginUrl, { redirect: "manual" });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginPageRes));
+  const loginHtml = await loginPageRes.text();
+  const tokenMatch = loginHtml.match(/name="_token"\s+type="hidden"\s+value="([^"]+)"/i);
+  const csrfToken = tokenMatch?.[1] || "";
+  if (!csrfToken) {
+    throw new Error("Could not extract TMS CSRF token.");
+  }
+
+  const loginBody = new URLSearchParams();
+  loginBody.set("_token", csrfToken);
+  loginBody.set("email", email);
+  loginBody.set("password", password);
+  loginBody.set("remember", "on");
+
+  const loginSubmitRes = await fetch(loginUrl, {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: loginUrl,
+      Cookie: cookieJarHeader(cookieJar)
+    },
+    body: loginBody.toString()
+  });
+  updateCookieJar(cookieJar, getSetCookieHeaders(loginSubmitRes));
+
+  const shipmentsEndpoint = `${baseUrl}/admin/shipments/datatable`;
+  async function fetchAllStatusesDatatablePage(draw, start, length) {
+    const requestBody = new URLSearchParams();
+    requestBody.set("_token", csrfToken);
+    requestBody.set("draw", String(draw));
+    requestBody.set("start", String(Math.max(0, Math.trunc(start))));
+    requestBody.set("length", String(Math.max(1, Math.trunc(length))));
+    requestBody.set("filter", "1");
+
+    const shipmentsRes = await fetch(shipmentsEndpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: `${baseUrl}/admin/shipments?filter=1`,
+        Cookie: cookieJarHeader(cookieJar)
+      },
+      body: requestBody.toString(),
+      redirect: "manual"
+    });
+
+    if (!shipmentsRes.ok) {
+      throw new Error(`TMS all-status shipments request failed with status ${shipmentsRes.status}`);
+    }
+
+    return shipmentsRes.json().catch(() => ({}));
+  }
+
+  const probePayload = await fetchAllStatusesDatatablePage(1, 0, 1);
+  const total = Number(probePayload?.recordsFiltered ?? probePayload?.recordsTotal ?? 0) || 0;
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const boundedPages = Math.min(totalPages, safeMaxPages);
+
   const allRows = [];
-  let page = 1;
-  let totalPages = 1;
+  for (let page = 1; page <= boundedPages; page += 1) {
+    // Datatable comes oldest -> newest; map API page 1 to newest chunk.
+    const sourceStart = Math.max(0, total - (page * safeLimit));
+    const sourceEndExclusive = Math.max(0, total - ((page - 1) * safeLimit));
+    const sourceLength = Math.max(1, sourceEndExclusive - sourceStart);
 
-  while (page <= totalPages && page <= maxPages) {
-    const pageData = await fetchTmsAllStatusesShipmentsData({ page, limit });
-    const rows = Array.isArray(pageData?.rows) ? pageData.rows : [];
-    allRows.push(...rows);
+    const payload = await fetchAllStatusesDatatablePage(page, sourceStart, sourceLength);
+    const rows = parseTmsIncidenceShipmentsDatatable(payload).reverse();
 
-    totalPages = Number(pageData?.meta?.totalPages || 1) || 1;
-    page += 1;
+    let oldestDeliveryKeyOnPage = "";
+    for (const row of rows) {
+      const delivery = extractShipmentDateInfo(row?.deliveryDate || "");
+      const deliveryKey = String(delivery?.key || "").trim();
+      if (!deliveryKey) {
+        continue;
+      }
+
+      if (!oldestDeliveryKeyOnPage || deliveryKey < oldestDeliveryKeyOnPage) {
+        oldestDeliveryKeyOnPage = deliveryKey;
+      }
+
+      if (normalizedFromKey && deliveryKey < normalizedFromKey) {
+        continue;
+      }
+      if (normalizedToKey && deliveryKey > normalizedToKey) {
+        continue;
+      }
+
+      allRows.push(row);
+    }
+
+    // Pages are requested newest -> oldest. Once this page is already older than `from`,
+    // remaining pages will be older too, so we can stop early.
+    if (normalizedFromKey && oldestDeliveryKeyOnPage && oldestDeliveryKeyOnPage < normalizedFromKey) {
+      break;
+    }
   }
 
   return allRows;
@@ -1164,7 +1271,9 @@ async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, 
   try {
     combinedRows = await fetchAllTmsAllStatusesShipmentsData({
       limit: safeLimit,
-      maxPages: safeMaxPages
+      maxPages: safeMaxPages,
+      fromKey: cleanFromKey,
+      toKey: cleanToKey
     });
   } catch (error) {
     sourceMode = "fallback-status-3-4-5-9";
@@ -2874,7 +2983,7 @@ function extractShipmentDateInfo(rawValue) {
     return { key, ts };
   }
 
-  const dmy = raw.match(/(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  const dmy = raw.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (dmy) {
     const day = Number(dmy[1]);
     const month = Number(dmy[2]);
@@ -2905,13 +3014,7 @@ function resolveShipmentDateInfoWithinRange(row, fromKey, toKey) {
     return delivery;
   }
 
-  const pickup = extractShipmentDateInfo(row?.pickupDate || "");
-  if (pickup.key && isDateKeyWithinRange(pickup.key, fromKey, toKey)) {
-    return pickup;
-  }
-
-  if (delivery.key) return delivery;
-  if (pickup.key) return pickup;
+  // Invoice API mode should filter strictly by delivery (entrega) date only.
   return { key: "", ts: NaN };
 }
 
