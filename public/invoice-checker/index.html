@@ -405,17 +405,17 @@
     }
     .loading-spinner {
       display: inline-block;
-      width: 1.6em;
-      height: 1.6em;
+      width: 1.8em;
+      height: 1.8em;
       margin-right: 0.55em;
       vertical-align: middle;
       border-radius: 50%;
-      background-image: url('/invoice-checker/IMG_2479.jpeg');
-      background-size: cover;
-      background-position: center;
-      background-repeat: no-repeat;
       transform-origin: center center;
       animation: spin 1s linear infinite;
+    }
+    .loading-spinner-image {
+      object-fit: cover;
+      box-shadow: 0 0 0 1px rgba(73, 177, 111, 0.25);
     }
   </style>
 </head>
@@ -604,6 +604,7 @@
                       <th class="sortable" onclick="sortTableBy('lnkPrice')">Linke (€)<span class="sort-arrow">↕</span></th>
                       <th class="sortable" onclick="sortTableBy('diff')">Diff (€)<span class="sort-arrow">↕</span></th>
                       <th class="sortable" onclick="sortTableBy('lnkClient')">Client<span class="sort-arrow">↕</span></th>
+                      <th class="sortable" onclick="sortTableBy('lnkSender')">Sender<span class="sort-arrow">↕</span></th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -818,6 +819,10 @@
       return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    function getLoadingAnimationHtml() {
+      return '<img class="loading-spinner loading-spinner-image" src="IMG_2479.jpeg" alt="Loading" onerror="this.onerror=null;this.src=\'/invoice-checker/IMG_2479.jpeg\';">';
+    }
+
     function diffDaysInclusiveUtc(fromDate, toDate) {
       const diffMs = toDate.getTime() - fromDate.getTime();
       return Math.floor(diffMs / 86400000) + 1;
@@ -895,7 +900,7 @@
           while (!windowDone && attempt <= MAX_RETRIES_PER_CHUNK) {
             if (statusEl) {
               const retryLabel = attempt > 0 ? ` | retry ${attempt}/${MAX_RETRIES_PER_CHUNK}` : '';
-              statusEl.innerHTML = `<span class="loading-spinner"></span>Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${completedWindows + 1} done/${completedWindows + windowsQueue.length + 1} total: ${window.from} to ${window.to}${retryLabel})`;
+              statusEl.innerHTML = `${getLoadingAnimationHtml()}Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${completedWindows + 1} done/${completedWindows + windowsQueue.length + 1} total: ${window.from} to ${window.to}${retryLabel})`;
             }
 
             const params = new URLSearchParams({
@@ -974,7 +979,7 @@
             };
 
             if (statusEl) {
-              statusEl.innerHTML = `<span class="loading-spinner"></span>Timeout on ${window.from} to ${window.to}. Splitting into ${leftWindow.from} to ${leftWindow.to} and ${rightWindow.from} to ${rightWindow.to}...`;
+              statusEl.innerHTML = `${getLoadingAnimationHtml()}Timeout on ${window.from} to ${window.to}. Splitting into ${leftWindow.from} to ${leftWindow.to} and ${rightWindow.from} to ${rightWindow.to}...`;
             }
 
             // Process the smaller split windows next.
@@ -1064,6 +1069,16 @@
         .replace(/\s+/g, '')
         .trim()
         .toUpperCase();
+    }
+
+    function isPickupCollectionId(parcelId) {
+      const id = normalizeParcelId(parcelId);
+      return /^\d+\/\d+$/.test(id);
+    }
+
+    function isEgMultiParcelWithoutCttPrice(parcelId, cttPrice) {
+      const id = normalizeParcelId(parcelId);
+      return id.startsWith('EG') && isNaN(cttPrice);
     }
 
     function normalizeHeader(v) {
@@ -1209,6 +1224,11 @@
         else if (!isNaN(cttPrice) && !isNaN(lnkPrice) && cttPrice > lnkPrice + TOLERANCE) status = 'mismatch';
         else status = 'ok';
 
+        if (status === 'unknown') {
+          if (isPickupCollectionId(cttId)) return;
+          if (isEgMultiParcelWithoutCttPrice(cttId, cttPrice)) return;
+        }
+
         results.push({
           id: cttId,
           idLower: cttId.toLowerCase(),
@@ -1218,7 +1238,8 @@
           status,
           cttDate: row['Data do Objeto'] || row['Data'] || '',
           cttDateTs: parseDateToTs(row['Data do Objeto'] || row['Data'] || ''),
-          lnkClient: linkeRow ? (linkeRow['Nome Cliente'] || linkeRow['Destinatário'] || '') : ''
+          lnkClient: linkeRow ? (linkeRow['Nome Cliente'] || linkeRow['Destinatário'] || '') : '',
+          lnkSender: linkeRow ? (linkeRow['Sender'] || linkeRow['Remetente'] || linkeRow['Nome Remetente'] || linkeRow['Expedidor'] || linkeRow['sender'] || '') : ''
         });
       });
 
@@ -1316,7 +1337,7 @@
         sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
       } else {
         sortState.key = key;
-        sortState.dir = key === 'id' || key === 'lnkClient' ? 'asc' : 'desc';
+        sortState.dir = key === 'id' || key === 'lnkClient' || key === 'lnkSender' ? 'asc' : 'desc';
       }
       applyFilters();
     }
@@ -1335,7 +1356,8 @@
         cttPrice: 'CTT (€)',
         lnkPrice: 'Linke (€)',
         diff: 'Diff (€)',
-        lnkClient: 'Client'
+        lnkClient: 'Client',
+        lnkSender: 'Sender'
       };
 
       const activeText = keyToHeaderText[sortState.key];
@@ -1353,8 +1375,8 @@
 
         if (filterState.parcelQuery && !r.idLower.includes(filterState.parcelQuery)) return false;
 
-        const clientLower = String(r.lnkClient || '').toLowerCase();
-        if (filterState.clientQuery && !clientLower.includes(filterState.clientQuery)) return false;
+        const peopleLower = `${String(r.lnkClient || '')} ${String(r.lnkSender || '')}`.toLowerCase();
+        if (filterState.clientQuery && !peopleLower.includes(filterState.clientQuery)) return false;
 
         if (!isNaN(filterState.minDiff) && (isNaN(r.diff) || r.diff < filterState.minDiff)) return false;
         if (!isNaN(filterState.maxDiff) && (isNaN(r.diff) || r.diff > filterState.maxDiff)) return false;
@@ -1440,7 +1462,7 @@
       const data = tableData.filtered;
 
       if (!data.length) {
-        body.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--muted); padding: 1.5rem;">No rows match the current filters.</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--muted); padding: 1.5rem;">No rows match the current filters.</td></tr>';
         return;
       }
 
@@ -1459,6 +1481,7 @@
           <td>${lP}</td>
           <td style="${r.diff > 0 ? 'color: #b83c2a; font-weight: 700;' : ''}">${df}</td>
           <td style="color: var(--muted); font-size: 0.75rem;">${r.lnkClient}</td>
+          <td style="color: var(--muted); font-size: 0.75rem;">${r.lnkSender || '—'}</td>
           <td>${badge}</td>
         </tr>`;
       }).join('');
@@ -1574,8 +1597,8 @@
     async function downloadHistoryRun(id) {
       const run = await getHistoryRunById(id);
       if (!run || !Array.isArray(run.rows)) return;
-      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Status']];
-      run.rows.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.status]));
+      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Sender', 'Status']];
+      run.rows.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.lnkSender || '', r.status]));
       const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -1671,8 +1694,8 @@
         showToast('No rows to export for current selection.');
         return;
       }
-      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Status']];
-      data.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.status]));
+      const rows = [['Parcel ID', 'Date', 'CTT Price', 'Linke Price', 'Difference', 'Client', 'Sender', 'Status']];
+      data.forEach(r => rows.push([r.id, r.cttDate, r.cttPrice, r.lnkPrice, r.diff, r.lnkClient, r.lnkSender || '', r.status]));
       const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
