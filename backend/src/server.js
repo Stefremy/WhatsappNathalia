@@ -1350,7 +1350,7 @@ async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, 
     const tracking = String(row?.providerTrackingCode || row?.parcelId || "").trim().toUpperCase();
     if (!tracking) continue;
 
-    const amount = Number.parseFloat(String(row?.chargeAmount || "").replace(/,/g, "."));
+    const amount = parseEuroLikeAmount(row?.chargeAmount || "");
     const previous = dedupedByTracking.get(tracking);
 
     if (!previous) {
@@ -1358,7 +1358,7 @@ async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, 
       continue;
     }
 
-    const previousAmount = Number.parseFloat(String(previous?.chargeAmount || "").replace(/,/g, "."));
+    const previousAmount = parseEuroLikeAmount(previous?.chargeAmount || "");
     const shouldReplace = (!Number.isFinite(previousAmount) && Number.isFinite(amount)) || (Number.isFinite(amount) && amount > previousAmount);
     if (shouldReplace) {
       dedupedByTracking.set(tracking, row);
@@ -1368,7 +1368,8 @@ async function fetchTmsInvoiceLinkeShipmentsData({ fromKey, toKey, limit = 250, 
   const rows = Array.from(dedupedByTracking.values()).map((row, index) => {
     const tracking = String(row?.providerTrackingCode || row?.parcelId || "").trim() || `tracking-${index + 1}`;
     const transportAmountRaw = String(row?.chargeAmount || "").trim();
-    const transportAmount = transportAmountRaw ? Number.parseFloat(transportAmountRaw.replace(/,/g, ".")).toFixed(2) : "";
+    const transportAmountNumber = parseEuroLikeAmount(transportAmountRaw);
+    const transportAmount = Number.isFinite(transportAmountNumber) ? transportAmountNumber.toFixed(2) : "";
 
     return {
       id: tracking,
@@ -2956,13 +2957,73 @@ function extractIncidentReasonFromShipmentRow(row) {
   return "";
 }
 
+function parseEuroLikeAmount(rawValue) {
+  const raw = stripHtml(String(rawValue || "")).replace(/\u00A0/g, " ").trim();
+  if (!raw) return NaN;
+
+  function parseNormalized(token) {
+    let normalized = String(token || "").replace(/\s+/g, "");
+    if (!normalized) return NaN;
+
+    if (normalized.includes(",") && normalized.includes(".")) {
+      if (normalized.lastIndexOf(",") > normalized.lastIndexOf(".")) {
+        normalized = normalized.replace(/\./g, "").replace(",", ".");
+      } else {
+        normalized = normalized.replace(/,/g, "");
+      }
+    } else if (normalized.includes(",")) {
+      normalized = normalized.replace(",", ".");
+    }
+
+    const parsed = Number.parseFloat(normalized);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+
+  // Prefer explicit euro-marked values like "2,98€".
+  const euroMatch = raw.match(/(-?\d{1,3}(?:[.\s]\d{3})*(?:[.,]\d+)?|-?\d+(?:[.,]\d+)?)\s*€/i);
+  if (euroMatch?.[1]) {
+    return parseNormalized(euroMatch[1]);
+  }
+
+  // Then prefer decimal amounts to avoid matching date fragments.
+  const decimalMatch = raw.match(/-?\d{1,3}(?:[.\s]\d{3})*[.,]\d+|-?\d+[.,]\d+/);
+  if (decimalMatch?.[0]) {
+    return parseNormalized(decimalMatch[0]);
+  }
+
+  // Finally accept plain numeric cells like "1" or "1.00".
+  if (/^-?\d+(?:[.,]\d+)?$/.test(raw)) {
+    return parseNormalized(raw);
+  }
+
+  return NaN;
+}
+
 function parseTmsIncidenceShipmentsDatatable(payload) {
   const data = Array.isArray(payload?.data) ? payload.data : [];
   return data.map((row) => {
-    const chargeAmountRaw = String(row?.charge_price || row?.cod || "").trim();
-    const chargeAmountNumber = Number.parseFloat(chargeAmountRaw.replace(",", "."));
+    const chargeAmountCandidates = [
+      row?.valor_transporte,
+      row?.valorTransporte,
+      row?.shipping_price,
+      row?.transport_value,
+      row?.shipping_cost,
+      row?.charge_price,
+      row?.cod
+    ];
+
+    let chargeAmountNumber = NaN;
+    for (const candidate of chargeAmountCandidates) {
+      const parsed = parseEuroLikeAmount(candidate);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        chargeAmountNumber = parsed;
+        break;
+      }
+    }
     const hasChargeByAmount = Number.isFinite(chargeAmountNumber) && chargeAmountNumber > 0;
-    const hasChargeByHtmlHint = /cobran[çc]a|€/i.test(String(row?.delivery_date || ""));
+    const hasChargeByHtmlHint = /cobran[çc]a|€/i.test(
+      String(row?.delivery_date || row?.valor_transporte || row?.service || "")
+    );
     const hasCharge = hasChargeByAmount || hasChargeByHtmlHint;
 
     return {
