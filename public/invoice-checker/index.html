@@ -417,10 +417,60 @@
       object-fit: cover;
       box-shadow: 0 0 0 1px rgba(73, 177, 111, 0.25);
     }
+    .fetch-loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 14, 18, 0.55);
+      backdrop-filter: blur(2px);
+      padding: 1rem;
+    }
+    .fetch-loading-overlay.open {
+      display: flex;
+    }
+    .fetch-loading-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.9rem;
+      text-align: center;
+      color: #fff;
+      max-width: 720px;
+    }
+    .fetch-loading-hero {
+      width: min(56vw, 300px);
+      height: min(56vw, 300px);
+      border-radius: 50%;
+      object-fit: cover;
+      animation: spin 1.05s linear infinite;
+      transform-origin: center center;
+      box-shadow: 0 14px 45px rgba(0, 0, 0, 0.4);
+      border: 4px solid rgba(255, 255, 255, 0.2);
+    }
+    .fetch-loading-text {
+      font-size: 0.98rem;
+      line-height: 1.45;
+      font-weight: 600;
+      text-shadow: 0 1px 10px rgba(0, 0, 0, 0.35);
+    }
   </style>
 </head>
 <body>
   <div id="toast"></div>
+  <div id="fetchLoadingOverlay" class="fetch-loading-overlay" aria-hidden="true">
+    <div class="fetch-loading-content">
+      <img
+        class="fetch-loading-hero"
+        src="IMG_2479.jpeg"
+        alt="Loading"
+        onerror="this.onerror=null;this.src='/invoice-checker/IMG_2479.jpeg';"
+      >
+      <p id="fetchLoadingText" class="fetch-loading-text">Espera enquanto carrega...</p>
+    </div>
+  </div>
   
   <div class="workspace-app-shell">
     <div class="workspace-frame">
@@ -819,8 +869,22 @@
       return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    function getLoadingAnimationHtml() {
-      return '<img class="loading-spinner loading-spinner-image" src="IMG_2479.jpeg" alt="Loading" onerror="this.onerror=null;this.src=\'/invoice-checker/IMG_2479.jpeg\';">';
+    function setFetchLoadingOverlay(isVisible, message) {
+      const overlay = document.getElementById('fetchLoadingOverlay');
+      const textEl = document.getElementById('fetchLoadingText');
+      if (!overlay) return;
+
+      if (textEl && typeof message === 'string' && message.trim()) {
+        textEl.textContent = message;
+      }
+
+      if (isVisible) {
+        overlay.classList.add('open');
+        overlay.setAttribute('aria-hidden', 'false');
+      } else {
+        overlay.classList.remove('open');
+        overlay.setAttribute('aria-hidden', 'true');
+      }
     }
 
     function diffDaysInclusiveUtc(fromDate, toDate) {
@@ -898,9 +962,12 @@
           let shouldSplitWindow = false;
 
           while (!windowDone && attempt <= MAX_RETRIES_PER_CHUNK) {
+            const retryLabel = attempt > 0 ? ` | retry ${attempt}/${MAX_RETRIES_PER_CHUNK}` : '';
+            const progressText = `Espera enquanto carrega... Grab a coffee or a glass of water while I work Gilberto (${completedWindows + 1} done/${completedWindows + windowsQueue.length + 1} total: ${window.from} to ${window.to}${retryLabel})`;
+            setFetchLoadingOverlay(true, progressText);
+
             if (statusEl) {
-              const retryLabel = attempt > 0 ? ` | retry ${attempt}/${MAX_RETRIES_PER_CHUNK}` : '';
-              statusEl.innerHTML = `${getLoadingAnimationHtml()}Espera enquanto carrega... ☕ Grab a coffee or a glass of water while I work Gilberto (${completedWindows + 1} done/${completedWindows + windowsQueue.length + 1} total: ${window.from} to ${window.to}${retryLabel})`;
+              statusEl.textContent = progressText;
             }
 
             const params = new URLSearchParams({
@@ -979,7 +1046,9 @@
             };
 
             if (statusEl) {
-              statusEl.innerHTML = `${getLoadingAnimationHtml()}Timeout on ${window.from} to ${window.to}. Splitting into ${leftWindow.from} to ${leftWindow.to} and ${rightWindow.from} to ${rightWindow.to}...`;
+              const splitText = `Timeout on ${window.from} to ${window.to}. Splitting into ${leftWindow.from} to ${leftWindow.to} and ${rightWindow.from} to ${rightWindow.to}...`;
+              statusEl.textContent = splitText;
+              setFetchLoadingOverlay(true, splitText);
             }
 
             // Process the smaller split windows next.
@@ -998,6 +1067,7 @@
         if (statusEl) {
           statusEl.innerHTML = `<span style="color: var(--accent-dark); font-weight: 700;">✓</span> ${mergedRows.length.toLocaleString()} shipments loaded (${from} to ${to}).`;
         }
+        setFetchLoadingOverlay(false, '');
 
         showToast(`API loaded ${mergedRows.length.toLocaleString()} Linke shipments.`);
         postEmbedHeight();
@@ -1006,8 +1076,10 @@
         checkReadyApi();
         const message = error instanceof Error ? error.message : 'Failed to fetch shipments API data.';
         if (statusEl) statusEl.textContent = message;
+        setFetchLoadingOverlay(false, '');
         showToast(message);
       } finally {
+        setFetchLoadingOverlay(false, '');
         if (fetchBtn) fetchBtn.disabled = false;
       }
     }
