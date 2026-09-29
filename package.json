@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "backend": "node backend/src/server.js",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "vercel:pull": "vercel pull --yes --environment=production",

@@ -1206,6 +1206,12 @@ function App() {
   const [trackerSearchQuery, setTrackerSearchQuery] = useState("");
   const [trackerPage, setTrackerPage] = useState(1);
   const [trackerPageSize, setTrackerPageSize] = useState(15);
+  // ── Direct DB search state ────────────────────────────────────────────────
+  const [trackerDbSearchQuery, setTrackerDbSearchQuery] = useState("");
+  const [trackerDbSearchResults, setTrackerDbSearchResults] = useState<SharedLogItem[] | null>(null);
+  const [trackerDbSearchLoading, setTrackerDbSearchLoading] = useState(false);
+  const [trackerDbSearchError, setTrackerDbSearchError] = useState("");
+
   const [tmsDashboard, setTmsDashboard] = useState<TmsDashboardData | null>(null);
   const [tmsLoading, setTmsLoading] = useState(false);
   const [tmsError, setTmsError] = useState("");
@@ -3507,6 +3513,55 @@ function App() {
           setSharedLogsLoading(false);
         }
       });
+  }
+
+  async function searchTrackerDb(query: string) {
+    const q = query.trim();
+    if (!q) return;
+    setTrackerDbSearchLoading(true);
+    setTrackerDbSearchError("");
+    setTrackerDbSearchResults(null);
+    try {
+      const response = await fetch(apiUrl(`/api/logs/search?q=${encodeURIComponent(q)}`));
+      const data = await parseResponse(response);
+      if (!response.ok || data?.error) {
+        throw new Error(String(data?.details || data?.error || data?.raw || `Falha na pesquisa (${response.status})`));
+      }
+      const rows = Array.isArray(data?.data) ? (data.data as SharedLogItem[]) : [];
+      setTrackerDbSearchResults(rows);
+    } catch (err) {
+      const queryLower = q.toLowerCase();
+      const localMatches = trackerRows.filter((r) =>
+        r.clientPhone.toLowerCase().includes(queryLower) ||
+        r.parcelId.toLowerCase().includes(queryLower) ||
+        r.clientName.toLowerCase().includes(queryLower) ||
+        r.message.toLowerCase().includes(queryLower)
+      );
+
+      if (localMatches.length > 0) {
+        const mapped = localMatches.map((item) => ({
+          id: item.id,
+          to_number: item.clientPhone,
+          contact_name: item.clientName,
+          message_text: item.message,
+          channel: item.messageType,
+          created_at: item.dateSent,
+          status: item.status,
+          template_name: item.messageTitle,
+          payload: { parcelId: item.parcelId, trackerContext: { notes: item.incidentReason } }
+        })) as unknown as SharedLogItem[];
+        setTrackerDbSearchResults(mapped);
+        setTrackerDbSearchError("Backend indisponível. A mostrar resultados do histórico local.");
+      } else {
+        setTrackerDbSearchError(
+          err instanceof Error
+            ? `${err.message}. Verifica se o backend está a correr (npm --prefix backend run dev).`
+            : "Erro na pesquisa. Verifica se o backend está a correr."
+        );
+      }
+    } finally {
+      setTrackerDbSearchLoading(false);
+    }
   }
 
   function loadTmsDashboard() {
@@ -8008,6 +8063,117 @@ function App() {
                   </button>
                   <span className="status status-load-lime">Logs carregados: {sharedLogsLimit}</span>
                 </div>
+
+                {/* ── Direct DB Search Panel ──────────────────────────────── */}
+                <div className="tracker-db-search-panel">
+                  <strong>🔍 Pesquisa Direta na BD</strong>
+                  <span className="status">Encontra qualquer registo sem limite — por número, parcel ID ou nome</span>
+                  <form
+                    className="tracker-db-search-form"
+                    onSubmit={(e) => { e.preventDefault(); void searchTrackerDb(trackerDbSearchQuery); }}
+                  >
+                    <input
+                      className="tracker-search-input"
+                      value={trackerDbSearchQuery}
+                      onChange={(e) => setTrackerDbSearchQuery(e.target.value)}
+                      placeholder="Número, Parcel ID, nome do cliente..."
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={trackerDbSearchLoading || !trackerDbSearchQuery.trim()}
+                    >
+                      {trackerDbSearchLoading ? "A pesquisar..." : "OK — Pesquisar BD"}
+                    </button>
+                    {trackerDbSearchResults !== null && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => { setTrackerDbSearchResults(null); setTrackerDbSearchQuery(""); setTrackerDbSearchError(""); }}
+                      >
+                        Limpar resultados
+                      </button>
+                    )}
+                  </form>
+                  {trackerDbSearchError && <p className="status" style={{ color: "var(--color-danger, #f44)" }}>{trackerDbSearchError}</p>}
+                </div>
+
+                {/* ── DB Search Results ────────────────────────────────────── */}
+                {trackerDbSearchResults !== null && (
+                  <div className="tracker-db-search-results">
+                    <p className="status">
+                      {trackerDbSearchResults.length === 0
+                        ? `Sem resultados para "${trackerDbSearchQuery}".`
+                        : `${trackerDbSearchResults.length} resultado(s) encontrado(s) na base de dados para "${trackerDbSearchQuery}":`}
+                    </p>
+                    {trackerDbSearchResults.length > 0 && (
+                      <table className="tracker-table">
+                        <thead>
+                          <tr>
+                            <th>Client Name</th>
+                            <th>Client Phone</th>
+                            <th>Mensagem</th>
+                            <th>Parcel ID</th>
+                            <th>Message Type</th>
+                            <th>Date Sent</th>
+                            <th>Status</th>
+                            <th>Message Title</th>
+                            <th>Incident Reason</th>
+                            <th>Ação</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {trackerDbSearchResults.map((rawRow) => {
+                            const payloadObj = rawRow.payload && typeof rawRow.payload === "object" ? rawRow.payload as Record<string, unknown> : {};
+                            const trackerCtx = payloadObj.trackerContext && typeof payloadObj.trackerContext === "object" ? payloadObj.trackerContext as Record<string, unknown> : {};
+                            const row = {
+                              id: rawRow.id,
+                              clientName: String(rawRow.contact_name || ""),
+                              clientPhone: String(rawRow.to_number || ""),
+                              message: String(rawRow.message_text || ""),
+                              parcelId: String(payloadObj.parcelId || trackerCtx.parcelId || ""),
+                              messageType: String(rawRow.channel || ""),
+                              dateSent: rawRow.created_at ? new Date(rawRow.created_at).toLocaleString("pt-PT") : "",
+                              status: String(rawRow.status || ""),
+                              messageTitle: String(rawRow.template_name || ""),
+                              incidentReason: String(trackerCtx.notes || ""),
+                            };
+                            return (
+                              <tr key={`db-search-${row.id}`}>
+                                <td>{row.clientName}</td>
+                                <td>{row.clientPhone}</td>
+                                <td>{row.message}</td>
+                                <td>{row.parcelId}</td>
+                                <td>{row.messageType}</td>
+                                <td>{row.dateSent}</td>
+                                <td>
+                                  <span className={`status sent-history-status sent-history-status-${statusTone(row.status, row.messageType)}`}>
+                                    <span className="sent-history-dot" aria-hidden="true" />
+                                    {row.status}
+                                  </span>
+                                </td>
+                                <td>{row.messageTitle}</td>
+                                <td>{row.incidentReason || "-"}</td>
+                                <td>
+                                  <div className="tracker-pudo-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.35rem" }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary tms-mini-btn"
+                                      onClick={() => prefillPickupCttTemplate(row.clientPhone, row.clientName, row.parcelId, row.messageType, row.message)}
+                                      disabled={!digitsOnly(row.clientPhone || "")}
+                                    >
+                                      Preencher template
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
 
                 <div className="tracker-filters">
                   <div className="tracker-filter-buttons" role="group" aria-label="Pesquisar por campo">

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -12,6 +12,13 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { readFile, writeFile } from "fs/promises";
+
+const __serverFilename = fileURLToPath(import.meta.url);
+const __serverDirname = dirname(__serverFilename);
+
+dotenv.config();
+dotenv.config({ path: resolve(__serverDirname, "../.env") });
+dotenv.config({ path: resolve(__serverDirname, "../../.env") });
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -8778,6 +8785,79 @@ app.get("/api/logs", async (req, res) => {
     warnSoftError("logs.fetch.unhandled", error, { route: "/api/logs", requestId });
     return res.status(500).json({
       error: "Failed to fetch logs",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+// ── Direct DB search for Client Messages Tracker ─────────────────────────────
+// GET /api/logs/search?q=<phone_or_parcel_id>
+// Searches the entire whatsapp_logs table without a row limit, so the user
+// can find any record regardless of the current pagination limit in the UI.
+app.get("/api/logs/search", async (req, res) => {
+  const requestId = String(res.locals?.requestId || req.headers["x-request-id"] || "");
+
+  if ((!supabaseEnabled || !supabase) && (!pgEnabled || !pgPool)) {
+    return res.status(503).json({ error: "Database not configured." });
+  }
+
+  const rawQ = String(req.query?.q || "").trim();
+  if (!rawQ) {
+    return res.status(400).json({ error: "Missing query parameter 'q'." });
+  }
+
+  // Normalise: strip spaces and leading zeros for phone comparison
+  const q = rawQ.toLowerCase();
+
+  try {
+    if (supabaseEnabled && supabase) {
+      // Direct fast query using .or() across phone, name, message text, and payload parcel/tracking
+      const orFilter = [
+        `to_number.ilike.%${q}%`,
+        `contact_name.ilike.%${q}%`,
+        `message_text.ilike.%${q}%`,
+        `payload->>parcelId.ilike.%${q}%`,
+        `payload->>tracking.ilike.%${q}%`,
+        `payload->>trackingCode.ilike.%${q}%`
+      ].join(",");
+
+      const { data, error } = await supabase
+        .from("whatsapp_logs")
+        .select("id,created_at,direction,channel,to_number,contact_name,message_text,template_name,status,api_message_id,payload")
+        .or(orFilter)
+        .neq("channel", STATE_FALLBACK_CHANNEL)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      if (error) {
+        warnSoftError("logs.search.supabase", error, { route: "/api/logs/search", requestId });
+        return res.status(500).json({ error: "DB search failed.", details: error.message });
+      }
+
+      const rows = Array.isArray(data) ? data : [];
+      return res.json({ data: rows, total: rows.length, query: rawQ });
+    }
+
+    // PostgreSQL fallback
+    const pgResult = await pgPool.query(
+      `SELECT id, created_at, direction, channel, to_number, contact_name, message_text, template_name, status, api_message_id, payload
+       FROM public.whatsapp_logs
+       WHERE channel IS DISTINCT FROM $1
+         AND (
+           LOWER(to_number) LIKE $2
+           OR LOWER(contact_name) LIKE $2
+           OR LOWER(payload::text) LIKE $2
+         )
+       ORDER BY created_at DESC
+       LIMIT 500`,
+      [STATE_FALLBACK_CHANNEL, `%${q}%`]
+    );
+
+    return res.json({ data: pgResult.rows || [], total: (pgResult.rows || []).length, query: rawQ });
+  } catch (error) {
+    warnSoftError("logs.search.unhandled", error, { route: "/api/logs/search", requestId });
+    return res.status(500).json({
+      error: "Search failed.",
       details: error instanceof Error ? error.message : "Unknown error"
     });
   }
