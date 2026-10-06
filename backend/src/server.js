@@ -4963,7 +4963,7 @@ function humanizeUsername(username) {
 }
 
 function getWorkspaceAuthUsers() {
-  return [1, 2, 3]
+  return [1, 2, 3, 4]
     .map((index) => ({
       username: String(process.env[`AUTH_USER_${index}_USERNAME`] || "").trim(),
       password: String(process.env[`AUTH_USER_${index}_PASSWORD`] || ""),
