@@ -11,19 +11,19 @@
   "crons": [
     {
       "path": "/api/cron/auto-notificacao-envio",
-      "schedule": "30 8 * * 1-5"
+      "schedule": "30 8,9 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-envio",
-      "schedule": "0 9 * * 1-5"
+      "schedule": "0 9,10 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-envio-em-transporte",
-      "schedule": "30 9 * * 1-5"
+      "schedule": "30 9,10 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-envio-em-transporte",
-      "schedule": "45 9 * * 1-5"
+      "schedule": "45 9,10 * * 1-5"
     },
     {
       "path": "/api/cron/auto-notificacao-incidencia",
